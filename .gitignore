@@ -43,7 +43,9 @@ frontend/ios/Runner.xcworkspace/
 frontend/ios/DerivedData/
 
 # Android
+**/.gradle/
 frontend/android/.gradle/
+frontend/android/app/.gradle/
 frontend/android/captures/
 frontend/android/local.properties
 frontend/android/key.properties
