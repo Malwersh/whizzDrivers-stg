@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Drivers DynamoDB tables (Drivers, LiveState, PerformanceMetrics)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: staging
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+Resources:
+  DriversTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'WhizzDrivers_${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: driverId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: driverId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  DriverLiveStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'WizzDriverLiveState_${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: driverId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: driverId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  DriverPerformanceMetricsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'WizzDriverPerformanceMetrics_${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
+Outputs:
+  DriversTableName:
+    Value: !Ref DriversTable
+    Export:
+      Name: !Sub 'Drivers-Tables-${Environment}-DriversTableName'
+
+  DriverLiveStateTableName:
+    Value: !Ref DriverLiveStateTable
+    Export:
+      Name: !Sub 'Drivers-Tables-${Environment}-DriverLiveStateTableName'
+
+  DriverPerformanceMetricsTableName:
+    Value: !Ref DriverPerformanceMetricsTable
+    Export:
+      Name: !Sub 'Drivers-Tables-${Environment}-DriverPerformanceMetricsTableName'
+
+  DriversTableArn:
+    Value: !GetAtt DriversTable.Arn
+    Export:
+      Name: !Sub 'Drivers-Tables-${Environment}-DriversTableArn'
+
+  DriverLiveStateTableArn:
+    Value: !GetAtt DriverLiveStateTable.Arn
+    Export:
+      Name: !Sub 'Drivers-Tables-${Environment}-DriverLiveStateTableArn'
+
+  DriverPerformanceMetricsTableArn:
+    Value: !GetAtt DriverPerformanceMetricsTable.Arn
+    Export:
+      Name: !Sub 'Drivers-Tables-${Environment}-DriverPerformanceMetricsTableArn'

@@ -1,0 +1,63 @@
+# macOS
+.DS_Store
+
+# VS Code / IDE
+.vscode/
+.idea/
+*.iml
+
+# Python venv (workspace local)
+.venv/
+
+# Logs
+*.log
+
+# Backend (Node)
+backend/node_modules/
+backend/.aws-sam/
+backend/.sam-build/
+backend/.serverless/
+backend/.env
+backend/.env.*
+backend/.tmp/
+
+# Flutter / Dart
+frontend/.dart_tool/
+frontend/build/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/.packages
+frontend/pubspec.lock
+
+# iOS
+frontend/ios/Pods/
+frontend/ios/.symlinks/
+frontend/ios/Flutter/Flutter.framework
+frontend/ios/Flutter/Flutter.podspec
+frontend/ios/Flutter/Generated.xcconfig
+frontend/ios/Flutter/ephemeral/
+frontend/ios/Flutter/App.framework
+frontend/ios/Flutter/engine/
+frontend/ios/Runner/GeneratedPluginRegistrant.*
+frontend/ios/Runner.xcworkspace/
+frontend/ios/DerivedData/
+
+# Android
+frontend/android/.gradle/
+frontend/android/captures/
+frontend/android/local.properties
+frontend/android/key.properties
+frontend/android/app/debug/
+frontend/android/app/profile/
+frontend/android/app/release/
+
+# Fastlane
+frontend/ios/fastlane/report.xml
+frontend/ios/fastlane/Preview.html
+frontend/ios/fastlane/screenshots
+frontend/ios/fastlane/test_output
+
+# Misc
+**/.env
+**/.env.*
+**/.tmp/

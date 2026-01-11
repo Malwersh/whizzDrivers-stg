@@ -1,0 +1,253 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Drivers API (staging)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: staging
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+  WalletServiceUrl:
+    Type: String
+    Default: ""
+
+  OrderServiceUrl:
+    Type: String
+    Default: ""
+
+  ServiceClientId:
+    Type: String
+    Default: ""
+
+  ServiceClientSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+
+  ServiceUsername:
+    Type: String
+    Default: ""
+
+  ServicePassword:
+    Type: String
+    NoEcho: true
+    Default: ""
+
+  WebsocketConnectionsTableName:
+    Type: String
+    Default: WizzUser_websocket_connections_staging
+
+  DispatchJobsTableName:
+    Type: String
+    Default: ""
+    Description: Optional. If empty, dispatch job updates are skipped.
+
+  WaveSystemHandleDriverAcceptFunctionName:
+    Type: String
+    Default: ""
+    Description: Optional. If empty, accept-wave-offer returns 503.
+
+  WaveSystemHandleDriverRejectFunctionName:
+    Type: String
+    Default: ""
+    Description: Optional. If empty, reject-wave-offer returns 503.
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 30
+    MemorySize: 512
+    Architectures:
+      - x86_64
+
+Resources:
+  DriversDocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'whizzdrivers-documents-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  DriversApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub 'DriversApi-${Environment}'
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  DriversApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: nodejs20.x
+    Properties:
+      FunctionName: !Sub 'DriversApi-${Environment}'
+      CodeUri: ./
+      Handler: lambda_driver_api_v2.handler
+      Description: Drivers backend API
+      Environment:
+        Variables:
+          DRIVER_TABLE: !ImportValue
+            Fn::Sub: 'Drivers-Tables-${Environment}-DriversTableName'
+          DRIVER_LIVE_STATE_TABLE: !ImportValue
+            Fn::Sub: 'Drivers-Tables-${Environment}-DriverLiveStateTableName'
+          DRIVER_PERFORMANCE_METRICS_TABLE: !ImportValue
+            Fn::Sub: 'Drivers-Tables-${Environment}-DriverPerformanceMetricsTableName'
+          ORDERS_TABLE: !ImportValue
+            Fn::Sub: 'WizzOrders-Table-${Environment}-TableName'
+          WEBSOCKET_CONNECTIONS_TABLE: !Ref WebsocketConnectionsTableName
+          # NOTE: Driver backend expects REGIONS_TABLE to point to RegionsDerived.
+          REGIONS_TABLE: !ImportValue
+            Fn::Sub: 'Regions-Tables-${Environment}-DerivedTableName'
+          # Optional: keep base Regions table available for diagnostics.
+          REGIONS_BASE_TABLE: !ImportValue
+            Fn::Sub: 'Regions-Tables-${Environment}-RegionsTableName'
+          REGION_INDEX_TABLE: !ImportValue
+            Fn::Sub: 'Regions-Tables-${Environment}-IndexTableName'
+          REGION_NEIGHBORS_TABLE: !ImportValue
+            Fn::Sub: 'Regions-Tables-${Environment}-NeighborsTableName'
+          WALLET_SERVICE_URL: !Ref WalletServiceUrl
+          ORDER_SERVICE_URL: !Ref OrderServiceUrl
+          SERVICE_CLIENT_ID: !Ref ServiceClientId
+          SERVICE_CLIENT_SECRET: !Ref ServiceClientSecret
+          SERVICE_USERNAME: !Ref ServiceUsername
+          SERVICE_PASSWORD: !Ref ServicePassword
+          DISPATCH_JOBS_TABLE: !Ref DispatchJobsTableName
+          WAVESYSTEM_HANDLE_DRIVER_ACCEPT_FUNCTION_NAME: !Ref WaveSystemHandleDriverAcceptFunctionName
+          WAVESYSTEM_HANDLE_DRIVER_REJECT_FUNCTION_NAME: !Ref WaveSystemHandleDriverRejectFunctionName
+          DRIVER_DOCUMENTS_BUCKET: !Ref DriversDocumentsBucket
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DriversDocumentsBucket
+        - DynamoDBCrudPolicy:
+            TableName: !ImportValue
+              Fn::Sub: 'Drivers-Tables-${Environment}-DriversTableName'
+        - DynamoDBCrudPolicy:
+            TableName: !ImportValue
+              Fn::Sub: 'Drivers-Tables-${Environment}-DriverLiveStateTableName'
+        - DynamoDBCrudPolicy:
+            TableName: !ImportValue
+              Fn::Sub: 'Drivers-Tables-${Environment}-DriverPerformanceMetricsTableName'
+        - DynamoDBCrudPolicy:
+            TableName: !ImportValue
+              Fn::Sub: 'WizzOrders-Table-${Environment}-TableName'
+        - DynamoDBReadPolicy:
+            TableName: !Ref WebsocketConnectionsTableName
+        - DynamoDBReadPolicy:
+            TableName: !ImportValue
+              Fn::Sub: 'Regions-Tables-${Environment}-DerivedTableName'
+        - DynamoDBReadPolicy:
+            TableName: !ImportValue
+              Fn::Sub: 'Regions-Tables-${Environment}-RegionsTableName'
+        - DynamoDBReadPolicy:
+            TableName: !ImportValue
+              Fn::Sub: 'Regions-Tables-${Environment}-IndexTableName'
+        - DynamoDBReadPolicy:
+            TableName: !ImportValue
+              Fn::Sub: 'Regions-Tables-${Environment}-NeighborsTableName'
+        - DynamoDBReadPolicy:
+            TableName: WhizzMerchants_Businesses
+        - DynamoDBReadPolicy:
+            TableName: WhizzMerchants_BusinessWorkingHours
+        - Statement:
+            - Sid: InvokeWaveSystem
+              Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource:
+                - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:WaveSystem_*'
+            - Sid: CognitoInitiateAuth
+              Effect: Allow
+              Action:
+                - cognito-idp:InitiateAuth
+                - cognito-idp:GetUser
+              Resource: '*'
+      Events:
+        ProxyApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DriversApi
+            Path: /{proxy+}
+            Method: ANY
+        RootApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DriversApi
+            Path: /
+            Method: ANY
+
+  # Cognito User Pool (Drivers)
+  DriversUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "WhizzDrivers-users-${Environment}"
+      UsernameAttributes:
+        - email
+        - phone_number
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+          RequireUppercase: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: phone_number
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+
+  # Cognito User Pool Client (Drivers App)
+  DriversUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref DriversUserPool
+      ClientName: !Sub "whizz-${Environment}-drivers-app"
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+
+Outputs:
+  DriversApiUrl:
+    Description: Drivers API endpoint URL
+    Value: !Sub 'https://${DriversApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub 'DriversApiUrl-${Environment}'
+  DriversApiFunctionName:
+    Value: !Ref DriversApiFunction
+    Export:
+      Name: !Sub 'DriversApiFunctionName-${Environment}'
+
+  DriversUserPoolId:
+    Description: Cognito User Pool ID for drivers
+    Value: !Ref DriversUserPool
+    Export:
+      Name: !Sub 'DriversUserPoolId-${Environment}'
+
+  DriversUserPoolClientId:
+    Description: Cognito App Client ID for drivers
+    Value: !Ref DriversUserPoolClient
+    Export:
+      Name: !Sub 'DriversUserPoolClientId-${Environment}'

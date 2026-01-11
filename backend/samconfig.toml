@@ -1,0 +1,13 @@
+version = 0.1
+
+[staging.deploy.parameters]
+stack_name = "drivers-api-staging"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+profile = "Wizz_stg_UserApp"
+resolve_s3 = true
+confirm_changeset = false
+disable_rollback = false
+s3_prefix = "drivers-api-staging"
+parameter_overrides = "Environment=staging WalletServiceUrl=https://z14s5f8oxh.execute-api.us-east-1.amazonaws.com/staging DispatchJobsTableName=WizzDispatchJobs_staging WaveSystemHandleDriverAcceptFunctionName=WaveSystem_HandleDriverAccept WaveSystemHandleDriverRejectFunctionName=WaveSystem_HandleDriverReject"
+image_repositories = []
