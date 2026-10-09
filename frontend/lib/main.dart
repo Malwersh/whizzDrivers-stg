@@ -169,7 +169,7 @@ class _MyAppState extends riverpod.ConsumerState<MyApp> {
     final router = ref.watch(routerProvider);
 
     return MaterialApp.router(
-      title: 'سائق Wizz',
+      title: 'سائق Wizz - Flow Test',
       theme: AppTheme.lightTheme, // Arctic Cyan light theme
       darkTheme: AppTheme.darkTheme, // Arctic Cyan dark theme
       themeMode: ThemeMode.system,
