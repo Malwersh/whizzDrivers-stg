@@ -12,9 +12,11 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'package:go_router/go_router.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'widgets/order_offer_card.dart';
 import 'widgets/order_details_bottom_sheet.dart';
 import '../../services/websocket_service.dart';
+import '../../services/cognito_token_service.dart';
 import '../../services/global_app_state_manager.dart';
 import '../../models/map_data.dart';
 import '../../services/map_data_service.dart';
@@ -115,10 +117,11 @@ class SparkHomeSimpleArabic extends ConsumerStatefulWidget {
   const SparkHomeSimpleArabic({super.key});
 
   @override
-  ConsumerState<SparkHomeSimpleArabic> createState() => _SparkHomeSimpleArabicState();
+  ConsumerState<SparkHomeSimpleArabic> createState() =>
+      _SparkHomeSimpleArabicState();
 }
 
-class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic> 
+class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     with WidgetsBindingObserver {
   bool _isSearchingForOffers = false;
   DateTime? _searchEndTime;
@@ -127,74 +130,135 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   List<DateTime>? _timeOptions; // قائمة الأوقات المنشأة مرة واحدة
   bool _isCheckingWalletBalance = false; // حالة التحميل لفحص رصيد المحفظة
   Timer? _searchTimer; // Timer للتحقق من انتهاء وقت البحث
-  final List<OrderOffer> _availableOffers = []; // قائمة الطلبات المتاحة (Legacy - Deprecated)
+  final List<OrderOffer> _availableOffers =
+      []; // قائمة الطلبات المتاحة (Legacy - Deprecated)
   final Set<String> _rejectedOfferIds = {}; // الطلبات المرفوضة
-  Timer? _storesStatusRefreshTimer; // 🔄 Timer لتحديث حالة المطاعم تلقائياً (Polling مثل wizzuser)
+  Timer?
+      _storesStatusRefreshTimer; // 🔄 Timer لتحديث حالة المطاعم تلقائياً (Polling مثل wizzuser)
   late AudioPlayer _audioPlayer; // مشغل الصوت للإشعارات
   String? _errorMessage; // رسالة الخطأ عند فشل البدء
-  
+
   // 🌊 Wave System - New
-  WaveOffer? _currentWaveOffer; // العرض الحالي من Wave System (DEPRECATED - use _currentWaveOffers)
+  WaveOffer?
+      _currentWaveOffer; // العرض الحالي من Wave System (DEPRECATED - use _currentWaveOffers)
   final List<WaveOffer> _currentWaveOffers = []; // قائمة عروض الموجات الحالية
-  String? _currentRejectConfirmationOfferId; // معرّف العرض الذي يتم تأكيد رفضه حالياً
+  String?
+      _currentRejectConfirmationOfferId; // معرّف العرض الذي يتم تأكيد رفضه حالياً
   StreamSubscription? _waveOfferSubscription;
   StreamSubscription? _offerExpiredSubscription;
   StreamSubscription? _offerTakenSubscription;
   Timer? _offerExpiryCleanupTimer; // 🆕 دوري لتنظيف العروض المنتهية الصلاحية
-  
+
   // WebSocket Service for Wave System
   final WebSocketService _webSocketService = WebSocketService();
-  
-  final DraggableScrollableController _sheetController = DraggableScrollableController();
-  
+
+  final DraggableScrollableController _sheetController =
+      DraggableScrollableController();
+
   // Google Maps
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
   MapDataResponse? _mapData;
   bool _isLoadingMapData = false;
-  
+
   // 📊 Driver Performance Metrics
   double? _currentAcceptanceRate;
   int? _totalAccepted;
   int? _totalRejected;
-  
+
   // ✅ Active Order Check
   bool _hasCheckedActiveOrder = false;
-  
+
   // 🧪 إحداثيات ثابتة للاختبار (مركز المناذرة - Al-Manathirah Center - Level 3)
   // Coordinates: 31.895748, 44.377563 - ضمن مركز المناذرة (Rmhvcpnn3iy5f1)
   // ✅ Wave System: نفس منطقة السائق - يجب أن يسمح بالعمل
   // TODO: بعد الاختبار، احذف هذه وارجع لاستخدام _currentPosition من GPS
   static const double _testLatitude = 31.913292;
   static const double _testLongitude = 44.476014;
-  
+
+  // Stream listener for notification taps
+  StreamSubscription<RemoteMessage>? _notificationTapSubscription;
+
   @override
   void initState() {
     super.initState();
     try {
       print('🚀 Initializing SparkHomeSimpleArabic...');
-      
+
       // Add app lifecycle observer for background/foreground handling
       WidgetsBinding.instance.addObserver(this);
-      
+
+      // ✅ CRITICAL: Listen for notification taps and consume stash immediately
+      print('🔔 [Home] Setting up notification tap listener...');
+      _notificationTapSubscription =
+          FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        print('🔔🔔🔔 [Home] NOTIFICATION TAPPED! Data: ${message.data}');
+
+        // Consume immediately + retries
+        _consumeWaveOfferFromPushTap();
+        Future.delayed(const Duration(milliseconds: 500),
+            () => mounted ? _consumeWaveOfferFromPushTap() : null);
+        Future.delayed(const Duration(milliseconds: 1500),
+            () => mounted ? _consumeWaveOfferFromPushTap() : null);
+        Future.delayed(const Duration(milliseconds: 3000),
+            () => mounted ? _consumeWaveOfferFromPushTap() : null);
+      });
+      print('✅ [Home] Notification tap listener setup complete');
+
+      // ✅ CRITICAL: Listen for notification taps and consume stash immediately
+      _setupNotificationTapListener();
+
       // تهيئة مشغل الصوت أولاً مع حماية
       _initAudioPlayer();
-      
+
       // تأخير التهيئة لتجنب الانغلاق
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _delayedInitialization();
         // ✅ فحص الطلب النشط بعد بناء الشاشة
         _checkForActiveOrder();
       });
-      
+
       print('✅ SparkHomeSimpleArabic basic initialization complete');
     } catch (e, stackTrace) {
       print('🚨 CRITICAL: Error in initState: $e');
       print('Stack trace: $stackTrace');
-      
+
       // Fallback initialization
       _fallbackInitialization();
     }
+  }
+
+  void _setupNotificationTapListener() {
+    print('🔔 [Home] Setting up notification tap listener...');
+    _notificationTapSubscription =
+        FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      print('🔔 [Home] Notification tapped! Message: ${message.data}');
+      print('🔔 [Home] Consuming stash immediately...');
+
+      // Consume immediately
+      _consumeWaveOfferFromPushTap();
+
+      // Retry after delays to handle race conditions
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          print('🔔 [Home] Retry #1 consuming stash (500ms)');
+          _consumeWaveOfferFromPushTap();
+        }
+      });
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        if (mounted) {
+          print('🔔 [Home] Retry #2 consuming stash (1.5s)');
+          _consumeWaveOfferFromPushTap();
+        }
+      });
+      Future.delayed(const Duration(milliseconds: 3000), () {
+        if (mounted) {
+          print('🔔 [Home] Retry #3 consuming stash (3s)');
+          _consumeWaveOfferFromPushTap();
+        }
+      });
+    });
+    print('✅ [Home] Notification tap listener setup complete');
   }
 
   Future<void> _checkForActiveOrder() async {
@@ -217,46 +281,64 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    
+
     print('📱 App lifecycle changed: $state');
-    
+
     // Use Global App State Manager instead of local handling
     GlobalAppStateManager().notifyAppStateChange(state);
-    
+
     // Keep local handling for specific home screen needs
+    print('🔔 didChangeAppLifecycleState called: $state');
     switch (state) {
       case AppLifecycleState.resumed:
         print('📱 App resumed - home screen specific handling');
         _refreshLocationIfStale();
-        
+
+        // ✅ Consume any push-tap stash on resume (background tap case).
+        print('🔄 Calling _consumeWaveOfferFromPushTap() on resumed');
+        _consumeWaveOfferFromPushTap();
+        Future.delayed(const Duration(milliseconds: 500), () {
+          print(
+              '🔄 Retry #1 calling _consumeWaveOfferFromPushTap() after 500ms');
+          _consumeWaveOfferFromPushTap();
+        });
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          print(
+              '🔄 Retry #2 calling _consumeWaveOfferFromPushTap() after 1.5s');
+          _consumeWaveOfferFromPushTap();
+        });
+
         // 🆕 Only handle resume if app was actually in background for a while
         // This prevents reconnection on simple tab switches within the app
         if (_lastPausedTime != null) {
-          final backgroundDuration = DateTime.now().difference(_lastPausedTime!);
-          print('⏱️ App was in background for: ${backgroundDuration.inSeconds} seconds');
-          
+          final backgroundDuration =
+              DateTime.now().difference(_lastPausedTime!);
+          print(
+              '⏱️ App was in background for: ${backgroundDuration.inSeconds} seconds');
+
           if (backgroundDuration >= _minimumBackgroundDuration) {
             print('✅ Real app resume detected - handling WebSocket');
             _handleAppResumed();
-            
+
             // ✅ Check for active order when app resumes from background
-            _hasCheckedActiveOrder = false;  // Reset flag
+            _hasCheckedActiveOrder = false; // Reset flag
             _checkForActiveOrder();
           } else {
-            print('ℹ️ Quick tab switch detected - ignoring (${backgroundDuration.inSeconds}s < ${_minimumBackgroundDuration.inSeconds}s)');
+            print(
+                'ℹ️ Quick tab switch detected - ignoring (${backgroundDuration.inSeconds}s < ${_minimumBackgroundDuration.inSeconds}s)');
           }
           _lastPausedTime = null;
         } else {
           print('ℹ️ No pause time tracked - likely initial load');
         }
         break;
-        
+
       case AppLifecycleState.paused:
         print('📱 App paused - home screen cleanup');
         _lastPausedTime = DateTime.now();
         print('⏱️ Paused at: $_lastPausedTime');
         break;
-        
+
       default:
         print('📱 App lifecycle: $state');
     }
@@ -272,39 +354,41 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   /// 🆕 معالجة استئناف التطبيق بعد إغلاق فعلي (ليس tab switch)
   Future<void> _handleAppResumed() async {
     try {
-      print('🔄 App ACTUALLY resumed after real background - checking driver search state...');
-      
+      print(
+          '🔄 App ACTUALLY resumed after real background - checking driver search state...');
+
       // ✅ أولاً: فحص وجود طلب نشط
       await _checkForActiveOrder();
-      
+
       // التحقق إذا كان السائق يبحث عن طلبات
       if (_isSearchingForOffers) {
         print('🔍 Driver was searching when app went to background');
         print('🔌 Checking WebSocket connection health...');
-        
+
         // التحقق من حالة WebSocket
         if (_webSocketService.isConnected) {
-          print('✅ WebSocket still connected - refreshing connection proactively');
+          print(
+              '✅ WebSocket still connected - refreshing connection proactively');
           // تحديث الاتصال احترازياً (قد يكون stale بعد background)
           await _webSocketService.refreshConnection();
-          print('✅ WebSocket refreshed - connection is healthy and ready for offers');
+          print(
+              '✅ WebSocket refreshed - connection is healthy and ready for offers');
         } else {
           print('❌ WebSocket disconnected during background - reconnecting...');
           // إعادة الاتصال الكاملة
           await _reconnectWebSocket();
-          
+
           if (_webSocketService.isConnected) {
             print('✅ Reconnected successfully and ready for offers');
           } else {
             print('⚠️ Reconnection failed - driver needs to restart search');
           }
         }
-        
+
         print('✅ App resumed handling complete - ready to receive offers');
       } else {
         print('ℹ️ Driver not searching - no WebSocket action needed');
       }
-      
     } catch (e) {
       print('❌ Error in _handleAppResumed: $e');
     }
@@ -320,25 +404,27 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         print('✅ WebSocket already connected, skipping reconnection');
         return;
       }
-      
+
       print('🔌 Reconnecting WebSocket...');
-      
+
       final prefs = await SharedPreferences.getInstance();
-      final driverId = prefs.getString('driver_id') ?? '74b83488-f041-70a4-52d7-d2370b7eec06';
-      final authToken = prefs.getString('auth_token') ?? prefs.getString('id_token') ?? 'mock_token';
-      
+      final driverId = prefs.getString('driver_id') ??
+          '74b83488-f041-70a4-52d7-d2370b7eec06';
+      final authToken = prefs.getString('auth_token') ??
+          prefs.getString('id_token') ??
+          'mock_token';
+
       // إعادة تهيئة WebSocket
       await _webSocketService.initialize(
         driverId: driverId,
         authToken: authToken,
       );
-      
+
       if (_webSocketService.isConnected) {
         print('✅ WebSocket reconnected successfully');
       } else {
         print('⚠️ WebSocket reconnection may have issues');
       }
-      
     } catch (e) {
       print('❌ Error reconnecting WebSocket: $e');
     }
@@ -367,32 +453,57 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   void _delayedInitialization() async {
     try {
       if (!mounted) return;
-      
+
       print('🔄 Starting delayed initialization...');
-      print('🧪 TEST MODE: Using fixed coordinates: Najaf ($_testLatitude, $_testLongitude)');
-      
+      print(
+          '🧪 TEST MODE: Using fixed coordinates: Najaf ($_testLatitude, $_testLongitude)');
+
       // إعداد WebSocket callbacks أولاً مع تأخير
       await Future.delayed(const Duration(milliseconds: 100));
       if (!mounted) return;
       _setupWebSocketCallbacks();
-      
+
       // ثم الموقع مع تأخير أكبر
       await Future.delayed(const Duration(milliseconds: 500));
       if (!mounted) return;
       _initializeLocation();
-      
+
       // أخيراً استعادة حالة البحث
       await Future.delayed(const Duration(milliseconds: 200));
       if (!mounted) return;
       _restoreSearchState();
 
+      print(
+          '🔄 [Init] About to consume wave offer from push tap (immediate attempt)');
       // ✅ If the app was opened from a push tap (lock screen / terminated),
       // consume the stashed wave offer and show it in the list.
       await _consumeWaveOfferFromPushTap();
-      
+
+      // 🆕 Multiple retry attempts to handle race condition:
+      // The onMessageOpenedApp handler may still be saving the stash when
+      // _delayedInitialization runs on cold start.
+      Future.delayed(const Duration(milliseconds: 800), () {
+        if (mounted) {
+          print('🔄 [Init] Retry #1 consuming wave offer (800ms)');
+          _consumeWaveOfferFromPushTap();
+        }
+      });
+      Future.delayed(const Duration(milliseconds: 2000), () {
+        if (mounted) {
+          print('🔄 [Init] Retry #2 consuming wave offer (2s)');
+          _consumeWaveOfferFromPushTap();
+        }
+      });
+      Future.delayed(const Duration(milliseconds: 3500), () {
+        if (mounted) {
+          print('🔄 [Init] Retry #3 consuming wave offer (3.5s)');
+          _consumeWaveOfferFromPushTap();
+        }
+      });
+
       // 🆕 Start periodic cleanup of expired offers
       _startOfferExpiryCleanup();
-      
+
       print('✅ Delayed initialization complete');
     } catch (e, stackTrace) {
       print('🚨 Error in delayed initialization: $e');
@@ -401,9 +512,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   Future<void> _consumeWaveOfferFromPushTap() async {
+    print('🔍 [Consume] _consumeWaveOfferFromPushTap() called');
     try {
-      final data = await PushNotificationsService.consumeStashedWaveOfferFromTap();
-      if (data == null) return;
+      final data =
+          await PushNotificationsService.consumeStashedWaveOfferFromTap();
+      if (data == null) {
+        print('ℹ️ [Consume] No stashed wave offer found in SharedPreferences');
+        return;
+      }
+
+      print('📲 [Consume] Wave offer found! Consuming: ${data.toString()}');
 
       final offerId = (data['offerId'] ?? '').toString().trim();
       final orderId = (data['orderId'] ?? '').toString().trim();
@@ -416,59 +534,100 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
       expiresAt ??= DateTime.now().add(const Duration(seconds: 45));
 
-      // ✅ FIX: Check if offer already expired at consumption time
-      if (DateTime.now().isAfter(expiresAt)) {
-        print('⏰ Push-tap wave offer already expired: $offerId');
-        // 🆕 Show snackbar to user: "Offer Expired"
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('عذراً، انتهت صلاحية هذا العرض'),
-              backgroundColor: Colors.orange,
-              duration: Duration(seconds: 3),
-            ),
-          );
-        }
-        return;
-      }
-
       final existing = _currentWaveOffers.any((o) => o.offerId == offerId);
       if (existing) {
         print('ℹ️ Push-tap wave offer already in list: $offerId');
         return;
       }
 
-      final waveNumber = int.tryParse((data['waveNumber'] ?? '').toString()) ?? 1;
+      final waveNumber =
+          int.tryParse((data['waveNumber'] ?? '').toString()) ?? 1;
       final restaurantName = (data['restaurantName'] ?? '').toString().trim();
+      final restaurantImageUrl =
+          (data['restaurantImageUrl'] ?? '').toString().trim();
+      final customerName = (data['customerName'] ?? '').toString().trim();
+      final customerAddress = (data['customerAddress'] ?? '').toString().trim();
 
-      // Create a minimal placeholder WaveOffer so the driver sees the offer after a cold start.
-      // accept/reject uses offerId, so this is sufficient for the basic flow.
+      double _parseDouble(dynamic raw, {double fallback = 0.0}) {
+        if (raw == null) return fallback;
+        final s0 = raw.toString().trim();
+        if (s0.isEmpty) return fallback;
+        final s = s0.replaceAll(',', '.').replaceAll(RegExp(r'[^0-9.\-]'), '');
+        return double.tryParse(s) ?? fallback;
+      }
+
+      int _parseInt(dynamic raw, {int fallback = 0}) {
+        if (raw == null) return fallback;
+        final s0 = raw.toString().trim();
+        if (s0.isEmpty) return fallback;
+        final s = s0.replaceAll(RegExp(r'[^0-9\-]'), '');
+        return int.tryParse(s) ?? fallback;
+      }
+
+      dynamic _pickFirstNonEmpty(List<dynamic> candidates) {
+        for (final c in candidates) {
+          if (c == null) continue;
+          if (c is String && c.trim().isEmpty) continue;
+          return c;
+        }
+        return null;
+      }
+
+      // Parse financial details
+      final deliveryFee = _parseDouble(data['deliveryFee'], fallback: 0.0);
+      final bonusAmount = _parseDouble(data['bonusAmount'], fallback: 0.0);
+      final orderTotal = _parseDouble(
+        _pickFirstNonEmpty([data['orderTotal'], data['orderValue']]),
+        fallback: 0.0,
+      );
+      final holdRequiredAmount = _parseDouble(data['holdRequiredAmount'], fallback: 0.0);
+      final estimatedEarnings = _parseDouble(data['estimatedEarnings'],
+          fallback: (deliveryFee + bonusAmount));
+
+      // Parse distance & time
+      final distance = _parseDouble(
+        _pickFirstNonEmpty([data['distance'], data['distanceKm']]),
+        fallback: 0.0,
+      );
+      final estimatedMinutes = _parseInt(data['estimatedMinutes'], fallback: 0);
+      final itemsCount = _parseInt(data['itemsCount'], fallback: 0);
+      final currency =
+          (data['currency'] ?? 'IQD').toString().replaceAll('"', '').trim();
+
+      final isEmergencyWave =
+          (data['isEmergencyWave'] ?? '').toString().toLowerCase() == 'true';
+
+      // Create a full WaveOffer with all details from push notification
       final placeholder = WaveOffer(
         offerId: offerId,
         orderId: orderId,
-        jobId: '',
+        jobId: 'JOB_$orderId',
         waveNumber: waveNumber,
+        isEmergencyWave: isEmergencyWave,
         rank: 1,
         score: 0,
-        restaurantId: '',
+        restaurantId: orderId,
         restaurantName: restaurantName.isEmpty ? 'طلب جديد' : restaurantName,
         restaurantAddress: '',
         restaurantLat: 0,
         restaurantLng: 0,
+        restaurantImageUrl:
+            restaurantImageUrl.isNotEmpty ? restaurantImageUrl : null,
         customerId: '',
-        customerName: '',
-        customerAddress: '',
+        customerName: customerName,
+        customerAddress: customerAddress,
         customerLat: 0,
         customerLng: 0,
-        orderTotal: 0,
-        deliveryFee: 0,
-        bonusAmount: 0,
+        orderTotal: orderTotal,
+        deliveryFee: deliveryFee,
+        bonusAmount: bonusAmount,
         tip: 0,
-        estimatedEarnings: 0,
-        currency: 'IQD',
-        distance: 0,
-        estimatedMinutes: 0,
-        itemsCount: 0,
+        estimatedEarnings: estimatedEarnings,
+        holdRequiredAmount: holdRequiredAmount > 0 ? holdRequiredAmount : null,
+        currency: currency,
+        distance: distance,
+        estimatedMinutes: estimatedMinutes,
+        itemsCount: itemsCount,
         items: const <wave_model.OrderItem>[],
         sentAt: DateTime.now(),
         expiresAt: expiresAt,
@@ -478,7 +637,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       setState(() {
         _currentWaveOffers.add(placeholder);
       });
-      print('✅ Added push-tap placeholder offer: $offerId');
+      print('✅ Added push-tap offer with full details: $offerId');
+      print(
+          '📊 Details: deliveryFee=$deliveryFee IQD, distance=${distance.toStringAsFixed(1)}km, customer=$customerName');
     } catch (e) {
       print('❌ Error consuming push-tap wave offer: $e');
     }
@@ -499,16 +660,17 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   /// This ensures offers always disappear by expiresAt, even if card timer doesn't run
   void _startOfferExpiryCleanup() {
     _offerExpiryCleanupTimer?.cancel();
-    
+
     _offerExpiryCleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
-      
-      final now = DateTime.now();
+
+      final nowUtc = DateTime.now().toUtc();
       int removedCount = 0;
-      
+
       setState(() {
         _currentWaveOffers.removeWhere((offer) {
-          final isExpired = now.isAfter(offer.expiresAt);
+          // Compare in UTC to avoid timezone-related false expiries.
+          final isExpired = nowUtc.isAfter(offer.expiresAt.toUtc());
           if (isExpired) {
             print('🗑️ Auto-removing expired offer: ${offer.offerId}');
             removedCount++;
@@ -516,12 +678,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           return isExpired;
         });
       });
-      
+
       if (removedCount > 0) {
-        print('✅ Cleaned up $removedCount expired offers. Remaining: ${_currentWaveOffers.length}');
+        print(
+            '✅ Cleaned up $removedCount expired offers. Remaining: ${_currentWaveOffers.length}');
       }
     });
-    
+
     print('⏰ Offer expiry cleanup timer started (every 2 seconds)');
   }
 
@@ -529,19 +692,20 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   void _setupWebSocketCallbacks() {
     try {
       print('🔌 Setting up WebSocket callbacks...');
-      
+
       // 🌊 Wave System Listeners (NEW - PRIORITY)
       _waveOfferSubscription = _webSocketService.waveOfferStream.listen(
         (waveOffer) {
           if (!mounted) return;
-          print('🌊 Wave offer received: ${waveOffer.offerId} (Wave ${waveOffer.waveNumber}, Rank ${waveOffer.rank})');
+          print(
+              '🌊 Wave offer received: ${waveOffer.offerId} (Wave ${waveOffer.waveNumber}, Rank ${waveOffer.rank})');
           _handleWaveOffer(waveOffer);
         },
         onError: (error) {
           print('❌ Wave offer stream error: $error');
         },
       );
-      
+
       _offerExpiredSubscription = _webSocketService.offerExpiredStream.listen(
         (offerId) {
           if (mounted) {
@@ -553,13 +717,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           print('❌ Offer expired stream error: $error');
         },
       );
-      
+
       _offerTakenSubscription = _webSocketService.offerTakenStream.listen(
         (data) {
           if (mounted) {
             final offerId = data['offerId'];
             final takenByDriverId = data['driverId'];
-            print('👥 Wave offer taken by another driver: $offerId (by $takenByDriverId)');
+            print(
+                '👥 Wave offer taken by another driver: $offerId (by $takenByDriverId)');
             _handleWaveOfferTaken(offerId);
           }
         },
@@ -567,7 +732,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           print('❌ Offer taken stream error: $error');
         },
       );
-      
+
       print('✅ WebSocket callbacks configured successfully (Wave System only)');
     } catch (e) {
       print('🚨 Error setting up WebSocket callbacks: $e');
@@ -580,22 +745,23 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       final prefs = await SharedPreferences.getInstance();
       final isSearching = prefs.getBool('isSearchingForOffers') ?? false;
       final searchEndTimeStr = prefs.getString('searchEndTime');
-      
+
       if (isSearching && searchEndTimeStr != null) {
         final searchEndTime = DateTime.parse(searchEndTimeStr);
-        
+
         // التحقق من أن الوقت لم ينته بعد
         if (DateTime.now().isBefore(searchEndTime)) {
           setState(() {
             _isSearchingForOffers = true;
             _searchEndTime = searchEndTime;
           });
-          
+
           print('✅ تم استعادة حالة البحث: ${_formatTime(searchEndTime)}');
           _startSearchTimer(); // بدء Timer للتحقق من انتهاء الوقت
-          
+
           // ✅ FIX: إعادة الاتصال الذكية - فقط إذا كان الاتصال مقطوع
-          print('🔍 Checking WebSocket connection status after state restore...');
+          print(
+              '🔍 Checking WebSocket connection status after state restore...');
           if (!_webSocketService.isConnected) {
             print('🔌 WebSocket disconnected - reconnecting...');
             print('📱 Reason: App was closed/crashed or network was lost');
@@ -623,12 +789,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('isSearchingForOffers', _isSearchingForOffers);
-      
+
       final endTime = _searchEndTime;
       if (endTime != null) {
         await prefs.setString('searchEndTime', endTime.toIso8601String());
       }
-      
+
       print('💾 تم حفظ حالة البحث');
     } catch (e) {
       print('❌ خطأ في حفظ حالة البحث: $e');
@@ -641,12 +807,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('isSearchingForOffers');
       await prefs.remove('searchEndTime');
-      
+
       setState(() {
         _isSearchingForOffers = false;
         _searchEndTime = null;
       });
-      
+
       _searchTimer?.cancel();
       print('🗑️ تم مسح حالة البحث');
     } catch (e) {
@@ -657,7 +823,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   // بدء Timer للتحقق من انتهاء وقت البحث
   void _startSearchTimer() {
     _searchTimer?.cancel(); // إلغاء أي timer سابق
-    
+
     if (_searchEndTime != null) {
       _searchTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
         final endTime = _searchEndTime;
@@ -666,7 +832,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           timer.cancel();
           return;
         }
-        
+
         if (DateTime.now().isAfter(endTime)) {
           print('⏰ انتهى وقت البحث، إيقاف تلقائي');
           _stopSearching();
@@ -687,7 +853,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       // التحقق من تهيئة مشغل الصوت
       try {
         // Ensure audio player is properly initialized
-        await Future.delayed(const Duration(milliseconds: 50)); // Small delay to ensure stability
+        await Future.delayed(const Duration(
+            milliseconds: 50)); // Small delay to ensure stability
       } catch (initError) {
         print('❌ Audio player check failed: $initError');
         return;
@@ -695,12 +862,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       // محاولة تشغيل الصوت مع timeout
       try {
-        await _audioPlayer.play(AssetSource('sounds/Driver_Noti.mp3'))
+        await _audioPlayer
+            .play(AssetSource('sounds/Driver_Noti.mp3'))
             .timeout(const Duration(seconds: 5)); // 5 second timeout
         print('🔊 تم تشغيل صوت الإشعار بنجاح');
       } catch (playError) {
         print('❌ خطأ في تشغيل الصوت: $playError');
-        
+
         // محاولة بديلة بصوت النظام
         try {
           await _audioPlayer.play(AssetSource('sounds/notification.mp3'));
@@ -710,7 +878,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           // Continue without sound - don't crash
         }
       }
-      
     } catch (e, stackTrace) {
       print('🚨 CRITICAL: خطأ غير متوقع في تشغيل الصوت: $e');
       print('Stack trace: $stackTrace');
@@ -725,15 +892,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         print('⚠️ Widget not mounted, skipping location initialization');
         return;
       }
-      
+
       print('🌍 Initializing location service safely...');
-      
+
       // استخدام موقع افتراضي أولاً لتجنب الانغلاق
       _setFallbackLocation();
-      
+
       // محاولة الحصول على الموقع الحقيقي في المرحلة التالية
       _attemptRealLocationAccess();
-      
     } catch (e, stackTrace) {
       print('CRITICAL: Error in location initialization: $e');
       print('Stack trace: $stackTrace');
@@ -769,10 +935,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   /// محاولة الحصول على الموقع الحقيقي بشكل آمن
   void _attemptRealLocationAccess() async {
     try {
-      await Future.delayed(const Duration(milliseconds: 1000)); // تأخير لضمان الاستقرار
-      
+      await Future.delayed(
+          const Duration(milliseconds: 1000)); // تأخير لضمان الاستقرار
+
       if (!mounted) return;
-      
+
       // التحقق من الأذونات مع timeout
       LocationPermission permission;
       try {
@@ -783,7 +950,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         print('❌ Permission check failed: $permissionError');
         return;
       }
-      
+
       if (permission == LocationPermission.denied) {
         try {
           print('🔒 Requesting location permission...');
@@ -795,14 +962,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           return;
         }
       }
-      
-      if (permission == LocationPermission.whileInUse || 
+
+      if (permission == LocationPermission.whileInUse ||
           permission == LocationPermission.always) {
         _getRealPosition();
       } else {
         print('⚠️ Location permission not granted: $permission');
       }
-      
     } catch (e, stackTrace) {
       print('🚨 Error in real location access: $e');
       print('Stack trace: $stackTrace');
@@ -813,9 +979,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   void _getRealPosition() async {
     try {
       if (!mounted) return;
-      
+
       print('🌍 Getting real position...');
-      
+
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
         timeLimit: const Duration(seconds: 8),
@@ -823,15 +989,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         const Duration(seconds: 12),
         onTimeout: () {
           print('⏰ Real location timeout - keeping fallback');
-          throw TimeoutException('Location timeout', const Duration(seconds: 12));
+          throw TimeoutException(
+              'Location timeout', const Duration(seconds: 12));
         },
       );
-      
+
       if (mounted) {
         // 🧪 للاختبار: استخدام الإحداثيات الثابتة بدلاً من GPS الفعلي
         // TODO: بعد الاختبار، أعد تفعيل GPS بإلغاء التعليق على السطر التالي وحذف الكود الثابت
         // _currentPosition = position;
-        
+
         setState(() {
           _currentPosition = Position(
             latitude: _testLatitude,
@@ -847,9 +1014,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           );
         });
         print('✅ Test location set (not GPS): $_testLatitude, $_testLongitude');
-        print('⚠️ GPS location ignored for testing: ${position.latitude}, ${position.longitude}');
+        print(
+            '⚠️ GPS location ignored for testing: ${position.latitude}, ${position.longitude}');
       }
-      
     } catch (e) {
       print('⚠️ Real location failed, using test location: $e');
       // استخدام الإحداثيات الثابتة للاختبار
@@ -872,20 +1039,42 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     }
   }
 
-  void _startSearchingForOffers() {
+  void _startSearchingForOffers() async {
     try {
       if (!mounted) {
         print('⚠️ Widget not mounted, cannot start search');
         return;
       }
-      
+
+      final prefs = await SharedPreferences.getInstance();
+      final token = await CognitoTokenService.getAccessToken() ?? prefs.getString('auth_token');
+      final response = await http.get(
+        Uri.parse('${Environment.apiBaseUrl}/driver/me'),
+        headers: {'Authorization': 'Bearer ${token ?? ''}'},
+      ).timeout(const Duration(seconds: 15));
+      if (!mounted) return;
+      final profile = response.statusCode == 200
+          ? json.decode(response.body)['data'] as Map<String, dynamic>?
+          : null;
+      if (profile?['isVerified'] != true) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('حسابك بانتظار تحقق الإدارة. يمكنك بدء العمل بعد الموافقة.'),
+        ));
+        return;
+      }
+
       print('📱 فتح نافذة اختيار وقت البحث...');
-      
+
       // إظهار modal اختيار الوقت أولاً مثل Spark
       _showSparkNowTimeSelection();
-      
     } catch (e, stackTrace) {
       print('🚨 خطأ في بدء البحث: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('تعذر التحقق من حالة حسابك. حاول مرة أخرى.'),
+        ));
+      }
+
       print('Stack trace: $stackTrace');
     }
   }
@@ -898,10 +1087,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       final timeSlot = now.add(Duration(minutes: 30 * i));
       _timeOptions!.add(timeSlot);
     }
-    
-    // إعادة تعيين الاختيار عند فتح البوتوم شيت  
+
+    // إعادة تعيين الاختيار عند فتح البوتوم شيت
     _selectedEndTime = null;
-    
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -918,34 +1107,35 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         print('⚠️ Widget not mounted, cancelling search start');
         return;
       }
-      
+
       // 🔒 SECURITY: Check wallet balance before starting search
       print('💰 فحص رصيد المحفظة قبل بدء البحث...');
-      
+
       // Set loading state
       if (mounted) {
         setState(() {
           _isCheckingWalletBalance = true;
         });
       }
-      
+
       try {
         // Wait for wallet data to load
         final wallet = await ref.read(walletBalanceProvider.future);
-        
+
         // Clear loading state
         if (mounted) {
           setState(() {
             _isCheckingWalletBalance = false;
           });
         }
-        
+
         final requiredMinimumBalance = wallet.minRequiredBalance;
-        final hasMinimumBalance = wallet.availableBalance >= requiredMinimumBalance;
+        final hasMinimumBalance =
+            wallet.availableBalance >= requiredMinimumBalance;
         print('💵 رصيد المحفظة: ${wallet.availableBalance} د.ع');
         print('🎯 الحد الأدنى مطلوب: ${requiredMinimumBalance.toString()} د.ع');
         print(hasMinimumBalance ? '✅ الرصيد كافٍ' : '❌ الرصيد غير كافٍ');
-        
+
         if (!hasMinimumBalance) {
           // Close bottom sheet first
           if (mounted) {
@@ -961,7 +1151,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 ),
                 title: const Row(
                   children: [
-                    Icon(Icons.warning_amber_rounded, color: Colors.red, size: 28),
+                    Icon(Icons.warning_amber_rounded,
+                        color: Colors.red, size: 28),
                     SizedBox(width: 12),
                     Text('رصيد غير كافٍ'),
                   ],
@@ -984,7 +1175,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
+                          Icon(Icons.info_outline,
+                              color: Colors.blue.shade700, size: 20),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -1026,14 +1218,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (walletError) {
         // Error loading wallet data
         print('❌ خطأ في تحميل بيانات المحفظة: $walletError');
-        
+
         // Clear loading state
         if (mounted) {
           setState(() {
             _isCheckingWalletBalance = false;
           });
         }
-        
+
         // Show error dialog
         if (mounted) {
           showDialog(
@@ -1064,15 +1256,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         }
         return;
       }
-      
+
       // Close bottom sheet after successful wallet check
       if (mounted) {
         Navigator.pop(context);
       }
-      
+
       print('🚀 بدء تأكيد البحث عن الطلبات...');
-      print('🧪 TEST MODE: زر "تشغيل" يستخدم إحداثيات النجف الثابتة ($_testLatitude, $_testLongitude)');
-      
+      print(
+          '🧪 TEST MODE: زر "تشغيل" يستخدم إحداثيات النجف الثابتة ($_testLatitude, $_testLongitude)');
+
       // تغيير الحالة بشكل آمن
       if (mounted) {
         setState(() {
@@ -1080,7 +1273,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           _searchEndTime = endTime;
         });
       }
-      
+
       // حفظ الحالة مع معالجة الأخطاء
       try {
         _saveSearchState();
@@ -1088,29 +1281,28 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (saveError) {
         print('⚠️ خطأ في حفظ الحالة: $saveError');
       }
-      
+
       // بدء Timer للتحقق من انتهاء الوقت
       _startSearchTimer();
-      
+
       // إغلاق الـ modal أولاً
       if (mounted && Navigator.canPop(context)) {
         Navigator.pop(context);
       }
-      
+
       // تأخير قصير لضمان استقرار الواجهة
       await Future.delayed(const Duration(milliseconds: 500));
-      
+
       // **تشغيل نظام البحث بشكل آمن**
       if (mounted) {
         await _startRealWebSocketConnection();
       }
-      
+
       print('✅ تم بدء البحث حتى: ${_formatTime(endTime)}');
-      
     } catch (e, stackTrace) {
       print('🚨 CRITICAL: خطأ في تأكيد البحث: $e');
       print('Stack trace: $stackTrace');
-      
+
       // التراجع عن التغييرات في حالة الخطأ
       if (mounted) {
         setState(() {
@@ -1123,11 +1315,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   void _stopSearching() async {
     print('🛑🛑🛑 إيقاف البحث بواسطة السائق - البداية');
-    
+
     // 🎯 STEP 1: استدعاء REST API لتحديث WizzDriverLiveState
     try {
       print('📡 استدعاء REST API /driver/stop-searching...');
-      
+
       // 🔄 IMPORTANT: احصل على Token حديث من Amplify بدلاً من SharedPreferences
       String? authToken;
       try {
@@ -1136,18 +1328,20 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         authToken = cognitoSession.userPoolTokensResult.value.accessToken.raw;
         print('✅ تم الحصول على Access Token من Amplify');
       } catch (tokenError) {
-        print('⚠️ فشل الحصول على Token من Amplify، محاولة من SharedPreferences');
+        print(
+            '⚠️ فشل الحصول على Token من Amplify، محاولة من SharedPreferences');
         final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString('auth_token') ?? prefs.getString('id_token');
+        authToken =
+            prefs.getString('auth_token') ?? prefs.getString('id_token');
       }
-      
+
       print('🔑 Auth Token موجود: ${authToken != null}');
       print('🔑 Auth Token length: ${authToken?.length ?? 0}');
-      
+
       if (authToken != null) {
         final stopUrl = '${Environment.apiBaseUrl}/driver/stop-searching';
         print('🌐 URL: $stopUrl');
-        
+
         final response = await http.post(
           Uri.parse(stopUrl),
           headers: {
@@ -1162,10 +1356,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             throw TimeoutException('Request timeout');
           },
         );
-        
+
         print('📥 Response Status Code: ${response.statusCode}');
         print('📥 Response Body: ${response.body}');
-        
+
         if (response.statusCode == 200) {
           print('✅✅✅ REST API: تم إيقاف حالة البحث بنجاح');
           final data = jsonDecode(response.body);
@@ -1192,7 +1386,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       print('❌❌❌ خطأ في استدعاء stop-searching API: $apiError');
       print('❌ Stack trace: ${StackTrace.current}');
     }
-    
+
     // 🔥 STEP 2: إرسال رسالة stop_searching إلى Enhanced Handler قبل قطع الاتصال
     if (_webSocketService.isConnected) {
       print('📤 WebSocket متصل - إرسال رسالة stop_searching');
@@ -1200,20 +1394,21 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         type: MessageType.driverOffline,
         data: {
           'action': 'stop_searching',
-          'type': 'driver_offline', 
+          'type': 'driver_offline',
           'driverId': _webSocketService.driverId,
           'userId': _webSocketService.driverId,
           'userType': 'driver',
-          'disconnectAfterStop': false, // لا نريد قطع الاتصال كلياً، فقط إيقاف البحث
+          'disconnectAfterStop':
+              false, // لا نريد قطع الاتصال كلياً، فقط إيقاف البحث
           'timestamp': DateTime.now().toIso8601String()
         },
       );
       _webSocketService.sendMessage(stopSearchingMessage);
       print('📤 تم إرسال رسالة stop_searching للنظام المركزي');
-      
+
       // انتظار قصير للتأكد من إرسال الرسالة
       await Future.delayed(const Duration(milliseconds: 500));
-      
+
       // 🆕 Refresh connection after stopping search to prevent stale connection
       print('🔄 Refreshing WebSocket connection after stopping search...');
       await _webSocketService.refreshConnection();
@@ -1221,7 +1416,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     } else {
       print('⚠️ WebSocket غير متصل - لن يتم إرسال رسالة stop_searching');
     }
-    
+
     print('🧹 مسح الحالة من SharedPreferences...');
     _clearSearchState(); // مسح الحالة من SharedPreferences
     print('✅✅✅ إيقاف البحث - الانتهاء');
@@ -1234,32 +1429,35 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         print('⚠️ Widget not mounted, skipping WebSocket setup');
         return;
       }
-      
+
       print('🔌 بدء نظام البحث عن الطلبات...');
-      
+
       // ✅ FIX: التحقق من صحة الاتصال الموجود
       if (_webSocketService.isConnected) {
         print('✅ WebSocket already connected');
-        
+
         // فقط إرسال heartbeat للتأكد من أن الاتصال سليم
         print('💓 Sending keepalive heartbeat...');
         await _webSocketService.refreshConnection();
-        
+
         print('✅ Connection verified, calling start-searching API...');
         await _callStartSearchingAPI();
         return;
       }
-      
+
       // ✅ إذا لم يكن متصل، محاولة إعادة الاتصال (حالة: انقطاع إنترنت، إغلاق مفاجئ)
       print('🔄 WebSocket disconnected - attempting reconnection...');
       print('📱 Reason: App crash, network loss, or connection timeout');
-      
+
       final prefs = await SharedPreferences.getInstance();
-      final driverId = prefs.getString('driver_id') ?? '74b83488-f041-70a4-52d7-d2370b7eec06'; // Mustafa - مركز المناذرة
-      final authToken = prefs.getString('auth_token') ?? prefs.getString('id_token') ?? 'mock_token';
-      
+      final driverId = prefs.getString('driver_id') ??
+          '74b83488-f041-70a4-52d7-d2370b7eec06'; // Mustafa - مركز المناذرة
+      final authToken = prefs.getString('auth_token') ??
+          prefs.getString('id_token') ??
+          'mock_token';
+
       print('🚗 معرف السائق: $driverId');
-      
+
       // محاولة إعادة تهيئة WebSocket
       try {
         print('🔌 Re-initializing WebSocket connection...');
@@ -1267,7 +1465,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           driverId: driverId,
           authToken: authToken,
         );
-        
+
         if (_webSocketService.isConnected) {
           print('✅ WebSocket connection re-established successfully');
           print('📡 Calling start-searching API to sync state...');
@@ -1275,29 +1473,29 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         } else {
           throw Exception('WebSocket connection failed after initialization');
         }
-        
       } catch (wsError) {
         print('❌ WebSocket re-initialization failed: $wsError');
         print('⚠️ Wave System requires WebSocket connection');
         print('💡 User should check internet connection and retry');
         // No simulation fallback - Wave System only
       }
-      
     } catch (e, stackTrace) {
       print('🚨 CRITICAL: خطأ في نظام البحث: $e');
       print('Stack trace: $stackTrace');
       // Wave System requires WebSocket - no simulation fallback
     }
   }
-  
+
   /// استدعاء REST API /driver/start-searching لكتابة البيانات الكاملة
   Future<void> _callStartSearchingAPI() async {
     try {
-      print('📡 استدعاء REST API /driver/start-searching لكتابة البيانات الكاملة...');
-      
+      print(
+          '📡 استدعاء REST API /driver/start-searching لكتابة البيانات الكاملة...');
+
       final prefs = await SharedPreferences.getInstance();
-      final authToken = prefs.getString('auth_token') ?? prefs.getString('id_token');
-      
+      final authToken =
+          prefs.getString('auth_token') ?? prefs.getString('id_token');
+
       if (authToken != null) {
         // 🧪 TEST MODE: استخدام إحداثيات النجف الثابتة
         final response = await http.post(
@@ -1307,49 +1505,50 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             'Authorization': 'Bearer $authToken',
           },
           body: json.encode({
-            'lat': _testLatitude,  // 31.915514
+            'lat': _testLatitude, // 31.915514
             'lng': _testLongitude, // 44.471916
           }),
         );
-        
+
         if (response.statusCode == 200) {
           final responseData = json.decode(response.body);
           print('✅ REST API: تم كتابة البيانات الكاملة في WizzDriverLiveState');
-          print('📍 المنطقة: ${responseData['data']['current_work_region']['name']}');
-          print('🏠 المحافظة: ${responseData['data']['current_work_region']['governorate_name']}');
-          
+          print(
+              '📍 المنطقة: ${responseData['data']['current_work_region']['name']}');
+          print(
+              '🏠 المحافظة: ${responseData['data']['current_work_region']['governorate_name']}');
+
           // 🌊 WAVE SYSTEM: الآن WizzDriverLiveState محدث بـ:
           // - isSearching = true
           // - current_work_region_id = naj_center_001
           // - allowed_region_ids = [...]
           // - metricsSnapshot_* = ...
-          
+
           print('🌊 Wave System: السائق مسجل في النظام الموجي');
           print('✅ البيانات الكاملة محفوظة - جاهز للاتصال WebSocket');
-          
         } else if (response.statusCode == 403) {
           final errorData = json.decode(response.body);
           print('⚠️ REST API: غير مسموح بالعمل في هذه المنطقة');
           print('📍 الرسالة: ${errorData['message']}');
-          
+
           // إظهار رسالة للسائق
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text(errorData['message'] ?? 'لا يمكن العمل في هذه المنطقة'),
+                content: Text(
+                    errorData['message'] ?? 'لا يمكن العمل في هذه المنطقة'),
                 backgroundColor: Colors.red,
                 duration: const Duration(seconds: 5),
               ),
             );
           }
-          
+
           // إيقاف البحث
           setState(() {
             _isSearchingForOffers = false;
             _searchEndTime = null;
           });
           throw Exception('Region not allowed');
-          
         } else {
           print('⚠️ REST API: فشل بدء البحث - ${response.statusCode}');
           print('📄 الرد: ${response.body}');
@@ -1377,7 +1576,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   // رفض الطلب (DEPRECATED - Use Wave System)
   void _rejectOffer(OrderOffer offer) {
     print('⚠️ _rejectOffer called for legacy offer flow - ignoring');
-    
+
     setState(() {
       _rejectedOfferIds.add(offer.id);
       _availableOffers.removeWhere((o) => o.id == offer.id);
@@ -1406,7 +1605,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     // النظام الحالي يستخدم WaveOffer و _buildWaveOfferCard
     return Container(); // placeholder
   }
-  
+
   // 🌊 بناء بطاقة Wave Offer (NEW)
   Widget _buildWaveOfferCard(WaveOffer offer) {
     return Padding(
@@ -1416,13 +1615,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         key: ValueKey<String>('wave-offer-${offer.offerId}'),
         offer: offer,
         onAccept: () => _acceptWaveOffer(offer),
-        onReject: () => _showRejectConfirmationSheet(offer), // ✅ عرض Bottom Sheet للتأكيد
+        onReject: () =>
+            _showRejectConfirmationSheet(offer), // ✅ عرض Bottom Sheet للتأكيد
         onTimeout: () => _handleTimeout(offer), // ✅ معالج منفصل لانتهاء الوقت
         onTap: () => _showWaveOrderDetails(offer),
       ),
     );
   }
-  
+
   /// تحويل OrderOffer إلى WaveOffer (للتوافق مع الشاشات القديمة)
   WaveOffer _convertOrderOfferToWaveOffer(OrderOffer order) {
     return WaveOffer(
@@ -1451,14 +1651,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       distance: order.distanceInMiles / 0.621371, // miles to km
       estimatedMinutes: order.estimatedMinutes,
       itemsCount: order.itemsCount,
-      items: order.items.map((item) => wave_model.OrderItem(
-        itemId: item.itemId,
-        name: item.name,
-        quantity: item.quantity,
-        price: 0, // OrderOffer local class doesn't have price
-        imageUrl: null,
-        notes: null,
-      )).toList(),
+      items: order.items
+          .map((item) => wave_model.OrderItem(
+                itemId: item.itemId,
+                name: item.name,
+                quantity: item.quantity,
+                price: 0, // OrderOffer local class doesn't have price
+                imageUrl: null,
+                notes: null,
+              ))
+          .toList(),
       sentAt: order.createdAt,
       expiresAt: order.createdAt.add(const Duration(seconds: 30)),
       specialInstructions: null,
@@ -1469,21 +1671,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   void _showOrderDetails(OrderOffer offer) {
     // تحويل OrderOffer إلى WaveOffer
     final waveOffer = _convertOrderOfferToWaveOffer(offer);
-    
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => OrderDetailsBottomSheet(
         offer: waveOffer,
-        onAccept: () {
-          Navigator.pop(context);
-          _acceptOffer(offer);
-        },
-        onReject: () {
-          Navigator.pop(context);
-          _rejectOffer(offer);
-        },
+        canAccept: true,
+        onAccept: () => _acceptOffer(offer),
+        onReject: () => _rejectOffer(offer),
       ),
     );
   }
@@ -1495,7 +1692,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: const Text('تم قبول الطلب'),
-        content: Text('تم قبول طلب ${offer.customerName}\nمن ${offer.storeName}'),
+        content:
+            Text('تم قبول طلب ${offer.customerName}\nمن ${offer.storeName}'),
         actions: [
           TextButton(
             onPressed: () {
@@ -1514,15 +1712,15 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     final minute = time.minute.toString().padLeft(2, '0');
     final period = hour >= 12 ? 'مساءً' : 'صباحاً';
     final hour12 = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
-    
+
     // إضافة تفاصيل إضافية للوقت
     final dayDifference = time.difference(DateTime.now()).inDays;
     final timeString = '$hour12:$minute $period';
-    
+
     if (dayDifference > 0) {
       return '$timeString (اليوم التالي)';
     }
-    
+
     return timeString;
   }
 
@@ -1533,7 +1731,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         children: [
           // Map background (full screen like Spark)
           _buildMapView(),
-          
+
           // Bottom draggable sheet that starts minimized
           _buildDraggableBottomSheet(),
         ],
@@ -1556,22 +1754,22 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       zoomControlsEnabled: false,
       mapType: MapType.normal, // خريطة شوارع عادية
       compassEnabled: true,
-        rotateGesturesEnabled: true,
-        scrollGesturesEnabled: true,
-        tiltGesturesEnabled: true,
-        zoomGesturesEnabled: true,
-        mapToolbarEnabled: false,
+      rotateGesturesEnabled: true,
+      scrollGesturesEnabled: true,
+      tiltGesturesEnabled: true,
+      zoomGesturesEnabled: true,
+      mapToolbarEnabled: false,
       onMapCreated: (controller) {
         _mapController = controller;
         _loadMapData();
       },
     );
   }
-  
+
   /// Load map data from backend API
   Future<void> _loadMapData() async {
     if (_isLoadingMapData) return;
-    
+
     setState(() {
       _isLoadingMapData = true;
     });
@@ -1579,64 +1777,62 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     try {
       // ⏰ انتظار قليلاً للتأكد من جاهزية Auth token
       await Future.delayed(const Duration(milliseconds: 500));
-      
+
       if (!mounted) return;
-      
+
       final data = await MapDataService.fetchMapData(
-        lat: _testLatitude,   // إحداثيات ثابتة بدلاً من GPS
+        lat: _testLatitude, // إحداثيات ثابتة بدلاً من GPS
         lng: _testLongitude,
       );
-      
+
       if (!mounted) return;
-      
+
       setState(() {
         _mapData = data;
         _updateMapMarkers();
         _isLoadingMapData = false;
       });
-      
+
       // 🔄 بدء التحديث التلقائي لحالة المطاعم بعد التحميل الأول
       _startStoresStatusAutoRefresh();
     } catch (e) {
-      
       if (!mounted) return;
-      
+
       setState(() {
         _isLoadingMapData = false;
       });
-      
+
       // 🔄 إعادة المحاولة مرة واحدة إذا كان الخطء Authentication
       if (e.toString().contains('Authentication')) {
         await Future.delayed(const Duration(seconds: 2));
-        
+
         if (!mounted) return;
-        
+
         try {
           final data = await MapDataService.fetchMapData(
             lat: _testLatitude,
             lng: _testLongitude,
           );
-          
+
           if (!mounted) return;
-          
+
           setState(() {
             _mapData = data;
             _updateMapMarkers();
           });
-          
+
           return; // نجحت إعادة المحاولة
-        } catch (retryError) {
-        }
+        } catch (retryError) {}
       }
-      
+
       // عرض رسالة للمستخدم فقط إذا فشلت كل المحاولات
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               e.toString().contains('Authentication')
-                ? 'خطأ في المصادقة - الرجاء إعادة تسجيل الدخول'
-                : 'فشل تحميل المطاعم - تأكد من الاتصال بالإنترنت',
+                  ? 'خطأ في المصادقة - الرجاء إعادة تسجيل الدخول'
+                  : 'فشل تحميل المطاعم - تأكد من الاتصال بالإنترنت',
               textAlign: TextAlign.center,
             ),
             backgroundColor: Colors.red,
@@ -1646,7 +1842,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
     }
   }
-  
+
   /// 🎨 Create custom circular marker icon
   /// Creates a yellow circular marker with blue category icon
   Future<BitmapDescriptor> _createStoreMarkerIcon({
@@ -1704,8 +1900,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       // 🔥 Draw hot glow effect
       if (hotScore >= 5) {
-        Color glowColor = hotScore >= 10 
-            ? Colors.red.withOpacity(0.6) 
+        Color glowColor = hotScore >= 10
+            ? Colors.red.withOpacity(0.6)
             : Colors.orange.withOpacity(0.5);
 
         final glowPaint = Paint()
@@ -2038,7 +2234,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       // - priority 0 (Core): أصفر كامل (hueYellow = 60)
       // - priority 1 (Extended): أصفر فاتح (hueOrange = 30)
       // - Hot stores: أحمر مع توهج
-      
+
       if (store.isHot) {
         // 🔥 المتاجر الساخنة: أحمر
       } else if (store.expansionPriority == 0) {
@@ -2072,7 +2268,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
     setState(() {});
   }
-  
+
   /// Show store details in bottom sheet when tapped
   /// 🗺️ Open maps application with navigation from driver location to store
   Future<void> _openMapsNavigation(NearbyStore store) async {
@@ -2092,32 +2288,31 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     debugPrint('   Latitude:  $storeLat');
     debugPrint('   Longitude: $storeLng');
     debugPrint('   Address:   ${store.address}');
-    
+
     // حساب المسافة التقريبية
     final distance = store.distanceKm;
     debugPrint('📏 Distance: ${distance.toStringAsFixed(2)} km');
 
     // ✅ Apple Maps - التنسيق الصحيح الذي يدعم الاتجاهات
     // استخدام daddr فقط مع ll (current location) يعمل بشكل أفضل
-    final appleMapsAppUrl = 
-      'maps://?ll=$storeLat,$storeLng&q=${Uri.encodeComponent(store.name)}&saddr=$driverLat,$driverLng&daddr=$storeLat,$storeLng';
-    
+    final appleMapsAppUrl =
+        'maps://?ll=$storeLat,$storeLng&q=${Uri.encodeComponent(store.name)}&saddr=$driverLat,$driverLng&daddr=$storeLat,$storeLng';
+
     debugPrint('');
     debugPrint('🔗 Apple Maps App URL:');
     debugPrint(appleMapsAppUrl);
 
     // ✅ Google Maps App URL - التنسيق الموثوق
-    final googleMapsAppUrl = 
-      'comgooglemaps://?saddr=$driverLat,$driverLng&daddr=$storeLat,$storeLng&directionsmode=driving';
-    
+    final googleMapsAppUrl =
+        'comgooglemaps://?saddr=$driverLat,$driverLng&daddr=$storeLat,$storeLng&directionsmode=driving';
+
     debugPrint('');
     debugPrint('🔗 Google Maps App URL:');
     debugPrint(googleMapsAppUrl);
-    
+
     // ✅ Waze App URL (إذا كان مثبتاً - شائع في العراق)
-    final wazeAppUrl = 
-      'waze://?ll=$storeLat,$storeLng&navigate=yes';
-    
+    final wazeAppUrl = 'waze://?ll=$storeLat,$storeLng&navigate=yes';
+
     debugPrint('');
     debugPrint('🔗 Waze App URL:');
     debugPrint(wazeAppUrl);
@@ -2125,7 +2320,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     final appleMapsUrl = Uri.parse(appleMapsAppUrl);
     final googleMapsUrl = Uri.parse(googleMapsAppUrl);
     final wazeUrl = Uri.parse(wazeAppUrl);
-    
+
     debugPrint('=========================================');
     debugPrint('');
 
@@ -2167,7 +2362,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         // فتح التطبيق المحدد
         Uri? selectedUrl;
         String appName = '';
-        
+
         switch (selectedApp) {
           case 'apple':
             selectedUrl = appleMapsUrl;
@@ -2189,14 +2384,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         if (selectedUrl != null) {
           debugPrint('   From: ($driverLat,$driverLng)');
           debugPrint('   To:   ($storeLat,$storeLng)');
-          
+
           // محاولة فتح التطبيق مباشرة (canLaunchUrl قد يفشل حتى لو التطبيق مثبت)
           try {
             final success = await launchUrl(
               selectedUrl,
               mode: LaunchMode.externalApplication,
             );
-            
+
             if (success) {
               debugPrint('✅ $appName opened successfully');
               if (mounted) {
@@ -2260,13 +2455,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   void _showStoreDetails(NearbyStore store) {
     // 🔄 إيجاد البيانات المحدثة للمطعم من _mapData
     final updatedStore = _mapData?.nearbyStores.firstWhere(
-      (s) => s.storeId == store.storeId,
-      orElse: () => store, // استخدام البيانات القديمة إذا لم توجد محدثة
-    ) ?? store;
-    
-    print('📊 Store details - Old: isOpen=${store.isOpen}, acceptingOrders=${store.acceptingOrders}');
-    print('📊 Store details - New: isOpen=${updatedStore.isOpen}, acceptingOrders=${updatedStore.acceptingOrders}');
-    
+          (s) => s.storeId == store.storeId,
+          orElse: () => store, // استخدام البيانات القديمة إذا لم توجد محدثة
+        ) ??
+        store;
+
+    print(
+        '📊 Store details - Old: isOpen=${store.isOpen}, acceptingOrders=${store.acceptingOrders}');
+    print(
+        '📊 Store details - New: isOpen=${updatedStore.isOpen}, acceptingOrders=${updatedStore.acceptingOrders}');
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -2285,7 +2483,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               children: [
                 // صورة المطعم الحقيقية - دائرية وأصغر
                 ClipOval(
-                  child: updatedStore.photoUrl != null && updatedStore.photoUrl!.isNotEmpty
+                  child: updatedStore.photoUrl != null &&
+                          updatedStore.photoUrl!.isNotEmpty
                       ? Image.network(
                           updatedStore.photoUrl!,
                           width: 50,
@@ -2300,8 +2499,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                                 shape: BoxShape.circle,
                               ),
                               child: Icon(
-                                updatedStore.category == 'restaurant' ? Icons.restaurant :
-                                updatedStore.category == 'pharmacy' ? Icons.local_pharmacy : Icons.store,
+                                updatedStore.category == 'restaurant'
+                                    ? Icons.restaurant
+                                    : updatedStore.category == 'pharmacy'
+                                        ? Icons.local_pharmacy
+                                        : Icons.store,
                                 color: Colors.grey[400],
                                 size: 24,
                               ),
@@ -2316,8 +2518,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
-                            updatedStore.category == 'restaurant' ? Icons.restaurant :
-                            updatedStore.category == 'pharmacy' ? Icons.local_pharmacy : Icons.store,
+                            updatedStore.category == 'restaurant'
+                                ? Icons.restaurant
+                                : updatedStore.category == 'pharmacy'
+                                    ? Icons.local_pharmacy
+                                    : Icons.store,
                             color: Colors.grey[400],
                             size: 24,
                           ),
@@ -2337,8 +2542,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                         ),
                       ),
                       Text(
-                        updatedStore.category == 'restaurant' ? 'مطعم' :
-                        updatedStore.category == 'pharmacy' ? 'صيدلية' : 'متجر',
+                        updatedStore.category == 'restaurant'
+                            ? 'مطعم'
+                            : updatedStore.category == 'pharmacy'
+                                ? 'صيدلية'
+                                : 'متجر',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.grey[600],
@@ -2375,11 +2583,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                   ),
               ],
             ),
-            
+
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 12),
-            
+
             // 📍 Distance
             Row(
               children: [
@@ -2391,9 +2599,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 ),
               ],
             ),
-            
+
             const SizedBox(height: 12),
-            
+
             // 📍 Address
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2408,22 +2616,22 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 ),
               ],
             ),
-            
+
             const SizedBox(height: 12),
-            
+
             // ⭐ Priority level
             Row(
               children: [
                 Icon(
-                  updatedStore.expansionPriority == 0 
-                      ? Icons.star 
+                  updatedStore.expansionPriority == 0
+                      ? Icons.star
                       : Icons.star_border,
                   size: 20,
                   color: Colors.grey[600],
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  updatedStore.expansionPriority == 0 
+                  updatedStore.expansionPriority == 0
                       ? 'منطقة عمل أساسية (Core)'
                       : 'منطقة موسّعة (Extended)',
                   style: TextStyle(
@@ -2433,9 +2641,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 ),
               ],
             ),
-            
+
             const SizedBox(height: 12),
-            
+
             // 🟢 Open/Closed/Busy status - نظام محسّن مثل wizzuser
             Row(
               children: [
@@ -2455,9 +2663,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 ),
               ],
             ),
-            
+
             const SizedBox(height: 20),
-            
+
             // 🧭 Navigate button
             SizedBox(
               width: double.infinity,
@@ -2477,9 +2685,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary, // اللون الأساسي الأصفر
-                  foregroundColor: Colors.black87, // نص أسود للقراءة الواضحة على الأصفر
+                  foregroundColor:
+                      Colors.black87, // نص أسود للقراءة الواضحة على الأصفر
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(28), // حواف دائرية مثل زر شارك الآن
+                    borderRadius: BorderRadius.circular(
+                        28), // حواف دائرية مثل زر شارك الآن
                   ),
                   elevation: 4,
                   shadowColor: AppColors.primary.withOpacity(0.3),
@@ -2491,7 +2701,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       ),
     );
   }
-  
+
   Widget _buildOldMapView() {
     return Container(
       color: const Color(0xFFF5F5F5), // خلفية رمادية فاتحة أنيقة
@@ -2510,7 +2720,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               ),
             ),
           ),
-          
+
           // Roads simulation
           Positioned(
             left: 0,
@@ -2530,9 +2740,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               color: Colors.grey[400],
             ),
           ),
-          
+
           // Current location (blue dot like Spark)
-          if (_currentPosition != null) 
+          if (_currentPosition != null)
             Positioned(
               left: MediaQuery.of(context).size.width * 0.5 - 12,
               top: MediaQuery.of(context).size.height * 0.45,
@@ -2553,7 +2763,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 ),
               ),
             ),
-          
+
           // Sample delivery hotspots (red circles like Spark)
           ...List.generate(3, (index) {
             final positions = [
@@ -2562,7 +2772,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               {'left': 0.4, 'top': 0.7},
             ];
             final pos = positions[index];
-            
+
             return Positioned(
               left: MediaQuery.of(context).size.width * pos['left']!,
               top: MediaQuery.of(context).size.height * pos['top']!,
@@ -2598,8 +2808,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     return DraggableScrollableSheet(
       controller: _sheetController,
       initialChildSize: 0.25, // Start small at bottom like Spark
-      minChildSize: 0.25,     // Minimum size to stay visible
-      maxChildSize: 0.85,     // Maximum when fully expanded
+      minChildSize: 0.25, // Minimum size to stay visible
+      maxChildSize: 0.85, // Maximum when fully expanded
       snap: true,
       snapSizes: const [0.25, 0.5, 0.85],
       builder: (context, scrollController) {
@@ -2630,12 +2840,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              
+
               // Sheet content
               Expanded(
                 child: SingleChildScrollView(
                   controller: scrollController,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                   child: _buildSheetContent(),
                 ),
               ),
@@ -2659,7 +2870,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       children: [
         // "Get offers until" section like Spark - clickable
         GestureDetector(
-          onTap: () => _showSparkNowTimeSelection(), // إظهار قائمة الأوقات مع خيار الإيقاف
+          onTap: () =>
+              _showSparkNowTimeSelection(), // إظهار قائمة الأوقات مع خيار الإيقاف
           child: Container(
             margin: const EdgeInsets.only(bottom: 20),
             child: Row(
@@ -2674,17 +2886,20 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 ),
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: AppColors.secondary.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: AppColors.secondary.withOpacity(0.25)),
+                    border: Border.all(
+                        color: AppColors.secondary.withOpacity(0.25)),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        _formatTime(_searchEndTime ?? DateTime.now().add(const Duration(hours: 1))),
+                        _formatTime(_searchEndTime ??
+                            DateTime.now().add(const Duration(hours: 1))),
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -2704,7 +2919,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             ),
           ),
         ),
-        
+
         // Searching indicator
         Container(
           padding: const EdgeInsets.all(20),
@@ -2716,7 +2931,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 height: 20,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.secondary),
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(AppColors.secondary),
                 ),
               ),
               const SizedBox(width: 12),
@@ -2731,7 +2947,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             ],
           ),
         ),
-        
+
         // 🌊 Wave System Offers (NEW - PRIORITY)
         if (_currentWaveOffers.isNotEmpty) ...[
           const SizedBox(height: 20),
@@ -2740,7 +2956,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             return _buildWaveOfferCard(offer);
           }),
         ],
-        
+
         // Available offers list (Legacy - Deprecated)
         if (_availableOffers.isNotEmpty) ...[
           const SizedBox(height: 20),
@@ -2749,7 +2965,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             return _buildOfferCard(offer);
           }),
         ],
-        
+
         // إظهار المحتوى المشترك فقط عندما لا توجد طلبات
         if (_availableOffers.isEmpty && _currentWaveOffers.isEmpty) ...[
           const SizedBox(height: 20),
@@ -2771,7 +2987,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             onPressed: _startSearchingForOffers,
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary, // اللون الأساسي للتطبيق
-              foregroundColor: Colors.black87, // نص أسود للقراءة الواضحة على الأصفر
+              foregroundColor:
+                  Colors.black87, // نص أسود للقراءة الواضحة على الأصفر
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
               ),
@@ -2788,7 +3005,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             ),
           ),
         ),
-        
+
         // Error message display
         if (_errorMessage != null)
           Container(
@@ -2799,9 +3016,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               color: AppColors.secondary.withOpacity(0.15), // أزرق شفاف
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: AppColors.secondary.withOpacity(0.3), 
-                width: 1.5
-              ),
+                  color: AppColors.secondary.withOpacity(0.3), width: 1.5),
             ),
             child: Row(
               children: [
@@ -2839,7 +3054,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               ],
             ),
           ),
-        
+
         _buildCommonContent(),
       ],
     );
@@ -2903,7 +3118,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             ],
           ),
         ),
-        
+
         // Popular offer times section
         _buildPopularOfferTimes(),
       ],
@@ -2939,9 +3154,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             ),
           ],
         ),
-        
+
         const SizedBox(height: 16),
-        
+
         // Time bars chart (simplified version like Spark)
         _buildOfferTimesBars(),
       ],
@@ -2952,7 +3167,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     final timeSlots = ['6a', '9a', '12p', '3p', '6p', '9p'];
     final values = [0.3, 0.4, 0.8, 0.9, 0.7, 0.6]; // Sample data
     final currentHour = DateTime.now().hour;
-    
+
     return Container(
       height: 120,
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -2960,9 +3175,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: List.generate(timeSlots.length, (index) {
-          final isCurrentTime = _isCurrentTimeSlot(timeSlots[index], currentHour);
+          final isCurrentTime =
+              _isCurrentTimeSlot(timeSlots[index], currentHour);
           final barHeight = 80 * values[index];
-          
+
           return Column(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
@@ -2980,7 +3196,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                 style: TextStyle(
                   fontSize: 12,
                   color: Colors.grey[600],
-                  fontWeight: isCurrentTime ? FontWeight.w600 : FontWeight.normal,
+                  fontWeight:
+                      isCurrentTime ? FontWeight.w600 : FontWeight.normal,
                 ),
               ),
             ],
@@ -2992,13 +3209,20 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   bool _isCurrentTimeSlot(String timeSlot, int currentHour) {
     switch (timeSlot) {
-      case '6a': return currentHour >= 6 && currentHour < 9;
-      case '9a': return currentHour >= 9 && currentHour < 12;
-      case '12p': return currentHour >= 12 && currentHour < 15;
-      case '3p': return currentHour >= 15 && currentHour < 18;
-      case '6p': return currentHour >= 18 && currentHour < 21;
-      case '9p': return currentHour >= 21 || currentHour < 6;
-      default: return false;
+      case '6a':
+        return currentHour >= 6 && currentHour < 9;
+      case '9a':
+        return currentHour >= 9 && currentHour < 12;
+      case '12p':
+        return currentHour >= 12 && currentHour < 15;
+      case '3p':
+        return currentHour >= 15 && currentHour < 18;
+      case '6p':
+        return currentHour >= 18 && currentHour < 21;
+      case '9p':
+        return currentHour >= 21 || currentHour < 6;
+      default:
+        return false;
     }
   }
 
@@ -3006,7 +3230,15 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   void dispose() {
     try {
       print('🧹 Disposing SparkHomeSimpleArabic resources...');
-      
+
+      // 🔔 Cancel notification tap subscription
+      try {
+        _notificationTapSubscription?.cancel();
+        print('🔔 Notification tap subscription cancelled');
+      } catch (notifError) {
+        print('⚠️ Error cancelling notification subscription: $notifError');
+      }
+
       // 🌊 Cancel Wave System subscriptions
       try {
         _waveOfferSubscription?.cancel();
@@ -3017,10 +3249,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (waveError) {
         print('⚠️ Error cancelling Wave subscriptions: $waveError');
       }
-      
+
       // 🆕 Cancel offer expiry cleanup timer
       try {
-        if (_offerExpiryCleanupTimer != null && _offerExpiryCleanupTimer!.isActive) {
+        if (_offerExpiryCleanupTimer != null &&
+            _offerExpiryCleanupTimer!.isActive) {
           _offerExpiryCleanupTimer!.cancel();
           _offerExpiryCleanupTimer = null;
         }
@@ -3028,7 +3261,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (cleanupError) {
         print('⚠️ Error cancelling cleanup timer: $cleanupError');
       }
-      
+
       // Clear lists and data structures first
       try {
         _availableOffers.clear();
@@ -3038,7 +3271,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (listError) {
         print('⚠️ Error clearing data structures: $listError');
       }
-      
+
       // إلغاء Timers with null checks
       try {
         if (_searchTimer != null && _searchTimer!.isActive) {
@@ -3046,7 +3279,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           _searchTimer = null;
         }
         // Legacy simulation removed - Wave System only
-        if (_storesStatusRefreshTimer != null && _storesStatusRefreshTimer!.isActive) {
+        if (_storesStatusRefreshTimer != null &&
+            _storesStatusRefreshTimer!.isActive) {
           _storesStatusRefreshTimer!.cancel();
           _storesStatusRefreshTimer = null;
         }
@@ -3054,10 +3288,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (timerError) {
         print('⚠️ Error cancelling timers: $timerError');
       }
-      
+
       // WebSocket callbacks are automatically cleaned up by service
       print('🔌 WebSocket cleanup handled by service');
-      
+
       // تنظيف مشغل الصوت مع حماية إضافية
       try {
         _audioPlayer.stop(); // Stop any playing audio first
@@ -3072,7 +3306,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           print('🚨 Force dispose audio failed: $forceError');
         }
       }
-      
+
       // تنظيف الcontrollers
       try {
         _sheetController.dispose();
@@ -3080,7 +3314,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (controllerError) {
         print('⚠️ Error disposing sheet controller: $controllerError');
       }
-      
+
       // Remove app lifecycle observer
       try {
         WidgetsBinding.instance.removeObserver(this);
@@ -3088,7 +3322,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (observerError) {
         print('⚠️ Error removing lifecycle observer: $observerError');
       }
-      
+
       // تنظيف الذاكرة والموارد الإضافية
       try {
         // Clear any remaining resources
@@ -3096,16 +3330,15 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (memoryError) {
         print('⚠️ Additional cleanup error: $memoryError');
       }
-      
+
       print('✅ All resources disposed successfully');
-      
+
       // Call super.dispose() at the very end
       super.dispose();
-      
     } catch (e, stackTrace) {
       print('🚨 CRITICAL: Error in dispose: $e');
       print('Stack trace: $stackTrace');
-      
+
       // Force cleanup in case of error
       try {
         _searchTimer?.cancel();
@@ -3115,7 +3348,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (forceError) {
         print('🚨 Force cleanup failed: $forceError');
       }
-      
+
       // تأكد من استدعاء super.dispose() حتى في حالة الخطأ
       try {
         super.dispose();
@@ -3194,9 +3427,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Text(
-              _isSearchingForOffers 
-                ? 'اختر وقت جديد للبحث أو أوقف البحث:'
-                : 'مع تشغيل شارك الآن، ستتلقى عروض حتى:',
+              _isSearchingForOffers
+                  ? 'اختر وقت جديد للبحث أو أوقف البحث:'
+                  : 'مع تشغيل شارك الآن، ستتلقى عروض حتى:',
               style: TextStyle(
                 fontSize: 16,
                 color: Colors.grey[600],
@@ -3213,8 +3446,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               itemCount: timeOptions.length,
               itemBuilder: (context, index) {
                 final time = timeOptions[index];
-                final isSelected = _selectedEndTime != null && 
-                    _selectedEndTime!.millisecondsSinceEpoch == time.millisecondsSinceEpoch;
+                final isSelected = _selectedEndTime != null &&
+                    _selectedEndTime!.millisecondsSinceEpoch ==
+                        time.millisecondsSinceEpoch;
 
                 return GestureDetector(
                   onTap: () {
@@ -3224,12 +3458,17 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                   },
                   child: Container(
                     margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 16, horizontal: 20),
                     decoration: BoxDecoration(
-                      color: isSelected ? AppColors.secondary.withOpacity(0.05) : Colors.white,
+                      color: isSelected
+                          ? AppColors.secondary.withOpacity(0.05)
+                          : Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: isSelected ? AppColors.secondary : Colors.grey[300]!,
+                        color: isSelected
+                            ? AppColors.secondary
+                            : Colors.grey[300]!,
                         width: isSelected ? 2 : 1,
                       ),
                     ),
@@ -3241,7 +3480,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             border: Border.all(
-                              color: isSelected ? AppColors.secondary : Colors.grey[400]!,
+                              color: isSelected
+                                  ? AppColors.secondary
+                                  : Colors.grey[400]!,
                               width: 2,
                             ),
                             color: Colors.white,
@@ -3261,8 +3502,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                           _formatTime(time),
                           style: TextStyle(
                             fontSize: 16,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                            color: isSelected ? AppColors.secondary : Colors.black87,
+                            fontWeight:
+                                isSelected ? FontWeight.bold : FontWeight.w500,
+                            color: isSelected
+                                ? AppColors.secondary
+                                : Colors.black87,
                           ),
                         ),
                       ],
@@ -3336,11 +3580,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                   width: double.infinity,
                   height: 56,
                   child: ElevatedButton(
-                    onPressed: (_selectedEndTime != null && !_isCheckingWalletBalance)
-                        ? () {
-                            _confirmSparkNow(_selectedEndTime!);
-                          }
-                        : null,
+                    onPressed:
+                        (_selectedEndTime != null && !_isCheckingWalletBalance)
+                            ? () {
+                                _confirmSparkNow(_selectedEndTime!);
+                              }
+                            : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.black87,
@@ -3358,7 +3603,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                                 height: 20,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.black87),
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.black87),
                                 ),
                               ),
                               SizedBox(width: 12),
@@ -3391,49 +3637,50 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   // ========== 🏪 Store Status Helpers (like wizzuser) ==========
-  
+
   /// تحديد أيقونة حالة المطعم بناءً على المنطق الصحيح
   /// 🔄 بدء التحديث التلقائي لحالة المطاعم (Polling مثل تطبيق المستخدم)
   void _startStoresStatusAutoRefresh() {
     // إلغاء أي Timer سابق
     _storesStatusRefreshTimer?.cancel();
-    
+
     // بدء التحديث التلقائي كل 30 ثانية (نفس تطبيق wizzuser)
-    _storesStatusRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+    _storesStatusRefreshTimer =
+        Timer.periodic(const Duration(seconds: 30), (timer) {
       if (mounted && _mapData != null) {
         print('🔄 Driver: تحديث تلقائي لحالة المطاعم (Polling)');
         _refreshStoresStatus();
       }
     });
-    
+
     print('✅ Driver: بدء نظام التحديث التلقائي لحالة المطاعم (كل 30 ثانية)');
   }
-  
+
   /// 🛑 إيقاف التحديث التلقائي
   void _stopStoresStatusAutoRefresh() {
     _storesStatusRefreshTimer?.cancel();
     _storesStatusRefreshTimer = null;
     print('⏹️ Driver: إيقاف التحديث التلقائي لحالة المطاعم');
   }
-  
+
   /// 🔄 تحديث حالة المطاعم عن طريق مسح الكاش وإعادة التحميل
   Future<void> _refreshStoresStatus() async {
     if (!mounted || _mapData == null) return;
-    
+
     try {
       // مسح الكاش لجميع المطاعم الظاهرة
       for (final store in _mapData!.nearbyStores) {
         await BusinessStatusCache.forceInvalidateBusinessStatus(store.storeId);
       }
-      
+
       // إعادة تحميل بيانات الخريطة (سيجلب الحالة الجديدة من Backend)
       final data = await MapDataService.fetchMapData(
         lat: _testLatitude,
         lng: _testLongitude,
       );
-      
+
       if (!mounted) return;
-      
+
       // التحقق من وجود تغييرات في حالة المطاعم
       bool hasStatusChanges = false;
       if (_mapData != null) {
@@ -3443,18 +3690,18 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             (s) => s.storeId == newStore.storeId,
             orElse: () => newStore,
           );
-          
+
           // مقارنة الحالات
-          if (oldStore.isOpen != newStore.isOpen || 
+          if (oldStore.isOpen != newStore.isOpen ||
               oldStore.acceptingOrders != newStore.acceptingOrders) {
             hasStatusChanges = true;
             print('🔄 Driver: تغيرت حالة المطعم ${newStore.name}: '
-                  'isOpen: ${oldStore.isOpen} -> ${newStore.isOpen}, '
-                  'acceptingOrders: ${oldStore.acceptingOrders} -> ${newStore.acceptingOrders}');
+                'isOpen: ${oldStore.isOpen} -> ${newStore.isOpen}, '
+                'acceptingOrders: ${oldStore.acceptingOrders} -> ${newStore.acceptingOrders}');
           }
         }
       }
-      
+
       // تحديث الـ UI فقط إذا كان هناك تغييرات
       if (hasStatusChanges || _mapData == null) {
         setState(() {
@@ -3465,7 +3712,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } else {
         print('ℹ️ Driver: لا توجد تغييرات في حالة المطاعم');
       }
-      
     } catch (e) {
       print('❌ Driver: خطأ في تحديث حالة المطاعم: $e');
     }
@@ -3478,50 +3724,51 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     if (!store.acceptingOrders) {
       return Icons.schedule; // مشغول - لا يستقبل طلبات
     }
-    
+
     if (!store.isOpen) {
       return Icons.access_time; // مغلق - خارج ساعات العمل
     }
-    
+
     return Icons.check_circle; // مفتوح ويستقبل طلبات
   }
-  
+
   /// تحديد لون حالة المطعم
   Color _getStoreStatusColor(NearbyStore store) {
     if (!store.acceptingOrders) {
       return Colors.orange; // مشغول
     }
-    
+
     if (!store.isOpen) {
       return Colors.red; // مغلق
     }
-    
+
     return Colors.green; // مفتوح
   }
-  
+
   /// تحديد نص حالة المطعم
   String _getStoreStatusText(NearbyStore store) {
     if (!store.acceptingOrders) {
       return 'مشغول'; // لا يستقبل طلبات (acceptingOrders=false من جدول Businesses)
     }
-    
+
     if (!store.isOpen) {
       return 'مغلق'; // خارج ساعات العمل أو isClosed=true من جدول WorkingHours
     }
-    
+
     return 'مفتوح الآن'; // مفتوح ويستقبل طلبات
   }
-  
+
   // ═════════════════════════════════════════════════════════════════════════
   // 🌊 WAVE SYSTEM HANDLERS
   // ═════════════════════════════════════════════════════════════════════════
-  
+
   /// معالج استقبال wave offer جديد
   void _handleWaveOffer(WaveOffer waveOffer) async {
     try {
       print('🌊 Processing wave offer: ${waveOffer.offerId}');
-      print('🌊 Wave ${waveOffer.waveNumber}, Rank ${waveOffer.rank}, Score ${waveOffer.score}');
-      
+      print(
+          '🌊 Wave ${waveOffer.waveNumber}, Rank ${waveOffer.rank}, Score ${waveOffer.score}');
+
       // إضافة إلى قائمة العروض الحالية (بدلاً من فتح dialog)
       setState(() {
         // Remove any existing offer with same ID (e.g., placeholder injected from push tap)
@@ -3529,21 +3776,21 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         _currentWaveOffers.add(waveOffer);
         _currentWaveOffer = waveOffer; // للتوافق مع الكود القديم
       });
-      
+
       // تشغيل صوت الإشعار
       await _playNotificationSound();
-      
-      print('✅ Wave offer added to list. Total offers: ${_currentWaveOffers.length}');
-      
+
+      print(
+          '✅ Wave offer added to list. Total offers: ${_currentWaveOffers.length}');
     } catch (e) {
       print('❌ Error handling wave offer: $e');
     }
   }
-  
+
   /// معالج انتهاء صلاحية wave offer
   void _handleWaveOfferExpired(String offerId) {
     print('⏰ Wave offer expired: $offerId');
-    
+
     // إغلاق نافذة تأكيد الرفض إذا كانت مفتوحة لنفس العرض
     if (_currentRejectConfirmationOfferId == offerId) {
       print('🚪 Closing reject confirmation sheet for expired offer: $offerId');
@@ -3552,14 +3799,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         Navigator.pop(context);
       }
     }
-    
+
     setState(() {
       _currentWaveOffers.removeWhere((offer) => offer.offerId == offerId);
       if (_currentWaveOffer?.offerId == offerId) {
         _currentWaveOffer = null;
       }
     });
-    
+
     // عرض رسالة انتهاء الوقت
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3570,21 +3817,22 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         ),
       );
     }
-    
-    print('✅ Offer removed from list. Remaining offers: ${_currentWaveOffers.length}');
+
+    print(
+        '✅ Offer removed from list. Remaining offers: ${_currentWaveOffers.length}');
   }
-  
+
   /// معالج قبول wave offer من سائق آخر
   void _handleWaveOfferTaken(String offerId) {
     print('👥 Wave offer taken by another driver: $offerId');
-    
+
     setState(() {
       _currentWaveOffers.removeWhere((offer) => offer.offerId == offerId);
       if (_currentWaveOffer?.offerId == offerId) {
         _currentWaveOffer = null;
       }
     });
-    
+
     // عرض رسالة
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3595,10 +3843,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         ),
       );
     }
-    
-    print('✅ Offer removed from list. Remaining offers: ${_currentWaveOffers.length}');
+
+    print(
+        '✅ Offer removed from list. Remaining offers: ${_currentWaveOffers.length}');
   }
-  
+
   /// عرض dialog لـ wave offer
   void _showWaveOfferDialog(WaveOffer waveOffer) {
     showDialog(
@@ -3607,41 +3856,40 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       builder: (context) => WaveOfferDialog(
         offer: waveOffer,
         onAccept: () => _acceptWaveOffer(waveOffer),
-        onReject: () => _showRejectConfirmationSheet(waveOffer), // ✅ عرض Bottom Sheet للتأكيد
+        onReject: () => _showRejectConfirmationSheet(
+            waveOffer), // ✅ عرض Bottom Sheet للتأكيد
       ),
     );
   }
-  
+
   /// ⏱️ معالج انتهاء الوقت (Timeout) - بدون استدعاء API
   void _handleTimeout(WaveOffer waveOffer) {
     print('⏱️ Wave offer timeout: ${waveOffer.offerId}');
     print('   - Timer in OrderOfferCard expired (90 seconds)');
     print('   - Will trigger _handleWaveOfferExpired to close any open sheets');
-    
+
     // ✅ استدعاء _handleWaveOfferExpired لإغلاق نافذة التأكيد إن كانت مفتوحة
     _handleWaveOfferExpired(waveOffer.offerId);
-    
+
     print('✅ Timeout handled - العرض تمت إزالته من UI');
   }
-  
+
   /// قبول wave offer
   Future<void> _acceptWaveOffer(WaveOffer waveOffer) async {
     try {
       print('✅ Accepting wave offer: ${waveOffer.offerId}');
-      
-      // إزالة العرض من القائمة فوراً
-      setState(() {
-        _currentWaveOffers.removeWhere((offer) => offer.offerId == waveOffer.offerId);
-        _currentWaveOffer = null;
-      });
-      
+
       // Show loading
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Row(
               children: [
-                SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white)),
                 SizedBox(width: 16),
                 Text('جاري قبول الطلب...'),
               ],
@@ -3650,55 +3898,64 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           ),
         );
       }
-      
+
       // Get driver ID from authenticated session
       final driverId = await DriverAuthHelper.getCurrentDriverId();
-      
+
       if (driverId == null || driverId.isEmpty) {
         throw Exception('معرف السائق غير موجود - يرجى تسجيل الدخول مرة أخرى');
       }
-      
+
       print('📞 Calling acceptWaveOffer API');
       print('   - offerId: ${waveOffer.offerId}');
       print('   - driverId: $driverId');
       print('   - orderId: ${waveOffer.orderId}');
       print('   - waveNumber: ${waveOffer.waveNumber}');
-      
+
       // Call API
       final result = await DriverSearchApiService.acceptWaveOffer(
         offerId: waveOffer.offerId,
         driverId: driverId,
       );
-      
+
       print('📡 acceptWaveOffer API response:');
       print('   - success: ${result['success']}');
       print('   - message: ${result['message']}');
       print('   - full response: $result');
-      
+
       // Hide loading snackbar
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
       }
-      
+
       if (result['success'] == true) {
         // Success
         print('✅ Wave offer accepted successfully');
         print('📝 Order ID: ${waveOffer.orderId}');
         print('📱 Context mounted: $mounted');
-        
+
+        // إزالة العرض فقط بعد نجاح القبول فعلياً من الباكند
+        if (mounted) {
+          setState(() {
+            _currentWaveOffers
+                .removeWhere((offer) => offer.offerId == waveOffer.offerId);
+            _currentWaveOffer = null;
+          });
+        }
+
         // ✅ استخراج holdId من الاستجابة
         final String? holdId = result['data']?['holdId'];
         final String? holdStatus = result['data']?['holdStatus'];
-        final double? holdAmount = result['data']?['holdAmount'] != null 
-            ? (result['data']?['holdAmount'] as num).toDouble() 
+        final double? holdAmount = result['data']?['holdAmount'] != null
+            ? (result['data']?['holdAmount'] as num).toDouble()
             : null;
-        
+
         if (holdId != null) {
           print('💰 Hold created successfully: $holdId');
           print('   - Status: $holdStatus');
           print('   - Amount: $holdAmount IQD');
         }
-        
+
         // ✅ تحديث رصيد المحفظة بعد Hold
         try {
           final _ = ref.refresh(walletBalanceProvider);
@@ -3706,7 +3963,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         } catch (e) {
           print('⚠️ Failed to refresh wallet balance: $e');
         }
-        
+
         // ✅ حفظ الطلب النشط محلياً للحماية من فقدان البيانات
         try {
           await OrderPersistenceService.saveActiveOrder(
@@ -3739,14 +3996,15 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           print('⚠️ Failed to save active order locally: $e');
           // لا نفشل العملية بسبب مشكلة الحفظ المحلي
         }
-        
+
         // ✅ لا نوقف البحث - الباكند يتحكم في ذلك عبر isSearching, status, activeOrdersCount
         // السائق سيبقى متصل بـ WebSocket ولكن لن يستقبل عروض جديدة لأنه busy
-        
+
         if (mounted) {
           print('🚀 Attempting navigation to active order screen...');
-          print('🚀 Navigating to active order screen with orderId: ${waveOffer.orderId}');
-          
+          print(
+              '🚀 Navigating to active order screen with orderId: ${waveOffer.orderId}');
+
           // الانتقال مباشرة إلى شاشة الطلب النشط باستخدام GoRouter
           try {
             // استخدام GoRouter.of(context) للتأكد من الحصول على GoRouter الصحيح
@@ -3768,18 +4026,27 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             }
           }
         }
-        
       } else {
         // Failed
         print('❌ Failed to accept wave offer: ${result['message']}');
-        
+
         // ✅ تحقق إذا كانت الرسالة تتعلق بقبول سائق آخر - لا تعرض رسالة حمراء
         // لأن WebSocket سبق وأرسل رسالة برتقالية
         final message = result['message'] ?? 'فشل في قبول الطلب';
-        final isOrderTakenByAnother = message.contains('تم قبول الطلب من سائق آخر') ||
-                                      message.contains('ORDER_ALREADY_ACCEPTED') ||
-                                      message.contains('HOLD_ALREADY_EXISTS');
-        
+        final isOrderTakenByAnother =
+            message.contains('تم قبول الطلب من سائق آخر') ||
+                message.contains('ORDER_ALREADY_ACCEPTED') ||
+                message.contains('HOLD_ALREADY_EXISTS');
+
+        // إذا قُبل الطلب من سائق آخر فعلاً، نحذف العرض من الواجهة
+        if (mounted && isOrderTakenByAnother) {
+          setState(() {
+            _currentWaveOffers
+                .removeWhere((offer) => offer.offerId == waveOffer.offerId);
+            _currentWaveOffer = null;
+          });
+        }
+
         if (mounted && !isOrderTakenByAnother) {
           // عرض رسالة فقط للأخطاء الأخرى (ليس "تم قبول من سائق آخر")
           ScaffoldMessenger.of(context).showSnackBar(
@@ -3791,10 +4058,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           );
         }
       }
-      
     } catch (e) {
       print('❌ Error accepting wave offer: $e');
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3807,17 +4073,18 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
     }
   }
-  
+
   /// 📊 جلب metrics السائق من الـ API
   Future<void> _fetchDriverMetrics() async {
     try {
       print('📡 Fetching driver metrics from API...');
       final metrics = await DriverSearchApiService.getDriverMetrics();
       print('📥 API Response: $metrics');
-      
+
       if (metrics != null && mounted) {
         setState(() {
-          _currentAcceptanceRate = (metrics['acceptanceRate'] ?? 0.0).toDouble();
+          _currentAcceptanceRate =
+              (metrics['acceptanceRate'] ?? 0.0).toDouble();
           _totalAccepted = (metrics['totalAccepted'] ?? 0);
           _totalRejected = (metrics['totalRejected'] ?? 0);
         });
@@ -3848,29 +4115,29 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
     }
   }
-  
+
   /// 📊 حساب معدل القبول المتوقع بعد الرفض
   double _calculateExpectedAcceptanceRate() {
     if (_totalAccepted == null || _totalRejected == null) {
       return 0.0;
     }
-    
+
     final newTotalAccepted = _totalAccepted!;
     final newTotalRejected = _totalRejected! + 1; // بعد إضافة رفض واحد
     final newTotal = newTotalAccepted + newTotalRejected;
-    
+
     if (newTotal == 0) return 0.0;
-    
+
     return newTotalAccepted / newTotal;
   }
-  
+
   /// 🚫 عرض Bottom Sheet لتأكيد الرفض
   Future<void> _showRejectConfirmationSheet(WaveOffer waveOffer) async {
     print('📄 Opening reject confirmation for offer: ${waveOffer.offerId}');
-    
+
     // تسجيل العرض الذي نعرض له نافذة التأكيد
     _currentRejectConfirmationOfferId = waveOffer.offerId;
-    
+
     // عرض loading أولاً
     showDialog(
       context: context,
@@ -3879,21 +4146,22 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         child: CircularProgressIndicator(color: Colors.white),
       ),
     );
-    
+
     // جلب metrics
     await _fetchDriverMetrics();
-    
+
     if (!mounted) return;
-    
+
     // إغلاق loading
     Navigator.pop(context);
-    
+
     final currentRate = _currentAcceptanceRate ?? 0.0;
     final expectedRate = _calculateExpectedAcceptanceRate();
     final rateChange = expectedRate - currentRate;
-    
-    print('📊 Showing reject sheet with: current=$currentRate, expected=$expectedRate, change=$rateChange');
-    
+
+    print(
+        '📊 Showing reject sheet with: current=$currentRate, expected=$expectedRate, change=$rateChange');
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -3908,247 +4176,253 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             return true;
           },
           child: Container(
-        padding: const EdgeInsets.all(24),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Handle bar
-            Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 20),
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
-              ),
+            padding: const EdgeInsets.all(24),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
             ),
-            
-            // Icon
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                color: Colors.grey[200], // رمادي فاتح للدائرة الخارجية
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.info_outline_rounded,
-                size: 32,
-                color: Color(0xFF00296B), // أزرق ثانوي لعلامة التعجب
-              ),
-            ),
-            
-            const SizedBox(height: 20),
-            
-            // Title
-            const Text(
-              'تأكيد رفض الطلب',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF00296B),
-              ),
-            ),
-            
-            const SizedBox(height: 12),
-            
-            // Motivational message
-            Text(
-              'لا بأس! هناك دائماً فرص أفضل في الطريق 🌟',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 15,
-                color: Colors.grey[700],
-                height: 1.4,
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Acceptance Rate Impact
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFAFAFA), // أوف وايت
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey[200]!),
-              ),
-              child: Column(
-                children: [
-                  const Text(
-                    'تأثير على معدل القبول',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF00296B),
-                    ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Handle bar
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 20),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
                   ),
-                  
-                  const SizedBox(height: 16),
-                  
-                  // Current → Expected
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                ),
+
+                // Icon
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200], // رمادي فاتح للدائرة الخارجية
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.info_outline_rounded,
+                    size: 32,
+                    color: Color(0xFF00296B), // أزرق ثانوي لعلامة التعجب
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // Title
+                const Text(
+                  'تأكيد رفض الطلب',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF00296B),
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                // Motivational message
+                Text(
+                  'لا بأس! هناك دائماً فرص أفضل في الطريق 🌟',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: Colors.grey[700],
+                    height: 1.4,
+                  ),
+                ),
+
+                const SizedBox(height: 24),
+
+                // Acceptance Rate Impact
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFAFAFA), // أوف وايت
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey[200]!),
+                  ),
+                  child: Column(
                     children: [
-                      // Current Rate
-                      Column(
+                      const Text(
+                        'تأثير على معدل القبول',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF00296B),
+                        ),
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // Current → Expected
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Text(
-                            'الحالي',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey,
-                            ),
+                          // Current Rate
+                          Column(
+                            children: [
+                              const Text(
+                                'الحالي',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${(currentRate * 100).toStringAsFixed(0)}%',
+                                style: const TextStyle(
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.bold,
+                                  color:
+                                      Color(0xFF00296B), // اللون الثانوي الأزرق
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${(currentRate * 100).toStringAsFixed(0)}%',
-                            style: const TextStyle(
-                              fontSize: 32,
-                              fontWeight: FontWeight.bold,
+
+                          // Arrow
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 20),
+                            child: Icon(
+                              Icons.arrow_forward, // السهم من اليمين إلى اليسار
+                              size: 24,
                               color: Color(0xFF00296B), // اللون الثانوي الأزرق
                             ),
                           ),
+
+                          // Expected Rate
+                          Column(
+                            children: [
+                              const Text(
+                                'المتوقع',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${(expectedRate * 100).toStringAsFixed(0)}%',
+                                style: const TextStyle(
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.bold,
+                                  color:
+                                      Colors.red, // اللون الأحمر للمعدل المتوقع
+                                ),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
-                      
-                      // Arrow
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 20),
-                        child: Icon(
-                          Icons.arrow_forward, // السهم من اليمين إلى اليسار
-                          size: 24,
-                          color: Color(0xFF00296B), // اللون الثانوي الأزرق
+
+                      const SizedBox(height: 12),
+
+                      // Change indicator
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(
+                              0xFF00296B), // اللون الثانوي الأزرق للخلفية
+                          borderRadius: BorderRadius.circular(20),
                         ),
-                      ),
-                      
-                      // Expected Rate
-                      Column(
-                        children: [
-                          const Text(
-                            'المتوقع',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.arrow_downward, // سهم الانخفاض
+                              size: 14,
+                              color: Color(0xFFFDC500), // اللون الأساسي الأصفر
                             ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${(expectedRate * 100).toStringAsFixed(0)}%',
-                            style: const TextStyle(
-                              fontSize: 32,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.red, // اللون الأحمر للمعدل المتوقع
+                            const SizedBox(width: 4),
+                            Text(
+                              '${(rateChange * 100).abs().toStringAsFixed(1)}%',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color:
+                                    Color(0xFFFDC500), // اللون الأساسي الأصفر
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ),
-                  
-                  const SizedBox(height: 12),
-                  
-                  // Change indicator
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00296B), // اللون الثانوي الأزرق للخلفية
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.arrow_downward, // سهم الانخفاض
-                          size: 14,
-                          color: Color(0xFFFDC500), // اللون الأساسي الأصفر
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${(rateChange * 100).abs().toStringAsFixed(1)}%',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFFFDC500), // اللون الأساسي الأصفر
+                ),
+
+                const SizedBox(height: 24),
+
+                // Buttons
+                Row(
+                  children: [
+                    // Cancel button (التراجع)
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          _currentRejectConfirmationOfferId = null;
+                          Navigator.pop(context);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          backgroundColor:
+                              const Color(0xFFFDC500), // اللون الأساسي الأصفر
+                          foregroundColor: const Color(0xFF00296B), // نص أزرق
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(100),
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Buttons
-            Row(
-              children: [
-                // Cancel button (التراجع)
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      _currentRejectConfirmationOfferId = null;
-                      Navigator.pop(context);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      backgroundColor: const Color(0xFFFDC500), // اللون الأساسي الأصفر
-                      foregroundColor: const Color(0xFF00296B), // نص أزرق
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(100),
+                        child: const Text(
+                          'تراجع',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ),
-                    child: const Text(
-                      'تراجع',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
+
+                    const SizedBox(width: 12),
+
+                    // Confirm Reject button (تأكيد الرفض)
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          _currentRejectConfirmationOfferId = null;
+                          Navigator.pop(context); // إغلاق Bottom Sheet
+                          _rejectWaveOffer(waveOffer); // تنفيذ الرفض
+                        },
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          backgroundColor: Colors.grey[300], // رمادي فاتح
+                          foregroundColor: Colors.grey[800], // نص رمادي داكن
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(100),
+                          ),
+                        ),
+                        child: const Text(
+                          'تأكيد الرفض',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-                
-                const SizedBox(width: 12),
-                
-                // Confirm Reject button (تأكيد الرفض)
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      _currentRejectConfirmationOfferId = null;
-                      Navigator.pop(context); // إغلاق Bottom Sheet
-                      _rejectWaveOffer(waveOffer); // تنفيذ الرفض
-                    },
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      backgroundColor: Colors.grey[300], // رمادي فاتح
-                      foregroundColor: Colors.grey[800], // نص رمادي داكن
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(100),
-                      ),
-                    ),
-                    child: const Text(
-                      'تأكيد الرفض',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
+
+                // Bottom padding for safe area
+                SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
               ],
             ),
-            
-            // Bottom padding for safe area
-            SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
-          ],
-        ),
           ),
         );
       },
@@ -4157,21 +4431,21 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       _currentRejectConfirmationOfferId = null;
     });
   }
-  
+
   /// رفض wave offer
   Future<void> _rejectWaveOffer(WaveOffer waveOffer) async {
     print('🚀🚀🚀 REJECT BUTTON PRESSED! 🚀🚀🚀');
     print('📋 WaveOffer details:');
     print('   - offerId: ${waveOffer.offerId}');
     print('   - orderId: ${waveOffer.orderId}');
-    
+
     try {
       print('❌ [1/5] Starting reject process...');
-      
+
       // Get driver ID FIRST before removing from UI
       print('❌ [2/5] Getting driver ID...');
       final driverId = await DriverAuthHelper.getCurrentDriverId();
-      
+
       if (driverId == null || driverId.isEmpty) {
         print('⚠️ Driver ID not found - ABORTING');
         if (mounted) {
@@ -4184,10 +4458,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         }
         return;
       }
-      
+
       print('✅ Driver ID: $driverId');
       print('❌ [3/5] Calling rejectWaveOffer API...');
-      
+
       // Call API FIRST before removing from UI
       try {
         final result = await DriverSearchApiService.rejectWaveOffer(
@@ -4195,18 +4469,19 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           driverId: driverId,
           reason: 'driver_declined',
         );
-        
+
         print('✅ [4/5] API response received: $result');
-        
+
         // Only remove from UI after successful API call
         print('❌ [5/5] Removing from UI...');
         setState(() {
-          _currentWaveOffers.removeWhere((offer) => offer.offerId == waveOffer.offerId);
+          _currentWaveOffers
+              .removeWhere((offer) => offer.offerId == waveOffer.offerId);
           _currentWaveOffer = null;
         });
-        
+
         print('✅✅✅ REJECT COMPLETE! ✅✅✅');
-        
+
         // إظهار رسالة نجاح
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -4220,7 +4495,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       } catch (apiError, stackTrace) {
         print('❌❌❌ API ERROR: $apiError');
         print('📚 Stack trace: $stackTrace');
-        
+
         // إظهار رسالة خطأ
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -4232,13 +4507,25 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           );
         }
       }
-      
     } catch (e, stackTrace) {
       print('❌❌❌ OUTER ERROR: $e');
       print('📚 Stack trace: $stackTrace');
     }
   }
-  
+
+  /// التحقق من كفاية رصيد المحفظة لقبول العرض
+  bool _canAcceptWaveOfferFromDetails(WaveOffer offer) {
+    final walletState = ref.read(walletBalanceProvider);
+    return walletState.maybeWhen(
+      data: (wallet) {
+        final requiredAmount = offer.requiredBalanceAmount;
+        if (requiredAmount <= 0) return true;
+        return wallet.availableBalance >= requiredAmount;
+      },
+      orElse: () => true,
+    );
+  }
+
   /// عرض تفاصيل Wave Order في bottom sheet
   void _showWaveOrderDetails(WaveOffer offer) {
     showModalBottomSheet(
@@ -4247,14 +4534,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       backgroundColor: Colors.transparent,
       builder: (context) => OrderDetailsBottomSheet(
         offer: offer,
-        onAccept: () {
-          Navigator.pop(context);
-          _acceptWaveOffer(offer);
-        },
-        onReject: () {
-          Navigator.pop(context);
-          _rejectWaveOffer(offer);
-        },
+        canAccept: _canAcceptWaveOfferFromDetails(offer),
+        onAccept: () => _acceptWaveOffer(offer),
+        onReject: () => _rejectWaveOffer(offer),
       ),
     );
   }

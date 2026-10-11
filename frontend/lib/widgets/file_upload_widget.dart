@@ -16,6 +16,7 @@ class FileUploadWidget extends StatefulWidget {
   final bool isRequired;
   final List<String> allowedExtensions;
   final int maxSizeMB;
+  final bool compact;
 
   const FileUploadWidget({
     super.key,
@@ -27,6 +28,7 @@ class FileUploadWidget extends StatefulWidget {
     this.isRequired = false,
     this.allowedExtensions = const ['pdf', 'jpg', 'jpeg', 'png', 'heic'],
     this.maxSizeMB = 10,
+    this.compact = false,
   });
 
   @override
@@ -180,7 +182,7 @@ class _FileUploadWidgetState extends State<FileUploadWidget> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 20),
-              
+
               // First row - Camera and Gallery
               Row(
                 children: [
@@ -218,7 +220,7 @@ class _FileUploadWidgetState extends State<FileUploadWidget> {
                 ],
               ),
               const SizedBox(height: 12),
-              
+
               // Second row - Document picker
               SizedBox(
                 width: double.infinity,
@@ -281,9 +283,8 @@ class _FileUploadWidgetState extends State<FileUploadWidget> {
         Container(
           decoration: BoxDecoration(
             border: Border.all(
-              color: widget.errorText != null
-                  ? AppColors.error
-                  : AppColors.border,
+              color:
+                  widget.errorText != null ? AppColors.error : AppColors.border,
               width: 1,
             ),
             borderRadius: BorderRadius.circular(8),
@@ -318,6 +319,26 @@ class _FileUploadWidgetState extends State<FileUploadWidget> {
   }
 
   Widget _buildUploadButton() {
+    if (widget.compact) {
+      return InkWell(
+        onTap: _isLoading ? null : _showFilePickerDialog,
+        child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(children: [
+              if (_isLoading)
+                const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+              else
+                const Icon(Icons.add_a_photo_outlined,
+                    color: AppColors.primary),
+              const SizedBox(width: 12),
+              const Expanded(child: Text('التقاط أو اختيار صورة')),
+              const Icon(Icons.chevron_left),
+            ])),
+      );
+    }
     return InkWell(
       onTap: _isLoading ? null : _showFilePickerDialog,
       child: Container(
@@ -371,11 +392,22 @@ class _FileUploadWidgetState extends State<FileUploadWidget> {
       padding: const EdgeInsets.all(16),
       child: Row(
         children: [
-          Icon(
-            _getFileIcon(_selectedFile!['name']),
-            color: AppColors.primary,
-            size: 32,
-          ),
+          if (widget.compact)
+            ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.memory(
+                    base64Decode(_selectedFile!['content'] as String),
+                    width: 56,
+                    height: 56,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, error, stack) =>
+                        const Icon(Icons.image_outlined)))
+          else
+            Icon(
+              _getFileIcon(_selectedFile!['name']),
+              color: AppColors.primary,
+              size: 32,
+            ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(

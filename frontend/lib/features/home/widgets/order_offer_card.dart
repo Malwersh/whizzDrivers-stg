@@ -91,6 +91,14 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
   late Timer _tickTimer;
   int _remainingSeconds = 30;
 
+  String _formatAmount(double amount) {
+    final integer = amount.toStringAsFixed(0);
+    return integer.replaceAllMapped(
+      RegExp(r'\B(?=(\d{3})+(?!\d))'),
+      (_) => ',',
+    );
+  }
+
   void _startOrRestartCountdown() {
     // Cancel any previous tick timer
     try {
@@ -253,7 +261,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          'قيمة الطلب: ${widget.offer.orderTotal.toStringAsFixed(0)} ${widget.offer.currency}',
+                          'قيمة الطلب: ${_formatAmount(widget.offer.orderTotal)} ${widget.offer.currency}',
                           style: const TextStyle(
                             fontSize: 13,
                             color: AppColors.secondary,
@@ -890,12 +898,14 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
     return walletState.when(
       data: (wallet) {
         // SECURITY: Validate order total is positive
-        if (widget.offer.orderTotal <= 0) {
+        final requiredAmount = widget.offer.requiredBalanceAmount;
+
+        if (requiredAmount <= 0) {
           return const SizedBox.shrink();
         }
         
         // SECURITY: Check if driver has enough balance
-        final hasEnoughBalance = wallet.availableBalance >= widget.offer.orderTotal;
+        final hasEnoughBalance = wallet.availableBalance >= requiredAmount;
         
         // ✅ إخفاء المؤشر إذا الرصيد كافٍ
         if (hasEnoughBalance) {
@@ -923,7 +933,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'رصيدك غير كافٍ لهذا الطلب (يحتاج ${widget.offer.orderTotal.toStringAsFixed(0)} ${widget.offer.currency})',
+                  'رصيدك غير كافٍ لهذا الطلب (يحتاج ${_formatAmount(requiredAmount)} ${widget.offer.currency})',
                   style: TextStyle(
                     fontSize: 13,
                     color: Colors.red.shade800,
@@ -950,8 +960,9 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
     
     return walletState.maybeWhen(
       data: (wallet) {
-        if (widget.offer.orderTotal <= 0) return true;
-        return wallet.availableBalance >= widget.offer.orderTotal;
+        final requiredAmount = widget.offer.requiredBalanceAmount;
+        if (requiredAmount <= 0) return true;
+        return wallet.availableBalance >= requiredAmount;
       },
       orElse: () => true, // Allow accept during loading/error (will fail on backend)
     );

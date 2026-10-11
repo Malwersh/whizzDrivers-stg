@@ -1,3 +1,4 @@
+const { registrationOptions, validateRegistration } = require('./registration-regions');
 /**
  * Enhanced Driver API Lambda Function
  * Supports both phone and email registration
@@ -11,6 +12,8 @@
  * - Now correctly handles midnight-crossing hours (e.g., 22:00 - 02:00)
  * - Matches timezone logic with get-businesses-status Lambda
  */
+
+const { isDriverApproved } = require('./driver_eligibility');
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, ScanCommand, QueryCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
@@ -260,10 +263,63 @@ function buildDriverIdFallbacks(claims) {
   return [...new Set(candidates)];
 }
 
+function toNumber(value, fallback = 0) {
+  if (value === null || value === undefined) return fallback;
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+// Normalize potentially mixed IQD/fils values to IQD.
+function normalizeMoneyToIqd(rawAmount, referenceAmount = null) {
+  const amount = toNumber(rawAmount, 0);
+  if (amount <= 0) return 0;
+
+  const reference = toNumber(referenceAmount, 0);
+  if (reference > 0) {
+    const ratio = amount / reference;
+    if (ratio >= 900 && ratio <= 1100) {
+      return amount / 1000;
+    }
+  }
+
+  if (amount >= 100000 && amount % 1000 === 0) {
+    return amount / 1000;
+  }
+
+  return amount;
+}
+
+function normalizeOrderPricingToIqd(order) {
+  const rawOrderTotal = toNumber(order?.total ?? order?.totalAmount ?? 0, 0);
+
+  const goodsSubtotal = normalizeMoneyToIqd(
+    order?.pricing?.goodsSubtotal ?? order?.subtotal ?? 0,
+    rawOrderTotal
+  );
+  const deliveryFee = normalizeMoneyToIqd(
+    order?.pricing?.deliveryFee ?? order?.deliveryFee ?? 0,
+    rawOrderTotal
+  );
+  const tip = normalizeMoneyToIqd(order?.pricing?.tip ?? 0, rawOrderTotal);
+
+  let total = normalizeMoneyToIqd(order?.pricing?.total ?? rawOrderTotal, rawOrderTotal);
+  if (total <= 0) {
+    total = goodsSubtotal + deliveryFee + tip;
+  }
+
+  return {
+    goodsSubtotal,
+    deliveryFee,
+    tip,
+    total,
+  };
+}
+
 async function getDriverProfileItem(driverId) {
   const result = await dynamodb.send(new GetCommand({
     TableName: DRIVERS_TABLE,
     Key: { driverId },
+    ConsistentRead: true,
   }));
   return result.Item || null;
 }
@@ -766,8 +822,16 @@ exports.handler = async (event) => {
   
   // Try to get JWT claims from authorizer context first (if Cognito authorizer is enabled)
   // API Gateway V2 uses .jwt.claims, V1 uses .claims
-  const jwtClaims = getEventJwtClaims(event);
+  let jwtClaims = event.requestContext?.authorizer?.jwt?.claims || event.requestContext?.authorizer?.claims || null;
   const bearerToken = extractBearerTokenFromEvent(event);
+  // This API has no default Gateway authorizer: decoding a JWT is insufficient.
+  if (!jwtClaims && bearerToken) {
+    const authenticatedUser = await getCognitoUserFromAccessToken(bearerToken);
+    if (authenticatedUser) {
+      jwtClaims = { ...authenticatedUser.attributes, username: authenticatedUser.username };
+    }
+  }
+
 
   if (jwtClaims && typeof jwtClaims === 'object') {
     console.log('🔍 JWT claims keys:', Object.keys(jwtClaims).slice(0, 50));
@@ -785,20 +849,6 @@ exports.handler = async (event) => {
     fallbacks: driverIdFallbacks,
   });
   
-  // If no authorizer, try to extract from Authorization header
-  if (!cognitoUsername) {
-    const authHeader = event.headers?.Authorization || event.headers?.authorization;
-    console.log('🔍 Attempting to extract username from token');
-    console.log('   Authorization header present:', !!authHeader);
-    if (authHeader) {
-      console.log('   Token starts with Bearer:', authHeader.startsWith('Bearer '));
-    }
-    cognitoUsername = extractUsernameFromToken(authHeader);
-    console.log('🔓 Extracted username from JWT token:', cognitoUsername);
-  } else {
-    console.log('✅ Username from authorizer:', cognitoUsername);
-  }
-
   // CORS headers - Define FIRST before any usage
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -838,7 +888,15 @@ exports.handler = async (event) => {
       return await proxyWalletRequest(event, httpMethod, walletPath, corsHeaders);
     }
 
+    // History belongs to the authenticated driver; never trust a path/body ID.
+    if (path.endsWith('/driver/trips') && httpMethod === 'GET') {
+      return await getDriverTrips(cognitoUsername, event.queryStringParameters || {}, corsHeaders);
+    }
+
     // Route handling
+    if (path.endsWith('/driver/registration-options') && httpMethod === 'GET') {
+      return {statusCode:200,headers:corsHeaders,body:JSON.stringify(await loadRegistrationOptions())};
+    }
     if (path === '/driver/me' || path.endsWith('/driver/me')) {
       if (httpMethod === 'GET') {
         return await getDriverProfile(cognitoUsername, driverIdFallbacks, bearerToken, corsHeaders);
@@ -1066,7 +1124,7 @@ async function getDriverProfile(username, fallbackDriverIds, accessToken, header
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ data: profile }),
+      body: JSON.stringify({ data: { ...profile, isVerified: isDriverApproved(profile) } }),
     };
   } catch (error) {
     console.error('Error getting profile:', error);
@@ -1118,7 +1176,7 @@ async function createDriverProfile(username, fallbackDriverIds, accessToken, bod
       email: body.email || null,
       
       // Profile status
-      status: body.status || 'PENDING_PROFILE',
+      status: 'PENDING_PROFILE',
       
       // Timestamps
       createdAt: now,
@@ -1182,11 +1240,22 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
   try {
     // Ensure profile exists (migrate from old key, or create skeleton) so profile setup can proceed.
     await ensureProfileExists(username, fallbackDriverIds, accessToken);
+    const existingProfile = await getDriverProfileItem(username);
 
     console.log('📝 Update profile received body:', JSON.stringify(body, null, 2));
     
     const now = new Date().toISOString();
     
+    if (body.profileSchemaVersion === 2) {
+      try {
+        body = validateRegistration(body, await loadRegistrationOptions());
+        const prefix = `s3://${DRIVER_DOCUMENTS_BUCKET}/drivers/${username}/`;
+        for (const field of ['drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']) {
+          if (typeof body[field] !== 'string' || !body[field].startsWith(prefix)) throw new Error('Invalid document ownership');
+        }
+      }
+      catch (_) { return {statusCode:400,headers,body:JSON.stringify({message:'اختر نوع مركبة ومحافظة ومنطقة عمل مفتوحة مرتبطة بها'})}; }
+    }
     // Build update expression dynamically
     const updates = [];
     const expressionAttributeNames = {};
@@ -1196,8 +1265,9 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     const updatableFields = [
       'name', 'city', 'vehicleType', 'licenseNumber', 'nationalId',
       'phoneNumber', 'email', 'registrationMethod',
-      'drivingLicenseUrl', 'registrationPaperUrl',
-      'status', 'isActive', 'isOnline',
+      'drivingLicenseUrl', 'registrationPaperUrl', 'nationalIdUrl',
+      'profileSchemaVersion', 'country_id', 'country_code', 'country_name', 'work_region_id', 'work_region_name',
+      // Administrative status/verification and availability are server-controlled.
       // ✨ New region and address fields
       'home_region_id', 'home_region_name', 'home_address_text',
       'governorate_id', 'governorate_name',
@@ -1221,17 +1291,15 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     expressionAttributeNames['#updatedAt'] = 'updatedAt';
     expressionAttributeValues[':updatedAt'] = now;
 
-    // Check if profile is being completed (has all required fields)
-    if (body.status === 'ACTIVE' || isProfileComplete(body)) {
+    if (isProfileComplete({ ...existingProfile, ...body })) {
       updates.push('#profileCompletedAt = :profileCompletedAt');
       expressionAttributeNames['#profileCompletedAt'] = 'profileCompletedAt';
       expressionAttributeValues[':profileCompletedAt'] = now;
-      
-      // Auto-set status to ACTIVE if not explicitly set
-      if (!body.status) {
-        updates.push('#status = :statusActive');
+      if (!isDriverApproved(existingProfile) &&
+          !['BANNED', 'SUSPENDED', 'REJECTED'].includes(existingProfile?.status)) {
+        updates.push('#status = :pendingReview');
         expressionAttributeNames['#status'] = 'status';
-        expressionAttributeValues[':statusActive'] = 'ACTIVE';
+        expressionAttributeValues[':pendingReview'] = 'PENDING_REVIEW';
       }
     }
 
@@ -1308,6 +1376,11 @@ async function getProfileStatus(username, fallbackDriverIds, accessToken, header
 
     const missingFields = [];
     
+    if (profile.profileSchemaVersion === 2) {
+      for (const field of ['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']) {
+        if (!profile[field]) missingFields.push(field);
+      }
+    } else {
     // Check required fields
     if (!profile.name) missingFields.push('name');
     if (!profile.city) missingFields.push('city');
@@ -1322,6 +1395,7 @@ async function getProfileStatus(username, fallbackDriverIds, accessToken, header
       missingFields.push('registrationPaperUrl');
     }
 
+    }
     const isComplete = missingFields.length === 0;
 
     return {
@@ -1349,6 +1423,9 @@ async function getProfileStatus(username, fallbackDriverIds, accessToken, header
  * Check if profile has all required fields
  */
 function isProfileComplete(profile) {
+  if (profile.profileSchemaVersion === 2) {
+    return ['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl'].every(field=>typeof profile[field]==='string'&&profile[field].trim().length>0);
+  }
   const requiredFields = ['name', 'city', 'vehicleType', 'licenseNumber', 'nationalId', 'drivingLicenseUrl'];
   
   for (const field of requiredFields) {
@@ -1422,7 +1499,7 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
       ? 'drivingLicenseUrl'
       : documentType === 'registration_paper'
         ? 'registrationPaperUrl'
-        : null;
+        : documentType === 'national_id' ? 'nationalIdUrl' : null;
 
     if (urlField) {
       await dynamodb.send(new UpdateCommand({
@@ -1503,13 +1580,14 @@ async function startSearching(driverId, body, headers) {
     const driver = driverResult.Item;
 
     // فحص الحالة
-    if (driver.status !== 'ACTIVE') {
+    if (!isDriverApproved(driver)) {
       return {
         statusCode: 403,
         headers,
         body: JSON.stringify({ 
           success: false, 
-          message: 'حسابك غير مؤهل حاليًا لاستلام الطلبات' 
+          code: 'DRIVER_NOT_VERIFIED',
+          message: 'حسابك بانتظار تحقق الإدارة. لا يمكنك استقبال الطلبات قبل الموافقة.'
         })
       };
     }
@@ -3670,7 +3748,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     const { offerId, orderId, driverId: driverIdFromBody } = body;
     
     // Use driverId from body if token extraction failed
-    const finalDriverId = driverId || driverIdFromBody;
+    const finalDriverId = driverId;
     
     console.log('Final Driver ID:', finalDriverId);
     
@@ -3720,6 +3798,14 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
       };
     }
     
+    const approval = await getDriverProfileItem(finalDriverId);
+    if (!isDriverApproved(approval)) {
+      return { statusCode: 403, headers: corsHeaders, body: JSON.stringify({
+        success: false, code: 'DRIVER_NOT_VERIFIED',
+        message: 'حسابك بانتظار تحقق الإدارة. لا يمكنك قبول الطلبات قبل الموافقة.'
+      }) };
+    }
+
     // ===== 💰 STEP 1: Get order details to calculate Hold amount =====
     console.log('📦 Fetching order details for Hold calculation...');
     const orderResult = await dynamodb.send(new GetCommand({
@@ -3742,16 +3828,17 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     }
     
     const order = orderResult.Item;
-    
+    const normalizedPricing = normalizeOrderPricingToIqd(order);
+
     // ✅ استخراج holdAmount من goodsSubtotal (قيمة الطلب فقط - بدون رسوم التوصيل والتِب)
     // holdAmount = قيمة المنتجات فقط (للمنصة)
     // deliveryFee + tip = للسائق (كاش مباشرة)
-    const holdAmount = order.pricing?.goodsSubtotal || order.subtotal || 0;
+    const holdAmount = Math.round(normalizedPricing.goodsSubtotal || 0);
     
     console.log('💵 Order Goods Subtotal for Hold:', holdAmount, 'IQD');
-    console.log('💵 Delivery Fee (for driver):', order.pricing?.deliveryFee || 0, 'IQD');
-    console.log('💵 Tip (for driver):', order.pricing?.tip || 0, 'IQD');
-    console.log('💵 Total shown to driver:', order.pricing?.total || 0, 'IQD');
+    console.log('💵 Delivery Fee (for driver):', normalizedPricing.deliveryFee, 'IQD');
+    console.log('💵 Tip (for driver):', normalizedPricing.tip, 'IQD');
+    console.log('💵 Total shown to driver:', normalizedPricing.total, 'IQD');
     console.log('📊 Order pricing structure:', order.pricing);
     
     // ✅ نثبت: هل الطلب ثابت؟ Hold التحقق الثنائي
@@ -4100,7 +4187,7 @@ async function rejectWaveOffer(driverId, body, corsHeaders) {
     const { offerId, orderId, driverId: driverIdFromBody } = body;
     
     // Use driverId from body if token extraction failed
-    const finalDriverId = driverId || driverIdFromBody;
+    const finalDriverId = driverId;
     
     console.log('Final Driver ID:', finalDriverId);
     
@@ -4303,6 +4390,8 @@ async function getOrderById(driverId, orderId, corsHeaders) {
     }
     
     // Format response to match ActiveOrder model
+    const normalizedPricing = normalizeOrderPricingToIqd(order);
+
     const response = {
       orderId: order.orderId,
       status: order.status || 'accepted',
@@ -4327,14 +4416,19 @@ async function getOrderById(driverId, orderId, corsHeaders) {
       
       // Order details
       orderNumber: order.orderNumber,
-      total: order.total || order.totalAmount || 0,
-      totalAmount: order.total || order.totalAmount || 0,
+      total: normalizedPricing.total,
+      totalAmount: normalizedPricing.total,
       paymentMethod: order.paymentMethod || 'cash',
       items: order.items || [],
       specialInstructions: order.specialInstructions || order.notes,
       
       // Pricing breakdown (NEW - for frontend display)
-      pricing: order.pricing || null,
+      pricing: {
+        goodsSubtotal: normalizedPricing.goodsSubtotal,
+        deliveryFee: normalizedPricing.deliveryFee,
+        tip: normalizedPricing.tip,
+        total: normalizedPricing.total,
+      },
       
       // Timestamps
       acceptedAt: order.acceptedAt,
@@ -5535,3 +5629,69 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
   }
 }
 
+
+
+async function getDriverTrips(driverId, query, headers) {
+  const limit = Math.min(100, Math.max(1, Number.parseInt(query.limit, 10) || 20));
+  let startKey;
+  if (query.nextToken) {
+    try {
+      startKey = JSON.parse(Buffer.from(query.nextToken, 'base64url').toString('utf8'));
+      if (typeof startKey.PK !== 'string' || typeof startKey.SK !== 'string') throw new Error('Invalid key');
+    } catch (_) {
+      return { statusCode: 400, headers, body: JSON.stringify({ success: false, error: 'Invalid nextToken' }) };
+    }
+  }
+  // Existing orders table has no driver index. Preserve DynamoDB's cursor,
+  // including pages with no matching history rows.
+  let result;
+  let cursor = startKey;
+  const items = [];
+  for (let page = 0; page < 20; page++) {
+    result = await dynamodb.send(new ScanCommand({
+    TableName: ORDERS_TABLE, Limit: Math.max(1, limit - items.length), ExclusiveStartKey: cursor,
+    FilterExpression: 'driverId = :driverId AND SK = :meta AND (#status = :delivered OR #status = :completed OR #status = :cancelled OR #status = :canceled)',
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: { ':driverId': driverId, ':meta': 'META', ':delivered': 'delivered', ':completed': 'completed', ':cancelled': 'cancelled', ':canceled': 'canceled' }
+  }));
+    items.push(...(result.Items || []));
+    cursor = result.LastEvaluatedKey;
+    if (!cursor || items.length >= limit) break;
+  }
+  const trips = items.map(order => {
+    const pricing = normalizeOrderPricingToIqd(order);
+    const rawTotal = toNumber(order.total ?? order.totalAmount, 0);
+    const pricingTotal = toNumber(order.pricing?.total, 0);
+    const scale = rawTotal > 0 && pricingTotal / rawTotal >= 900 && pricingTotal / rawTotal <= 1100 ? 1000 : 1;
+    const fee = order.pricing?.deliveryFee != null ? toNumber(order.pricing.deliveryFee, 0) / scale : pricing.deliveryFee;
+    const bonus = order.pricing?.waveBonus != null ? toNumber(order.pricing.waveBonus, 0) / scale : toNumber(order.waveBonus, 0);
+
+    return {
+      tripId: order.orderId || order.PK.replace('ORDER#', ''),
+      orderId: order.orderId || order.PK.replace('ORDER#', ''),
+      orderNumber: order.orderNumber || '',
+      tripNumber: order.tripNumber || order.trip_number || null,
+      status: ['delivered', 'completed'].includes(order.status) ? 'completed' : 'cancelled',
+      deliveryFee: fee, tip: order.pricing?.tip != null ? toNumber(order.pricing.tip, 0) / scale : pricing.tip, waveBonus: bonus,
+      waveNumber: order.waveNumber, isEmergencyWave: order.pricing?.isEmergencyWave === true,
+      finalDeliveryFee: order.pricing?.finalDeliveryFee != null ? toNumber(order.pricing.finalDeliveryFee, 0) / scale : fee + bonus,
+      pickupLocation: order.pickupLocation || order.restaurantLocation || { lat: order.restaurantLat ?? order.pickupLatitude ?? 0, lng: order.restaurantLng ?? order.pickupLongitude ?? 0 },
+      deliveryLocation: order.deliveryLocation || { lat: order.deliveryAddress?.lat ?? order.customerLat ?? 0, lng: order.deliveryAddress?.lng ?? order.customerLng ?? 0 },
+      pickupAddress: order.pickupAddress || order.restaurantAddress || '',
+      deliveryAddress: typeof order.deliveryAddress === 'string' ? order.deliveryAddress : (order.deliveryAddress?.fullAddress || order.deliveryAddress?.addressLine1 || order.deliveryAddress?.address || ''),
+      restaurantName: order.restaurantName || order.businessName || '', customerName: order.customerName || order.deliveryName || '',
+      createdAt: order.createdAt, completedAt: order.deliveredAt || order.completedAt,
+      deliveryTime: order.deliveredAt, pickupTime: order.pickedUpAt
+    };
+  });
+  return { statusCode: 200, headers, body: JSON.stringify({ success: true, trips,
+    count: trips.length, hasMore: !!result.LastEvaluatedKey,
+    nextToken: result.LastEvaluatedKey ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64url') : null
+  }) };
+}
+
+async function loadRegistrationOptions() {
+ const rows=[];let cursor;
+ do { const page=await dynamodb.send(new ScanCommand({TableName:REGIONS_TABLE,ExclusiveStartKey:cursor}));rows.push(...(page.Items||[]));cursor=page.LastEvaluatedKey;} while(cursor);
+ return registrationOptions(rows);
+}

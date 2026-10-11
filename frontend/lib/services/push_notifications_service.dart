@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui';
 
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
@@ -15,7 +16,23 @@ import '../config/environment.dart';
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // Required on background isolate
   try {
+    try {
+      DartPluginRegistrant.ensureInitialized();
+    } catch (_) {
+      // ignore
+    }
     await Firebase.initializeApp();
+  } catch (_) {
+    // ignore
+  }
+
+  // Best-effort: stash wave-offer info so the UI can render it when the user
+  // later taps the notification (background/lock-screen cases).
+  try {
+    if (!PushNotificationsService.isWalletEvent(message.data)) {
+      await PushNotificationsService.stashWaveOfferFromTap(message);
+      await PushNotificationsService.stashPendingTabFromTap(message);
+    }
   } catch (_) {
     // ignore
   }
@@ -23,11 +40,25 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 class PushNotificationsService {
   static bool _initialized = false;
+  static final _profileEvents = StreamController<RemoteMessage>.broadcast();
+  static Stream<RemoteMessage> get profileEvents => _profileEvents.stream;
+  static bool isProfileEvent(Map<String, dynamic> data) =>
+      data['type'] == 'driver_review_changed';
+  static final _walletEvents = StreamController<RemoteMessage>.broadcast();
+  static Stream<RemoteMessage> get walletEvents => _walletEvents.stream;
+  static StreamSubscription<RemoteMessage>? _foregroundSub;
+  static Timer? _tokenRetryTimer;
+  static bool isWalletEvent(Map<String, dynamic> data) =>
+      data['type'] == 'wallet_topup_approved' ||
+      data['type'] == 'wallet_topup_rejected' ||
+      data['type'] == 'wallet_sandbox_payment_succeeded';
   static StreamSubscription<String>? _tokenRefreshSub;
   static StreamSubscription<dynamic>? _authHubSub;
   static FutureOr<void> Function(RemoteMessage message)? _onNotificationTap;
 
   static String? _lastKnownFcmToken;
+  static bool _tokenRegistered = false;
+  static String? _lastRegistrationIdToken;
 
   // Used to pass wave-offer tap info across cold starts.
   static const String _pendingWaveOfferKey = 'pendingWaveOfferFromPushTap';
@@ -35,7 +66,9 @@ class PushNotificationsService {
   // Used to request navigation to a specific bottom tab after cold start.
   static const String _pendingTabIndexKey = 'pendingTabIndexFromPushTap';
 
-  static Future<void> initialize({FutureOr<void> Function(RemoteMessage message)? onNotificationTap}) async {
+  static Future<void> initialize(
+      {FutureOr<void> Function(RemoteMessage message)?
+          onNotificationTap}) async {
     if (kIsWeb) return;
 
     // Allow callers (like widgets) to set/update the tap handler even if we already initialized.
@@ -72,21 +105,35 @@ class PushNotificationsService {
       sound: true,
     );
 
-    final token = await messaging.getToken();
-    if (token != null && token.isNotEmpty) {
-      _lastKnownFcmToken = token;
-      await _registerToken(token);
-    }
+    // Token acquisition can fail while APNs is registering. Listeners must still be installed.
+    await refreshTokenRegistration();
+    _tokenRetryTimer?.cancel();
+    _tokenRetryTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (!_tokenRegistered) {
+        await refreshTokenRegistration();
+      }
+    });
 
     _tokenRefreshSub?.cancel();
     _tokenRefreshSub = messaging.onTokenRefresh.listen((newToken) async {
       if (newToken.isEmpty) return;
       _lastKnownFcmToken = newToken;
+      _tokenRegistered = false;
       await _registerToken(newToken);
+    });
+
+    _foregroundSub?.cancel();
+    _foregroundSub = FirebaseMessaging.onMessage.listen((message) {
+      if (isWalletEvent(message.data)) _walletEvents.add(message);
+      if (isProfileEvent(message.data)) _profileEvents.add(message);
     });
 
     // Handle notification taps (background -> foreground)
     FirebaseMessaging.onMessageOpenedApp.listen((message) async {
+      if (isProfileEvent(message.data)) _profileEvents.add(message);
+      debugPrint(
+          '📲 Push tap (onMessageOpenedApp) data keys: ${message.data.keys.toList()}');
+      debugPrint('📲 Push tap (onMessageOpenedApp) data: ${message.data}');
       final handler = _onNotificationTap;
       if (handler != null) {
         await handler(message);
@@ -96,6 +143,10 @@ class PushNotificationsService {
     // Handle notification that opened the app from terminated state
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
+      debugPrint(
+          '📲 Push tap (getInitialMessage) data keys: ${initialMessage.data.keys.toList()}');
+      debugPrint(
+          '📲 Push tap (getInitialMessage) data: ${initialMessage.data}');
       final handler = _onNotificationTap;
       if (handler != null) {
         await handler(initialMessage);
@@ -106,6 +157,7 @@ class PushNotificationsService {
     _authHubSub?.cancel();
     _authHubSub = Amplify.Hub.listen(HubChannel.Auth, (event) async {
       final name = event.eventName;
+      if (name == 'SIGNED_OUT') await _unregisterSignedOutDevice();
       if (name == 'SIGNED_IN' || name == 'SESSION_ESTABLISHED') {
         final tokenToRegister = _lastKnownFcmToken;
         if (tokenToRegister != null && tokenToRegister.isNotEmpty) {
@@ -117,12 +169,35 @@ class PushNotificationsService {
     _initialized = true;
   }
 
+  static Future<void> refreshTokenRegistration() async {
+    if (Firebase.apps.isEmpty) return;
+    try {
+      final messaging = FirebaseMessaging.instance;
+      if (defaultTargetPlatform == TargetPlatform.iOS &&
+          await messaging.getAPNSToken() == null) {
+        return;
+      }
+      final token = await messaging.getToken();
+      if (token != null && token.isNotEmpty) {
+        _lastKnownFcmToken = token;
+        await _registerToken(token);
+      }
+    } catch (_) {
+      debugPrint('Push token is not available yet; registration will retry.');
+    }
+  }
+
   static Future<void> dispose() async {
+    _tokenRetryTimer?.cancel();
+    _tokenRetryTimer = null;
+    await _foregroundSub?.cancel();
+    _foregroundSub = null;
     await _tokenRefreshSub?.cancel();
     _tokenRefreshSub = null;
     await _authHubSub?.cancel();
     _authHubSub = null;
     _initialized = false;
+    _tokenRegistered = false;
   }
 
   static Future<String?> _getIdToken() async {
@@ -163,14 +238,46 @@ class PushNotificationsService {
     return null;
   }
 
+  static Future<void> _unregisterSignedOutDevice() async {
+    final token = _lastKnownFcmToken;
+    final idToken = _lastRegistrationIdToken;
+    _tokenRegistered = false;
+    _lastRegistrationIdToken = null;
+    _lastKnownFcmToken = null;
+    if (token != null && idToken != null) {
+      try {
+        await http
+            .post(
+                Uri.parse(
+                    '${Environment.centralPushApiBaseUrl}/push/tokens/unregister'),
+                headers: {
+                  'Authorization': 'Bearer $idToken',
+                  'Content-Type': 'application/json'
+                },
+                body: jsonEncode({'token': token}))
+            .timeout(const Duration(seconds: 10));
+      } catch (_) {
+        debugPrint('Device unregistration will rely on token invalidation.');
+      }
+    }
+    try {
+      await FirebaseMessaging.instance.deleteToken();
+    } catch (_) {
+      debugPrint('Push token deletion unavailable.');
+    }
+  }
+
   static Future<void> _registerToken(String token) async {
+    _tokenRegistered = false;
     final idToken = await _getIdToken();
     if (idToken == null || idToken.isEmpty) {
       debugPrint('Push token register skipped: no auth session');
       return;
     }
 
-    final uri = Uri.parse('${Environment.centralPushApiBaseUrl}/push/tokens/register');
+    _lastRegistrationIdToken = idToken;
+    final uri =
+        Uri.parse('${Environment.centralPushApiBaseUrl}/push/tokens/register');
 
     final deviceId = await _deviceId();
 
@@ -195,8 +302,10 @@ class PushNotificationsService {
           .timeout(const Duration(seconds: 10));
 
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        debugPrint('Push token register failed: ${resp.statusCode} ${resp.body}');
+        debugPrint(
+            'Push token register failed: ${resp.statusCode} ${resp.body}');
       } else {
+        _tokenRegistered = true;
         try {
           final decoded = jsonDecode(resp.body);
           debugPrint('Push token registered: ${jsonEncode(decoded)}');
@@ -212,31 +321,67 @@ class PushNotificationsService {
   }
 
   /// Persist a wave-offer payload so the Home screen can render it after cold start.
-  /// This is intentionally minimal (offerId/orderId/etc.) and is removed once consumed.
+  /// This is removed once consumed.
   static Future<void> stashWaveOfferFromTap(RemoteMessage message) async {
     try {
       final data = message.data;
-      final type = (data['type'] ?? '').toString();
-      if (type != 'new_wave_offer') return;
+      final type = (data['type'] ?? '').toString().trim();
 
-      final offerId = (data['offerId'] ?? '').toString();
-      final orderId = (data['orderId'] ?? '').toString();
+      String pick(List<String> keys) {
+        for (final k in keys) {
+          final v = data[k];
+          if (v == null) continue;
+          final s = v.toString().trim();
+          if (s.isNotEmpty) return s;
+        }
+        return '';
+      }
+
+      final offerId = pick(['offerId', 'offer_id']);
+      final orderId = pick(['orderId', 'order_id']);
+
+      // iOS sometimes delivers the notification tap payload without our `type` key.
+      // Accept the stash as long as identifiers exist.
       if (offerId.isEmpty || orderId.isEmpty) return;
 
+      final effectiveType = type.isEmpty ? 'new_wave_offer' : type;
+
       final payload = <String, dynamic>{
+        'type': effectiveType,
+        'action': pick(['action']),
+        'driverId': pick(['driverId', 'driver_id', 'subjectId', 'subject_id']),
         'offerId': offerId,
         'orderId': orderId,
-        'waveNumber': (data['waveNumber'] ?? '').toString(),
-        'restaurantName': (data['restaurantName'] ?? '').toString(),
-        'expiresAt': (data['expiresAt'] ?? '').toString(),
-        'isEmergencyWave': (data['isEmergencyWave'] ?? '').toString(),
+        'waveNumber': pick(['waveNumber', 'wave_number']),
+        'restaurantName': pick(['restaurantName', 'restaurant_name']),
+        'restaurantImageUrl': pick([
+          'restaurantImageUrl',
+          'restaurant_image_url',
+          'restaurantImage',
+          'restaurant_image'
+        ]),
+        'customerName': pick(['customerName', 'customer_name']),
+        'customerAddress': pick(['customerAddress', 'customer_address']),
+        'deliveryFee': pick(['deliveryFee', 'delivery_fee']),
+        'bonusAmount': pick(['bonusAmount', 'bonus_amount']),
+        'orderTotal':
+            pick(['orderTotal', 'order_total', 'orderValue', 'order_value']),
+        'estimatedEarnings': pick(['estimatedEarnings', 'estimated_earnings']),
+        'distance': pick(['distance', 'distanceKm', 'distance_km']),
+        'estimatedMinutes': pick(['estimatedMinutes', 'estimated_minutes']),
+        'itemsCount': pick(['itemsCount', 'items_count']),
+        'currency': pick(['currency']),
+        'expiresAt': pick(['expiresAt', 'expires_at']),
+        'isEmergencyWave': pick(['isEmergencyWave', 'is_emergency_wave']),
         'tappedAt': DateTime.now().toIso8601String(),
       };
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_pendingWaveOfferKey, jsonEncode(payload));
-    } catch (_) {
-      // ignore
+      debugPrint(
+          '💾 Stashed wave offer to SharedPreferences: offerId=${payload['offerId']}, orderId=${payload['orderId']}');
+    } catch (e) {
+      debugPrint('🚨 Error stashing wave offer: $e');
     }
   }
 
@@ -245,11 +390,22 @@ class PushNotificationsService {
   static Future<void> stashPendingTabFromTap(RemoteMessage message) async {
     try {
       final data = message.data;
-      final type = (data['type'] ?? '').toString();
+      final type = (data['type'] ?? '').toString().trim();
+      final action = (data['action'] ?? '').toString().trim();
+
+      final offerId = (data['offerId'] ?? data['offer_id'] ?? '').toString();
+      final orderId = (data['orderId'] ?? data['order_id'] ?? '').toString();
+      final hasOfferIdentifiers = offerId.isNotEmpty && orderId.isNotEmpty;
 
       // Wave offers should always open the search/home tab.
       // Non-wave notifications default to notifications tab.
-      final targetTab = type == 'new_wave_offer' ? 0 : 4;
+      final targetTab = isWalletEvent(data)
+          ? 2
+          : (type == 'new_wave_offer' ||
+                  action == 'wave_assignment' ||
+                  hasOfferIdentifiers)
+              ? 0
+              : 4;
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_pendingTabIndexKey, targetTab);
@@ -276,12 +432,21 @@ class PushNotificationsService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_pendingWaveOfferKey);
-      if (raw == null || raw.isEmpty) return null;
+      if (raw == null || raw.isEmpty) {
+        debugPrint(
+            '🔍 [Consume] No pending wave offer key in SharedPreferences');
+        return null;
+      }
+      debugPrint(
+          '📤 [Consume] Found stashed data, removing from SharedPreferences');
       await prefs.remove(_pendingWaveOfferKey);
       final decoded = jsonDecode(raw);
-      if (decoded is Map<String, dynamic>) return decoded;
-    } catch (_) {
-      // ignore
+      if (decoded is Map<String, dynamic>) {
+        debugPrint('✅ [Consume] Successfully decoded stashed wave offer');
+        return decoded;
+      }
+    } catch (e) {
+      debugPrint('🚨 [Consume] Error consuming stashed wave offer: $e');
     }
     return null;
   }

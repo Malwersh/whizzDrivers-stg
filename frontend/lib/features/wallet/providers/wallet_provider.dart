@@ -4,23 +4,27 @@ import '../../../models/transaction_history.dart';
 import '../../../services/wallet_api_service.dart';
 
 /// Wallet Balance Provider
-/// 
+///
 /// FutureProvider that fetches driver's wallet balance from backend
 /// Automatically refetches when dependencies change
-final walletBalanceProvider = FutureProvider.autoDispose<WalletBalance>((ref) async {
+final walletBalanceProvider =
+    FutureProvider.autoDispose<WalletBalance>((ref) async {
   // Watch refresh trigger to refetch when needed
   ref.watch(walletRefreshProvider);
-  
+
   final apiService = WalletApiService();
   return await apiService.getWalletBalance();
 });
 
 /// Transaction History Provider
-/// 
+///
 /// FutureProvider that fetches driver's transaction history
 /// Supports pagination via nextToken
 final transactionHistoryProvider = FutureProvider.autoDispose
     .family<TransactionHistory, String?>((ref, nextToken) async {
+  // Keep transaction history in sync with explicit refresh actions.
+  ref.watch(walletRefreshProvider);
+
   final apiService = WalletApiService();
   return await apiService.getTransactionHistory(
     limit: 20,
@@ -29,7 +33,13 @@ final transactionHistoryProvider = FutureProvider.autoDispose
 });
 
 /// Wallet Refresh Provider
-/// 
+///
 /// StateProvider that triggers refetch of wallet data when incremented
 /// Usage: ref.read(walletRefreshProvider.notifier).state++
 final walletRefreshProvider = StateProvider<int>((ref) => 0);
+
+final walletNotificationsProvider =
+    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(walletRefreshProvider);
+  return WalletApiService().getWalletNotifications();
+});

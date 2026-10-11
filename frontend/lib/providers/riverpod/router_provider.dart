@@ -4,15 +4,13 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/authentication/demand_map_screen.dart';
-import '../../screens/auth/phone_only_registration_screen.dart';
 import '../../features/authentication/screens/new_email_verification_screen.dart';
 import '../../screens/auth/login_screen.dart';
+import '../../screens/auth/phone_otp_login_screen.dart';
 import '../../features/authentication/screens/new_phone_verification_screen.dart';
 import '../../features/authentication/screens/driver_profile_setup_screen.dart';
 import '../../screens/auth/forgot_password_screen.dart';
 import '../../features/authentication/screens/password_reset_verification_screen.dart';
-import '../../screens/auth/registration_method_selection_screen.dart';
-import '../../screens/auth/email_registration_screen.dart';
 import '../../features/authentication/screens/pending_review_screen.dart';
 import '../../features/authentication/screens/account_status_screen.dart';
 // Navigation page removed - placeholder for navigation
@@ -149,23 +147,25 @@ GoRouter router(Ref ref) {
     },
     routes: [
       GoRoute(path: '/splash', builder: (context, state) => const SplashPage()),
-      GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
-      GoRoute(path: '/new-login', builder: (context, state) => const LoginScreen()),
+      GoRoute(path: '/login', builder: (context, state) => const PhoneOtpLoginScreen()),
+      GoRoute(path: '/login-legacy', builder: (context, state) => const LoginScreen()),
+      GoRoute(path: '/new-login/phone-otp', builder: (context, state) => const PhoneOtpLoginScreen()),
+      GoRoute(path: '/new-login', builder: (context, state) => const PhoneOtpLoginScreen()),
       GoRoute(
         path: '/register-method',
-        builder: (context, state) => const RegistrationMethodSelectionScreen(),
+        builder: (context, state) => const PhoneOtpLoginScreen(),
       ),
       GoRoute(
         path: '/register',
-        builder: (context, state) => const PhoneOnlyRegistrationScreen(),
+        builder: (context, state) => const PhoneOtpLoginScreen(),
       ),
       GoRoute(
         path: '/register-phone',
-        builder: (context, state) => const PhoneOnlyRegistrationScreen(),
+        builder: (context, state) => const PhoneOtpLoginScreen(),
       ),
       GoRoute(
         path: '/register-email',
-        builder: (context, state) => const EmailRegistrationScreen(),
+        builder: (context, state) => const PhoneOtpLoginScreen(),
       ),
       GoRoute(
         path: '/forgot-password',

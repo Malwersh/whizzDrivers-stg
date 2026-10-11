@@ -3,19 +3,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../design_system/app_colors.dart';
 import '../../../models/wallet_balance.dart';
 import '../../../models/transaction_history.dart';
+import '../../../models/wallet_transaction.dart';
 import '../providers/wallet_provider.dart';
 import '../widgets/balance_card.dart';
 import '../widgets/minimum_balance_indicator.dart';
 import '../widgets/transaction_tile.dart';
-import '../widgets/quick_actions_row.dart';
+import 'transactions_screen.dart';
 
 /// Wallet Home Screen
-/// 
+///
 /// Main wallet screen displaying:
 /// - Balance card (available, locked, total)
 /// - Minimum balance indicator (progress toward 25,000 IQD)
 /// - Quick actions (topup, monthly statement)
-/// - Transaction history list
+/// - A compact preview of the most recent transactions with a link to the
+///   full, paginated transaction history screen.
 class WalletHomeScreen extends ConsumerStatefulWidget {
   const WalletHomeScreen({super.key});
 
@@ -24,63 +26,69 @@ class WalletHomeScreen extends ConsumerStatefulWidget {
 }
 
 class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
-  String? _nextToken; // For pagination
-  List<dynamic> _allTransactions = []; // Accumulate all loaded transactions
+  Future<void> _refresh() async {
+    ref.read(walletRefreshProvider.notifier).state++;
+    try {
+      await Future.wait([
+        ref.read(walletBalanceProvider.future),
+        ref.read(transactionHistoryProvider(null).future),
+      ]);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('تعذر تحديث المحفظة. حاول مرة أخرى'),
+        ));
+      }
+    }
+  }
+
+  /// Number of recent transactions shown as a preview on the home screen.
+  static const int _previewCount = 5;
 
   @override
   Widget build(BuildContext context) {
     final walletBalanceAsync = ref.watch(walletBalanceProvider);
-    final transactionHistoryAsync = ref.watch(
-      transactionHistoryProvider(_nextToken),
-    );
+    // Only ever request the first page here; the full history lives in its
+    // own dedicated, paginated screen.
+    final transactionHistoryAsync = ref.watch(transactionHistoryProvider(null));
 
     return Scaffold(
-      backgroundColor: AppColors.backgroundGrey,
+      backgroundColor: AppColors.grey50,
       appBar: AppBar(
-        backgroundColor: AppColors.primary,
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: AppColors.borderLight),
+        ),
         title: const Text(
-          '💰 المحفظة',
+          'المحفظة',
           style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF00296B), // Dark blue
+            fontSize: 19,
+            fontWeight: FontWeight.w700,
+            color: AppColors.secondary,
           ),
         ),
         centerTitle: true,
         elevation: 0,
         actions: [
-          // Refresh button
           IconButton(
-            icon: const Icon(Icons.refresh, color: Color(0xFF00296B)),
-            onPressed: () {
-              // Trigger refresh
-              ref.read(walletRefreshProvider.notifier).state++;
-              // Reset pagination
-              setState(() {
-                _nextToken = null;
-                _allTransactions = [];
-              });
-            },
+            icon: const Icon(Icons.refresh_rounded, color: AppColors.secondary),
+            onPressed: walletBalanceAsync.isLoading ? null : _refresh,
           ),
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () async {
-          // Refresh wallet data
-          ref.read(walletRefreshProvider.notifier).state++;
-          // Reset pagination
-          setState(() {
-            _nextToken = null;
-            _allTransactions = [];
-          });
-        },
+        color: AppColors.secondary,
+        onRefresh: _refresh,
         child: walletBalanceAsync.when(
-          data: (balance) => _buildWalletContent(
-            balance,
-            transactionHistoryAsync,
-          ),
+          skipLoadingOnReload: true,
+          skipError: walletBalanceAsync.hasValue,
+          data: (balance) =>
+              _buildWalletContent(balance, transactionHistoryAsync),
           loading: () => const Center(
-            child: CircularProgressIndicator(),
+            child: CircularProgressIndicator(color: AppColors.secondary),
           ),
           error: (error, stack) => _buildErrorState(error),
         ),
@@ -92,175 +100,190 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
     WalletBalance balance,
     AsyncValue<TransactionHistory> transactionHistoryAsync,
   ) {
-    return CustomScrollView(
-      slivers: [
-        // Balance Card
-        SliverToBoxAdapter(
-          child: BalanceCard(balance: balance),
-        ),
-
-        // Minimum Balance Indicator
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: MinimumBalanceIndicator(balance: balance),
-          ),
-        ),
-
-        // Quick Actions
-        const SliverToBoxAdapter(
-          child: QuickActionsRow(),
-        ),
+    return ListView(
+      children: [
+        BalanceCard(balance: balance),
+        const SizedBox(height: 16),
+        MinimumBalanceIndicator(balance: balance),
 
         // Transaction History Header
-        const SliverToBoxAdapter(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(16, 24, 16, 12),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.history,
-                  size: 22,
-                  color: Color(0xFF00296B),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppColors.secondary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                SizedBox(width: 8),
-                Text(
-                  '📋 سجل المعاملات',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
+                child: const Icon(
+                  Icons.history_rounded,
+                  size: 20,
+                  color: AppColors.secondary,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                'سجل المعاملات',
+                style: TextStyle(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              transactionHistoryAsync.maybeWhen(
+                data: (history) =>
+                    (WalletTransaction.driverVisible(history.transactions)
+                                    .length >
+                                _previewCount ||
+                            history.hasMore)
+                        ? _buildViewAllButton()
+                        : const SizedBox.shrink(),
+                orElse: () => const SizedBox.shrink(),
+              ),
+            ],
           ),
         ),
 
-        // Transaction List
+        // Recent transactions preview
         transactionHistoryAsync.when(
+          skipLoadingOnReload: true,
+          skipError: transactionHistoryAsync.hasValue,
           data: (history) {
-            // Accumulate transactions on first load or when _nextToken is null
-            if (_nextToken == null && history.transactions.isNotEmpty) {
-              _allTransactions = history.transactions;
-            } else if (_nextToken != null && history.transactions.isNotEmpty) {
-              // Append new transactions when loading more
-              _allTransactions.addAll(history.transactions);
+            final visible =
+                WalletTransaction.driverVisible(history.transactions);
+            if (visible.isEmpty) {
+              return _buildEmptyState();
             }
-
-            if (_allTransactions.isEmpty) {
-              return SliverFillRemaining(
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.receipt_long_outlined,
-                        size: 64,
-                        color: Colors.grey[400],
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'لا توجد معاملات بعد',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }
-
-            return SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  if (index < _allTransactions.length) {
-                    return TransactionTile(
-                      transaction: _allTransactions[index],
-                    );
-                  } else if (history.hasMore) {
-                    // Load more button
-                    return Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: ElevatedButton(
-                        onPressed: () {
-                          setState(() {
-                            _nextToken = history.nextToken;
-                          });
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.secondary,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text(
-                          'تحميل المزيد',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    );
-                  }
-                  return const SizedBox.shrink();
-                },
-                childCount: _allTransactions.length + (history.hasMore ? 1 : 0),
-              ),
+            final preview = visible.take(_previewCount).toList();
+            return Column(
+              children: [
+                ...preview.map((txn) => TransactionTile(transaction: txn)),
+                if (visible.length > _previewCount || history.hasMore) ...[
+                  const SizedBox(height: 4),
+                  _buildViewAllBanner(),
+                ],
+              ],
             );
           },
-          loading: () => const SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.all(32),
-              child: Center(
-                child: CircularProgressIndicator(),
-              ),
-            ),
-          ),
-          error: (error, stack) => SliverFillRemaining(
+          loading: () => const Padding(
+            padding: EdgeInsets.all(32),
             child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(
-                    Icons.error_outline,
-                    size: 48,
-                    color: AppColors.error,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'خطأ في تحميل المعاملات',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    error.toString(),
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: AppColors.textSecondary,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
+              child: CircularProgressIndicator(color: AppColors.secondary),
             ),
           ),
+          error: (error, stack) => _buildTransactionsError(error),
         ),
 
-        // Bottom padding
-        const SliverToBoxAdapter(
-          child: SizedBox(height: 24),
-        ),
+        const SizedBox(height: 24),
       ],
+    );
+  }
+
+  void _openAllTransactions() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const TransactionsScreen()),
+    );
+  }
+
+  Widget _buildViewAllButton() {
+    return TextButton(
+      onPressed: _openAllTransactions,
+      style: TextButton.styleFrom(
+        foregroundColor: AppColors.secondary,
+        backgroundColor: AppColors.secondary.withValues(alpha: 0.08),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        minimumSize: const Size(0, 0),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      child: const Text(
+        'عرض الكل',
+        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
+  Widget _buildViewAllBanner() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: OutlinedButton.icon(
+        onPressed: _openAllTransactions,
+        icon: const Icon(Icons.chevron_left_rounded,
+            size: 20, color: AppColors.secondary),
+        label: const Text(
+          'عرض كل المعاملات',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: AppColors.secondary,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 13),
+          minimumSize: const Size.fromHeight(0),
+          side: BorderSide(
+            color: AppColors.secondary.withValues(alpha: 0.25),
+            width: 1.25,
+          ),
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 40),
+      child: Center(
+        child: Column(
+          children: [
+            Icon(Icons.receipt_long_outlined,
+                size: 64, color: AppColors.grey400),
+            SizedBox(height: 16),
+            Text(
+              'لا توجد معاملات بعد',
+              style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTransactionsError(Object error) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: Column(
+          children: [
+            const Icon(Icons.error_outline, size: 48, color: AppColors.error),
+            const SizedBox(height: 12),
+            const Text(
+              'خطأ في تحميل المعاملات',
+              style: TextStyle(
+                fontSize: 16,
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: () {
+                ref.read(walletRefreshProvider.notifier).state++;
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text('إعادة المحاولة'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -271,11 +294,7 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
-              Icons.error_outline,
-              size: 64,
-              color: AppColors.error,
-            ),
+            const Icon(Icons.error_outline, size: 64, color: AppColors.error),
             const SizedBox(height: 24),
             const Text(
               'خطأ في تحميل المحفظة',
@@ -288,10 +307,8 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
             const SizedBox(height: 12),
             Text(
               error.toString(),
-              style: const TextStyle(
-                fontSize: 14,
-                color: AppColors.textSecondary,
-              ),
+              style:
+                  const TextStyle(fontSize: 14, color: AppColors.textSecondary),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
@@ -304,13 +321,6 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: AppColors.secondary,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 14,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
               ),
             ),
           ],

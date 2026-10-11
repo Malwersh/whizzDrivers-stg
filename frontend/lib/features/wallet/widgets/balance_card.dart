@@ -1,3 +1,4 @@
+import '../screens/topup_screen.dart';
 import 'package:flutter/material.dart';
 import '../../../design_system/app_colors.dart';
 import '../../../models/wallet_balance.dart';
@@ -18,19 +19,16 @@ class BalanceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppColors.success.withValues(alpha: 0.3),
-          width: 2,
-        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.borderLight),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: AppColors.secondary.withValues(alpha: 0.06),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
@@ -42,15 +40,15 @@ class BalanceCard extends StatelessWidget {
             children: [
               Icon(
                 Icons.account_balance_wallet,
-                color: AppColors.success,
-                size: 24,
+                color: AppColors.secondary,
+                size: 22,
               ),
               SizedBox(width: 8),
               Text(
-                '💰 رصيدك الحالي',
+                'رصيدك الحالي',
                 style: TextStyle(
                   fontSize: 18,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w700,
                   color: AppColors.textPrimary,
                 ),
               ),
@@ -66,7 +64,7 @@ class BalanceCard extends StatelessWidget {
               _buildBalanceColumn(
                 'متاح',
                 balance.availableBalance,
-                AppColors.success,
+                AppColors.secondary,
               ),
               _buildBalanceColumn(
                 'محجوز',
@@ -76,7 +74,7 @@ class BalanceCard extends StatelessWidget {
               _buildBalanceColumn(
                 'الإجمالي',
                 balance.totalBalance,
-                AppColors.secondary,
+                AppColors.textPrimary,
               ),
             ],
           ),
@@ -86,15 +84,83 @@ class BalanceCard extends StatelessWidget {
           // Divider
           Container(
             height: 1,
-            color: AppColors.border,
+            color: AppColors.borderLight,
           ),
           
           const SizedBox(height: 16),
           
           // Status Indicator
           _buildStatusIndicator(),
+
+          const SizedBox(height: 16),
+
+          // Actions (top-up / monthly statement) live inside the balance card
+          _buildActions(context),
         ],
       ),
+    );
+  }
+
+  Widget _buildActions(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: ElevatedButton.icon(
+            icon: const Icon(Icons.add_circle_outline_rounded, size: 18),
+            label: const Text(
+              'شحن الرصيد',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.secondary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const TopupScreen()),
+              );
+            },
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.receipt_long_rounded,
+                size: 18, color: AppColors.secondary),
+            label: const Text(
+              'الكشف الشهري',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: AppColors.secondary,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              side: BorderSide(
+                color: AppColors.secondary.withValues(alpha: 0.35),
+                width: 1.25,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('الكشف الشهري - قريباً'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -134,24 +200,32 @@ class BalanceCard extends StatelessWidget {
 
   Widget _buildStatusIndicator() {
     final isActive = balance.isActive;
-    final color = isActive ? AppColors.success : AppColors.error;
+    final color = isActive ? AppColors.secondary : AppColors.warning;
     final icon = isActive ? Icons.check_circle : Icons.warning;
     final text = isActive ? 'المحفظة نشطة' : 'المحفظة معلقة';
     
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(icon, color: color, size: 18),
-        const SizedBox(width: 8),
-        Text(
-          text,
-          style: TextStyle(
-            fontSize: 14,
-            color: color,
-            fontWeight: FontWeight.w600,
+    return Container(
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 16),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 13,
+              color: color,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

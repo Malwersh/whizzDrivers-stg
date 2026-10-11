@@ -17,7 +17,9 @@ class TripDetailScreen extends StatelessWidget {
         elevation: 0,
         centerTitle: true,
         title: Text(
-          'رحلة #${trip.tripId}',
+          'رحلة #${trip.displayReference}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w600,

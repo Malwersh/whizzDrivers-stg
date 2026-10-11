@@ -78,15 +78,13 @@ class ProfileCompletionService {
         debugPrint('🔍 ProfileCompletionService: Status enum: $statusEnum');
         debugPrint('🔍 ProfileCompletionService: Missing fields: $missingFields');
         
-        // Profile is complete if status is Active/PendingReview
+        // Profile is complete if status is Active/PendingReview or all required fields are present
         final isComplete = statusEnum == ProfileStatusEnum.active ||
-            statusEnum == ProfileStatusEnum.pendingReview ||
-            missingFields.isEmpty;
             statusEnum == ProfileStatusEnum.pendingReview ||
             missingFields.isEmpty;
 
         // Determine if redirect is needed
-        final needsRedirect = 
+        final needsRedirect =
             statusEnum == ProfileStatusEnum.pendingProfile ||
             statusEnum == ProfileStatusEnum.pendingDocs;
             
@@ -103,6 +101,25 @@ class ProfileCompletionService {
         );
       } else {
         debugPrint('❌ ProfileCompletionService: API error: ${response.statusCode} - ${response.body}');
+
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          debugPrint('⚠️ ProfileCompletionService: Access token expired or invalid. Signing out and redirecting to login.');
+          try {
+            await Amplify.Auth.signOut();
+          } catch (e) {
+            debugPrint('⚠️ ProfileCompletionService: signOut fallback failed: $e');
+          }
+
+          return ProfileStatus(
+            exists: false,
+            status: ProfileStatusEnum.pendingProfile,
+            isComplete: false,
+            missingFields: ['auth_expired'],
+            needsRedirect: true,
+            redirectPath: '/login',
+            error: 'Unauthorized (${response.statusCode})',
+          );
+        }
         
         // For 404, assume no profile exists
         if (response.statusCode == 404) {
@@ -146,6 +163,12 @@ class ProfileCompletionService {
   /// Get list of missing required fields
   List<String> _getMissingFields(Map<String, dynamic> profile) {
     final missing = <String>[];
+    if (profile['profileSchemaVersion'] == 2) {
+      for (final field in ['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']) {
+        if (_isNullOrEmpty(profile[field])) missing.add(field);
+      }
+      return missing;
+    }
 
     // Check required basic fields
     if (_isNullOrEmpty(profile['name'])) missing.add('name');
@@ -181,6 +204,8 @@ class ProfileCompletionService {
         return ProfileStatusEnum.pendingDocs;
       case 'PENDING_REVIEW':
         return ProfileStatusEnum.pendingReview;
+      case 'APPROVED':
+      case 'VERIFIED':
       case 'ACTIVE':
         return ProfileStatusEnum.active;
       case 'SUSPENDED':

@@ -1,5 +1,6 @@
 class Trip {
   final String tripId;
+  final String? tripNumber;
   final String orderId;
   final String orderNumber;
   final double deliveryFee; // الرسوم الأساسية
@@ -22,6 +23,7 @@ class Trip {
 
   Trip({
     required this.tripId,
+    this.tripNumber,
     required this.orderId,
     required this.orderNumber,
     required this.deliveryFee,
@@ -43,6 +45,13 @@ class Trip {
     this.completedAt,
   }) : finalDeliveryFee = finalDeliveryFee ?? (deliveryFee + waveBonus);
 
+  String get displayReference {
+    final number = tripNumber?.trim();
+    if (number != null && number.isNotEmpty) return number;
+    if (orderNumber.trim().isNotEmpty) return orderNumber.trim();
+    return tripId.split('-').first;
+  }
+
   // Factory constructor from JSON
   factory Trip.fromJson(Map<String, dynamic> json) {
     final baseDeliveryFee = (json['deliveryFee'] ?? 0).toDouble();
@@ -52,6 +61,7 @@ class Trip {
     
     return Trip(
       tripId: json['tripId'] ?? '',
+      tripNumber: (json['tripNumber'] ?? json['trip_number'])?.toString(),
       orderId: json['orderId'] ?? '',
       orderNumber: json['orderNumber'] ?? '',
       deliveryFee: baseDeliveryFee,

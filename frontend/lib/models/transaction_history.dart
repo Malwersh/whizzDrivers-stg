@@ -28,13 +28,15 @@ class TransactionHistory {
 
   /// Factory constructor to create TransactionHistory from JSON
   factory TransactionHistory.fromJson(Map<String, dynamic> json) {
+    final dynamic nextTokenRaw = json['nextToken'] ?? json['lastEvaluatedKey'];
+
     return TransactionHistory(
       transactions: (json['transactions'] as List<dynamic>?)
               ?.map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>))
               .toList() ??
           [],
-      totalCount: json['totalCount'] as int? ?? 0,
-      nextToken: json['nextToken'] as String?,
+      totalCount: json['totalCount'] as int? ?? (json['transactions'] as List<dynamic>?)?.length ?? 0,
+      nextToken: nextTokenRaw is String ? nextTokenRaw : null,
     );
   }
 
