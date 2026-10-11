@@ -13,7 +13,7 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     
     <application
-        android:label="wizz_driver"
+        android:label="Wizzer"
         android:name="${applicationName}"
         android:icon="@mipmap/wizz_launcher_icon">
         <activity

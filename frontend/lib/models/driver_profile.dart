@@ -158,8 +158,8 @@ class DriverProfile {
       status: json['status'] ?? 'active',
       vehicle: _parseVehicleInfo(json),
       isVerified:
-          json['is_verified'] ??
           json['isVerified'] ??
+          json['is_verified'] ??
           json['documentsVerified'] ??
           false,
       preferredLanguage: json['preferred_language'] ?? 'ar',

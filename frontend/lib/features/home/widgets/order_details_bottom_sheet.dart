@@ -12,12 +12,14 @@ class OrderDetailsBottomSheet extends StatelessWidget {
   final WaveOffer offer;
   final VoidCallback onAccept;
   final VoidCallback onReject;
+  final bool canAccept;
 
   const OrderDetailsBottomSheet({
     super.key,
     required this.offer,
     required this.onAccept,
     required this.onReject,
+    this.canAccept = true,
   });
 
   @override
@@ -330,13 +332,19 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                   child: SizedBox(
                     height: 48,
                     child: ElevatedButton(
-                      onPressed: () {
+                      onPressed: canAccept
+                          ? () {
                         Navigator.pop(context);
                         onAccept();
-                      },
+                      }
+                          : null,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.black87,
+                        backgroundColor:
+                            canAccept ? AppColors.primary : Colors.grey[400],
+                        foregroundColor:
+                            canAccept ? Colors.black87 : Colors.white,
+                        disabledBackgroundColor: Colors.grey[400],
+                        disabledForegroundColor: Colors.white,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(24),
                         ),

@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Staging driver phone OTP challenge infrastructure
+Resources:
+  OtpSessions:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: WhizzDrivers_otp_sessions_staging
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+  OtpChallenge:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: WhizzDrivers-phone-otp-staging
+      CodeUri: ./phone-auth/
+      Handler: triggers.handler
+      Runtime: nodejs20.x
+      Timeout: 5
+      MemorySize: 256
+      Environment:
+        Variables:
+          OTP_TABLE: !Ref OtpSessions
+          OTP_SECRET_ARN: arn:aws:secretsmanager:us-east-1:699561669180:secret:wizz/staging/otpiq-SB1iGZ
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OtpSessions
+        - Statement:
+            Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: arn:aws:secretsmanager:us-east-1:699561669180:secret:wizz/staging/otpiq-SB1iGZ
+        - Statement:
+            Effect: Allow
+            Action: cognito-idp:AdminUpdateUserAttributes
+            Resource: arn:aws:cognito-idp:us-east-1:699561669180:userpool/us-east-1_RGTqUXF5C
+  CognitoInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OtpChallenge
+      Principal: cognito-idp.amazonaws.com
+      SourceAccount: '699561669180'
+      SourceArn: arn:aws:cognito-idp:us-east-1:699561669180:userpool/us-east-1_RGTqUXF5C
+  PhoneAuthApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: staging
+  PhoneRegistration:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: WhizzDrivers-phone-registration-staging
+      CodeUri: ./phone-auth/
+      Handler: registration.handler
+      Runtime: nodejs20.x
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          OTP_TABLE: !Ref OtpSessions
+          OTP_SECRET_ARN: arn:aws:secretsmanager:us-east-1:699561669180:secret:wizz/staging/otpiq-SB1iGZ
+          USER_POOL_ID: us-east-1_RGTqUXF5C
+          DRIVER_TABLE: WhizzDrivers_staging
+          WALLETS_TABLE: staging-Wallets
+          WALLET_TRIGGER: staging-wizz-wallet-creation-trigger
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OtpSessions
+        - DynamoDBCrudPolicy:
+            TableName: WhizzDrivers_staging
+        - Statement:
+            Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: arn:aws:secretsmanager:us-east-1:699561669180:secret:wizz/staging/otpiq-SB1iGZ
+        - Statement:
+            Effect: Allow
+            Action: [cognito-idp:ListUsers, cognito-idp:AdminCreateUser, cognito-idp:AdminSetUserPassword, cognito-idp:AdminUpdateUserAttributes]
+            Resource: arn:aws:cognito-idp:us-east-1:699561669180:userpool/us-east-1_RGTqUXF5C
+        - Statement:
+            Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource: arn:aws:lambda:us-east-1:699561669180:function:staging-wizz-wallet-creation-trigger
+        - Statement:
+            Effect: Allow
+            Action: dynamodb:GetItem
+            Resource: arn:aws:dynamodb:us-east-1:699561669180:table/staging-Wallets
+      Events:
+        Send:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PhoneAuthApi
+            Path: /auth/phone/send
+            Method: POST
+        Verify:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PhoneAuthApi
+            Path: /auth/phone/verify
+            Method: POST
+Outputs:
+  PhoneAuthUrl:
+    Value: !Sub 'https://${PhoneAuthApi}.execute-api.${AWS::Region}.amazonaws.com/staging'
+
+  ChallengeArn:
+    Value: !GetAtt OtpChallenge.Arn

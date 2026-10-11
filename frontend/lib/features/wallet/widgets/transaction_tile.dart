@@ -15,44 +15,42 @@ class TransactionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isCredit = transaction.isCredit;
-    
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.borderLight,
           width: 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
+            color: AppColors.secondary.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
       child: Row(
         children: [
-          // Icon
+          // Icon (neutral, calm)
           Container(
-            width: 44,
-            height: 44,
+            width: 42,
+            height: 42,
             decoration: BoxDecoration(
-              color: transaction.backgroundColor,
-              shape: BoxShape.circle,
+              color: AppColors.grey100,
+              borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
               transaction.icon,
-              color: transaction.color,
-              size: 22,
+              color: AppColors.secondary,
+              size: 20,
             ),
           ),
           
-          const SizedBox(width: 14),
+          const SizedBox(width: 12),
           
           // Details
           Expanded(
@@ -62,13 +60,24 @@ class TransactionTile extends StatelessWidget {
                 Text(
                   transaction.displayTitle,
                   style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                     color: AppColors.textPrimary,
                   ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
+                if (transaction.statusLabel != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    transaction.statusLabel!,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 4),
                 Text(
                   _formatDate(transaction.createdAt),
@@ -83,15 +92,15 @@ class TransactionTile extends StatelessWidget {
           
           const SizedBox(width: 12),
           
-          // Amount
+          // Amount (the only color accent)
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                '${isCredit ? '+' : '-'}${transaction.getFormattedAmount(includeSign: false)}',
+                '${transaction.amountSign}${transaction.getFormattedAmount(includeSign: false)}',
                 style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
                   color: transaction.color,
                 ),
               ),
@@ -99,7 +108,7 @@ class TransactionTile extends StatelessWidget {
               const Text(
                 'د.ع',
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 10,
                   color: AppColors.textSecondary,
                 ),
               ),

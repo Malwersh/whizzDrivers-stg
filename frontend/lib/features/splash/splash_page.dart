@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../providers/riverpod/services_provider.dart';
 import '../../features/active_order/services/active_order_service.dart';
+import '../../features/active_order/services/order_persistence_service.dart';
 import '../../services/push_notifications_service.dart';
 
 class SplashPage extends ConsumerStatefulWidget {
@@ -140,7 +141,23 @@ class _SplashPageState extends ConsumerState<SplashPage>
       final activeOrder = await activeOrderService.getActiveOrder();
       
       if (activeOrder == null) {
-        debugPrint('ℹ️ Splash: No active order found');
+        debugPrint('ℹ️ Splash: No active order found from server, checking local backup...');
+
+        // Fallback: لو السيرفر لم يُرجع الطلب بعد (تأخر تزامن)، جرّب النسخة المحلية
+        final localActiveOrder = await OrderPersistenceService.getActiveOrder();
+        final localOrderId = localActiveOrder?['orderId'] as String?;
+        final localStatus = localActiveOrder?['status'] as String?;
+
+        if (localOrderId != null && localOrderId.isNotEmpty) {
+          debugPrint('🛟 Splash: Restoring local active order fallback: $localOrderId ($localStatus)');
+          if (!mounted) return;
+          await Future.delayed(const Duration(milliseconds: 300));
+          if (!mounted) return;
+          context.go('/active-order', extra: {'orderId': localOrderId});
+          return;
+        }
+
+        debugPrint('ℹ️ Splash: No local fallback, navigating to home');
         // Go to home (search screen). If a push-tap requested a specific tab,
         // consume it here (after auth/profile checks) to avoid cold-start races.
         if (!mounted) return;
@@ -233,9 +250,12 @@ class _SplashPageState extends ConsumerState<SplashPage>
     
     // حجم الأيقونة: 35% من عرض الشاشة، مع حد أقصى 280dp (أكبر من السابق)
     final iconSize = (screenWidth * 0.35).clamp(220.0, 280.0);
+
+    // طول شارة Driver (أقصر قليلاً في الأسفل)
+    final badgeWidth = (screenWidth * 0.52).clamp(180.0, 280.0);
     
     return Scaffold(
-      backgroundColor: const Color(0xFFFDC500), // ✅ خلفية صفراء #FDC500
+      backgroundColor: const Color(0xFF00509D), // ✅ خلفية أزرق ثانوي #00509D
       body: AnimatedBuilder(
         animation: _animationController,
         builder: (context, child) {
@@ -243,42 +263,77 @@ class _SplashPageState extends ConsumerState<SplashPage>
             opacity: _fadeAnimation,
             child: ScaleTransition(
               scale: _scaleAnimation,
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Spacer(flex: 3),
+              child: Stack(
+                children: [
+                  Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Spacer(flex: 3),
 
-                    // ✅ أيقونة W في المنتصف مع فراغ حولها (أكبر من السابق)
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.15),
-                      child: Image.asset(
-                        'assets/Wiz_Logo/Wizz_AB_icon_w_1024_Blue.png',
-                        width: iconSize,
-                        height: iconSize,
-                        fit: BoxFit.contain,
-                      ),
+                        // ✅ أيقونة W في المنتصف مع فراغ حولها (أكبر من السابق)
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: screenWidth * 0.15),
+                          child: Image.asset(
+                            'assets/Wiz_Logo/Wizz_AB_icon_w_1024_Yellow.png',
+                            width: iconSize,
+                            height: iconSize,
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+
+                        const SizedBox(height: 40),
+
+                        // ✅ مؤشر التحميل باللون الأصفر
+                        const SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3.5,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Color(0xFFFDC500), // ✅ أصفر أساسي #FDC500
+                            ),
+                          ),
+                        ),
+
+                        const Spacer(flex: 3),
+
+                        const SizedBox(height: 48),
+                      ],
                     ),
+                  ),
 
-                    const SizedBox(height: 40),
-
-                    // ✅ مؤشر التحميل باللون الأزرق
-                    const SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 3.5,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Color(0xFF00509D), // أزرق #00509D
+                  // ✅ Driver badge في الأسفل
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 28,
+                    child: SafeArea(
+                      top: false,
+                      child: Center(
+                        child: Container(
+                          width: badgeWidth,
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFDC500), // أصفر أساسي
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: const Center(
+                            child: Text(
+                              'Driver',
+                              style: TextStyle(
+                                color: Color(0xFF00509D), // أزرق ثانوي
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-
-                    const Spacer(flex: 3),
-
-                    const SizedBox(height: 48),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           );

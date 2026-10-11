@@ -26,6 +26,7 @@ import 'features/trips/trips_screen.dart';
 import 'features/earnings/earnings_screen.dart';
 import 'features/notifications/notifications_screen.dart';
 import 'features/wallet/screens/wallet_home_screen.dart';
+import 'features/wallet/providers/wallet_provider.dart';
 import 'l10n/app_localizations.dart';
 import 'features/home/spark_home_simple_arabic.dart';
 import 'providers/simple_app_provider.dart';
@@ -33,16 +34,16 @@ import 'models/driver_status.dart';
 
 void main() async {
   // Trigger hot reload for SSO debug button and comprehensive tests - Fixed presign endpoint 2
-  print('Hot reload triggered at ${DateTime.now()} - SSO test added');
-  
+  debugPrint('Hot reload triggered at ${DateTime.now()} - SSO test added');
+
   // Initialize crash protection and memory management BEFORE WidgetsFlutterBinding
   CrashHandler.initialize();
-  
+
   // Register global error handler with enhanced protection
   runZonedGuarded(() async {
     // Initialize Flutter bindings INSIDE the zone to prevent zone mismatch
     WidgetsFlutterBinding.ensureInitialized();
-    
+
     try {
       await _initializeApp();
     } catch (e, stackTrace) {
@@ -76,7 +77,7 @@ Future<void> _initializeApp() async {
       SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
       ));
-      
+
       debugPrint('📱 Background capabilities initialized');
     }
   } catch (e) {
@@ -135,10 +136,49 @@ class MyApp extends riverpod.ConsumerStatefulWidget {
   riverpod.ConsumerState<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends riverpod.ConsumerState<MyApp> {
+class _MyAppState extends riverpod.ConsumerState<MyApp>
+    with WidgetsBindingObserver {
+  StreamSubscription<dynamic>? _walletEvents;
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
+  final Set<String> _seenWalletEvents = {};
+
+  void _refreshWallet() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(walletRefreshProvider.notifier).state++;
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshWallet();
+      unawaited(PushNotificationsService.refreshTokenRegistration());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _walletEvents?.cancel();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _walletEvents = PushNotificationsService.walletEvents.listen((message) {
+      final eventId = message.data['eventId']?.toString();
+      if (eventId != null && !_seenWalletEvents.add(eventId)) return;
+      if (_seenWalletEvents.length > 200) {
+        _seenWalletEvents.remove(_seenWalletEvents.first);
+      }
+      _refreshWallet();
+      _messengerKey.currentState?.showSnackBar(SnackBar(
+          content: Text(
+              message.notification?.body ?? 'تم تحديث حالة طلب شحن المحفظة')));
+    });
 
     // Initialize push notifications once; route notification taps to the home/search tab.
     // Router redirects will handle unauthenticated users.
@@ -151,10 +191,35 @@ class _MyAppState extends riverpod.ConsumerState<MyApp> {
             // Persist a pending tab index; SplashPage will consume it after auth/profile checks.
             await PushNotificationsService.stashPendingTabFromTap(message);
 
-            final type = (message.data['type'] ?? '').toString();
-            // Wave offers should always open the search/home tab.
-            final targetTab = type == 'new_wave_offer' ? 0 : 4;
-            ref.read(selectedTabProvider.notifier).state = targetTab;
+            final data = message.data;
+            if (PushNotificationsService.isProfileEvent(data)) {
+              if (mounted) ref.read(routerProvider).go('/pending-review');
+              return;
+            }
+            final type = (data['type'] ?? '').toString().trim();
+            final action = (data['action'] ?? '').toString().trim();
+            final offerId =
+                (data['offerId'] ?? data['offer_id'] ?? '').toString();
+            final orderId =
+                (data['orderId'] ?? data['order_id'] ?? '').toString();
+
+            // iOS can occasionally deliver a tap without `type`.
+            // Treat any message with wave identifiers as a wave offer.
+            final isWaveOffer = type == 'new_wave_offer' ||
+                action == 'wave_assignment' ||
+                (offerId.isNotEmpty && orderId.isNotEmpty);
+            final targetTab = PushNotificationsService.isWalletEvent(data)
+                ? 2
+                : isWaveOffer
+                    ? 0
+                    : 4;
+            if (PushNotificationsService.isWalletEvent(data)) _refreshWallet();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                ref.read(selectedTabProvider.notifier).state = targetTab;
+              }
+            });
+            WidgetsBinding.instance.ensureVisualUpdate();
           } catch (_) {
             // ignore
           }
@@ -169,6 +234,7 @@ class _MyAppState extends riverpod.ConsumerState<MyApp> {
     final router = ref.watch(routerProvider);
 
     return MaterialApp.router(
+      scaffoldMessengerKey: _messengerKey,
       title: 'سائق Wizz',
       theme: AppTheme.lightTheme, // Arctic Cyan light theme
       darkTheme: AppTheme.darkTheme, // Arctic Cyan dark theme
@@ -209,9 +275,9 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
   @override
   void initState() {
     super.initState();
-    ref.read(selectedTabProvider.notifier).state = widget.initialTabIndex;
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(selectedTabProvider.notifier).state = widget.initialTabIndex;
       _initializeAppController();
       _processPendingQueue(initial: true);
       _startQueueTimer();
@@ -224,7 +290,12 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
     // When the route query param (?tab=) changes (e.g., from a notification tap),
     // update the selected tab even if this widget state is already alive.
     if (widget.initialTabIndex != oldWidget.initialTabIndex) {
-      ref.read(selectedTabProvider.notifier).state = widget.initialTabIndex;
+      final targetTab = widget.initialTabIndex;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && widget.initialTabIndex == targetTab) {
+          ref.read(selectedTabProvider.notifier).state = targetTab;
+        }
+      });
     }
   }
 
@@ -263,7 +334,7 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
     // This prevents wave offers + search state from being reset/restarted unexpectedly.
     final tabs = <Widget>[
       const SparkHomeSimpleArabic(),
-      const TripsScreen(),
+      TripsScreen(isActive: selectedIndex == 1),
       const WalletHomeScreen(),
       const EarningsScreen(),
       const NotificationsScreen(),
@@ -290,67 +361,88 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
         ],
       ),
       bottomNavigationBar: Container(
-          decoration: BoxDecoration(
-            color: Colors.white, // ✅ خلفية بيضاء
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05), // ✅ ظل بسيط جداً في الأعلى
-                blurRadius: 8,
-                spreadRadius: 0,
-                offset: const Offset(0, -1), // ظل للأعلى فقط
-              ),
-            ],
-          ),
-          child: BottomNavigationBar(
-            currentIndex: selectedIndex,
-            onTap: (index) {
-              final previousIndex = selectedIndex;
-              final fromTab = previousIndex == 0 ? 'home' : previousIndex == 1 ? 'trips' : previousIndex == 2 ? 'wallet' : previousIndex == 3 ? 'earnings' : previousIndex == 4 ? 'notifications' : 'more';
-              final toTab = index == 0 ? 'home' : index == 1 ? 'trips' : index == 2 ? 'wallet' : index == 3 ? 'earnings' : index == 4 ? 'notifications' : 'more';
-              GlobalAppStateManager().onTabNavigation(fromTab, toTab);
-              ref.read(selectedTabProvider.notifier).state = index;
-            },
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            type: BottomNavigationBarType.fixed,
-            selectedItemColor: HadhirColors.secondary,
-            unselectedItemColor: Colors.grey,
-            selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
-            unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.normal),
-            items: const [
-              BottomNavigationBarItem(
-                icon: Icon(Icons.home_outlined),
-                activeIcon: Icon(Icons.home),
-                label: 'الرئيسية',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.local_taxi_outlined),
-                activeIcon: Icon(Icons.local_taxi),
-                label: 'رحلاتي',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.wallet_outlined),
-                activeIcon: Icon(Icons.wallet),
-                label: 'المحفظة',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.attach_money_outlined),
-                activeIcon: Icon(Icons.attach_money),
-                label: 'أرباحي',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.notifications_outlined),
-                activeIcon: Icon(Icons.notifications),
-                label: 'الإشعارات',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.more_horiz_outlined),
-                activeIcon: Icon(Icons.more_horiz),
-                label: 'المزيد',
-              ),
-            ],
-          ),
+        decoration: BoxDecoration(
+          color: Colors.white, // ✅ خلفية بيضاء
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black
+                  .withValues(alpha: 0.05), // ✅ ظل بسيط جداً في الأعلى
+              blurRadius: 8,
+              spreadRadius: 0,
+              offset: const Offset(0, -1), // ظل للأعلى فقط
+            ),
+          ],
         ),
+        child: BottomNavigationBar(
+          currentIndex: selectedIndex,
+          onTap: (index) {
+            final previousIndex = selectedIndex;
+            final fromTab = previousIndex == 0
+                ? 'home'
+                : previousIndex == 1
+                    ? 'trips'
+                    : previousIndex == 2
+                        ? 'wallet'
+                        : previousIndex == 3
+                            ? 'earnings'
+                            : previousIndex == 4
+                                ? 'notifications'
+                                : 'more';
+            final toTab = index == 0
+                ? 'home'
+                : index == 1
+                    ? 'trips'
+                    : index == 2
+                        ? 'wallet'
+                        : index == 3
+                            ? 'earnings'
+                            : index == 4
+                                ? 'notifications'
+                                : 'more';
+            GlobalAppStateManager().onTabNavigation(fromTab, toTab);
+            ref.read(selectedTabProvider.notifier).state = index;
+          },
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          type: BottomNavigationBarType.fixed,
+          selectedItemColor: HadhirColors.secondary,
+          unselectedItemColor: Colors.grey,
+          selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
+          unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.normal),
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home_outlined),
+              activeIcon: Icon(Icons.home),
+              label: 'الرئيسية',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.local_taxi_outlined),
+              activeIcon: Icon(Icons.local_taxi),
+              label: 'رحلاتي',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.wallet_outlined),
+              activeIcon: Icon(Icons.wallet),
+              label: 'المحفظة',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.attach_money_outlined),
+              activeIcon: Icon(Icons.attach_money),
+              label: 'أرباحي',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.notifications_outlined),
+              activeIcon: Icon(Icons.notifications),
+              label: 'الإشعارات',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.more_horiz_outlined),
+              activeIcon: Icon(Icons.more_horiz),
+              label: 'المزيد',
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

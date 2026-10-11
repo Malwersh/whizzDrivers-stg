@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../../design_system/colors.dart';
 import '../../models/trip_model.dart';
 import '../../services/trips_service.dart';
 import 'trip_detail_screen.dart';
 
 class TripsScreen extends StatefulWidget {
-  const TripsScreen({super.key});
+  final bool isActive;
+
+  const TripsScreen({super.key, this.isActive = true});
 
   @override
   State<TripsScreen> createState() => _TripsScreenState();
@@ -22,10 +25,18 @@ class _TripsScreenState extends State<TripsScreen> {
   @override
   void initState() {
     super.initState();
-    _loadTrips();
+    if (widget.isActive) _loadTrips();
+  }
+
+  @override
+  void didUpdateWidget(covariant TripsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) _loadTrips();
   }
 
   Future<void> _loadTrips({bool loadMore = false}) async {
+    if (_isLoading && loadMore) return;
+    if (loadMore) setState(() => _isLoading = true);
     if (!loadMore) {
       setState(() {
         _isLoading = true;
@@ -34,25 +45,13 @@ class _TripsScreenState extends State<TripsScreen> {
     }
 
     try {
-      // Get current driver ID
-      final driverId = await TripsService.getCurrentDriverId();
-      
-      if (driverId == null) {
-        setState(() {
-          _isLoading = false;
-          _hasError = true;
-          _errorMessage = 'لم يتم العثور على معرف السائق';
-        });
-        return;
-      }
-
       // Fetch trips from API
       final result = await TripsService.fetchDriverTrips(
-        driverId: driverId,
         limit: 20,
         nextToken: loadMore ? _nextToken : null,
       );
 
+      if (!mounted) return;
       if (result['success'] == true) {
         setState(() {
           if (loadMore) {
@@ -60,6 +59,7 @@ class _TripsScreenState extends State<TripsScreen> {
           } else {
             _trips = result['trips'] as List<Trip>;
           }
+          _trips.sort((a, b) => (b.completedAt ?? b.createdAt).compareTo(a.completedAt ?? a.createdAt));
           _nextToken = result['nextToken'];
           _hasMore = result['hasMore'] ?? false;
           _isLoading = false;
@@ -69,10 +69,14 @@ class _TripsScreenState extends State<TripsScreen> {
         setState(() {
           _isLoading = false;
           _hasError = true;
+          if (loadMore) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result['error'] ?? 'تعذر تحميل المزيد')));
+          }
           _errorMessage = result['error'] ?? 'خطأ في جلب الرحلات';
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _hasError = true;
@@ -174,6 +178,7 @@ class _TripsScreenState extends State<TripsScreen> {
               ),
             ),
             const SizedBox(height: 8),
+            if (_hasMore) _buildLoadMoreButton(),
             Text(
               'ستظهر رحلاتك المكتملة هنا',
               style: TextStyle(
@@ -287,17 +292,22 @@ class _TripsScreenState extends State<TripsScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'رحلة #${trip.tripId}',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.grey[800],
+                    Expanded(
+                      child: Text(
+                        'رحلة #${trip.displayReference}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[800],
+                        ),
                       ),
                     ),
+                    const SizedBox(width: 12),
                     if (trip.status != TripStatus.cancelled)
                       Text(
-                        '${trip.finalDeliveryFee.toStringAsFixed(1)} IQD',
+                        '${NumberFormat('#,##0', 'en').format(trip.finalDeliveryFee)} د.ع',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,

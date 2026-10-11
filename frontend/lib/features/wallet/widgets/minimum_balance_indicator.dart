@@ -18,17 +18,24 @@ class MinimumBalanceIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     final progress = balance.minimumBalancePercentage;
     final isAboveMin = balance.isAboveMinimum;
-    final progressColor = isAboveMin ? AppColors.success : AppColors.error;
+    final progressColor = isAboveMin ? AppColors.secondary : AppColors.error;
     
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: AppColors.backgroundGrey,
-        borderRadius: BorderRadius.circular(12),
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: progressColor.withValues(alpha: 0.2),
+          color: AppColors.borderLight,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.secondary.withValues(alpha: 0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -39,66 +46,52 @@ class MinimumBalanceIndicator extends StatelessWidget {
               Icon(
                 Icons.show_chart,
                 size: 20,
-                color: progressColor,
+                color: AppColors.secondary,
               ),
               const SizedBox(width: 8),
               const Text(
-                '📊 الحد الأدنى المطلوب',
+                'الحد الأدنى المطلوب',
                 style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
                   color: AppColors.textPrimary,
                 ),
               ),
             ],
           ),
           
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           
-          // Progress Bar
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: SizedBox(
-              height: 24,
-              child: Stack(
-                children: [
-                  // Background
-                  Container(
-                    color: AppColors.grey200,
-                  ),
-                  // Progress
-                  FractionallySizedBox(
-                    widthFactor: progress.clamp(0.0, 1.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: isAboveMin
-                              ? [
-                                  AppColors.success.withValues(alpha: 0.8),
-                                  AppColors.success,
-                                ]
-                              : [
-                                  AppColors.error.withValues(alpha: 0.8),
-                                  AppColors.error,
-                                ],
+          // Thin progress bar with the percentage shown outside, on the left
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(99),
+                  child: SizedBox(
+                    height: 4,
+                    child: Stack(
+                      children: [
+                        Container(color: AppColors.grey200),
+                        FractionallySizedBox(
+                          widthFactor: progress.clamp(0.0, 1.0),
+                          child: Container(color: progressColor),
                         ),
-                      ),
+                      ],
                     ),
                   ),
-                  // Percentage Text (centered)
-                  Center(
-                    child: Text(
-                      '${(progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: progress > 0.5 ? Colors.white : AppColors.textPrimary,
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
+              const SizedBox(width: 10),
+              Text(
+                '${(progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: progressColor,
+                ),
+              ),
+            ],
           ),
           
           const SizedBox(height: 12),
@@ -107,8 +100,8 @@ class MinimumBalanceIndicator extends StatelessWidget {
           Text(
             '${_formatCurrency(balance.availableBalance)} / ${_formatCurrency(balance.minRequiredBalance)} د.ع',
             style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
               color: AppColors.textPrimary,
             ),
           ),
@@ -120,7 +113,7 @@ class MinimumBalanceIndicator extends StatelessWidget {
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: progressColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
               children: [
@@ -133,12 +126,12 @@ class MinimumBalanceIndicator extends StatelessWidget {
                 Expanded(
                   child: Text(
                     isAboveMin
-                        ? '✅ رصيدك أعلى من الحد المطلوب'
-                        : '⚠️ يرجى شحن المحفظة للوصول للحد الأدنى',
+                        ? 'رصيدك أعلى من الحد المطلوب'
+                        : 'يرجى شحن المحفظة للوصول للحد الأدنى',
                     style: TextStyle(
                       fontSize: 13,
                       color: progressColor,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),

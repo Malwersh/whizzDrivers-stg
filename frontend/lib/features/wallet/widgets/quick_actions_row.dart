@@ -1,8 +1,9 @@
+import '../screens/topup_screen.dart';
 import 'package:flutter/material.dart';
 import '../../../design_system/app_colors.dart';
 
 /// Quick Actions Row Widget
-/// 
+///
 /// Provides quick access buttons for common wallet actions
 /// - Top up balance (شحن الرصيد)
 /// - Monthly statement (الكشف الشهري)
@@ -12,63 +13,60 @@ class QuickActionsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
       child: Row(
         children: [
           // Top up button
           Expanded(
             child: ElevatedButton.icon(
-              icon: const Icon(Icons.add_circle_outline, size: 20),
+              icon: const Icon(Icons.add_circle_outline_rounded, size: 18),
               label: const Text(
-                '💳 شحن الرصيد',
+                'شحن الرصيد',
                 style: TextStyle(
                   fontSize: 14,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.success,
+                backgroundColor: AppColors.secondary,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
+                padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                elevation: 2,
+                elevation: 0,
               ),
               onPressed: () {
-                // TODO: Navigate to TopupRequestScreen (Phase 2)
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('شحن الرصيد - قريباً'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
+                Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const TopupScreen()));
               },
             ),
           ),
-          
+
           const SizedBox(width: 12),
-          
+
           // Monthly statement button
           Expanded(
             child: OutlinedButton.icon(
-              icon: const Icon(Icons.receipt_long, size: 20, color: AppColors.secondary),
+              icon: const Icon(Icons.receipt_long_rounded,
+                  size: 18, color: AppColors.secondary),
               label: const Text(
-                '📄 الكشف الشهري',
+                'الكشف الشهري',
                 style: TextStyle(
                   fontSize: 14,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w700,
                   color: AppColors.secondary,
                 ),
               ),
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                side: const BorderSide(
-                  color: AppColors.success,
-                  width: 1.5,
+                backgroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                side: BorderSide(
+                  color: AppColors.secondary.withValues(alpha: 0.35),
+                  width: 1.25,
                 ),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(14),
                 ),
               ),
               onPressed: () {

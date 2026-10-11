@@ -145,6 +145,8 @@ class ProfileStatus {
         return ProfileStatusEnum.pendingDocs;
       case 'PENDING_REVIEW':
         return ProfileStatusEnum.pendingReview;
+      case 'APPROVED':
+      case 'VERIFIED':
       case 'ACTIVE':
         return ProfileStatusEnum.active;
       case 'SUSPENDED':

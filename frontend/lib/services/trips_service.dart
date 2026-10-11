@@ -3,14 +3,24 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/trip_model.dart';
 import '../config/environment.dart';
+import 'cognito_token_service.dart';
 
 class TripsService {
   static const String baseUrl = Environment.tripsApiBaseUrl;
   
+  static Future<Map<String, String>> buildHeadersForProtectedRequest() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = await CognitoTokenService.getAccessToken() ?? prefs.getString('auth_token');
+    return {
+      'Content-Type': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
+
   /// Fetch trips for a driver
   /// Returns list of trips and pagination info
   static Future<Map<String, dynamic>> fetchDriverTrips({
-    required String driverId,
+    String? driverId,
     int limit = 20,
     String? nextToken,
   }) async {
@@ -21,16 +31,14 @@ class TripsService {
         if (nextToken != null) 'nextToken': nextToken,
       };
       
-      final uri = Uri.parse('$baseUrl/driver/$driverId/trips')
+      final uri = Uri.parse('$baseUrl/driver/trips')
           .replace(queryParameters: queryParams);
       
       print('📡 Fetching trips from: $uri');
       
       final response = await http.get(
         uri,
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: await buildHeadersForProtectedRequest(),
       ).timeout(const Duration(seconds: 30));
       
       print('📥 Response status: ${response.statusCode}');
@@ -84,16 +92,14 @@ class TripsService {
     required String driverId,
   }) async {
     try {
-      final uri = Uri.parse('$baseUrl/driver/$driverId/trips')
+      final uri = Uri.parse('$baseUrl/driver/trips')
           .replace(queryParameters: {'action': 'stats'});
       
       print('📡 Fetching stats from: $uri');
       
       final response = await http.get(
         uri,
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: await buildHeadersForProtectedRequest(),
       ).timeout(const Duration(seconds: 30));
       
       print('📥 Response status: ${response.statusCode}');

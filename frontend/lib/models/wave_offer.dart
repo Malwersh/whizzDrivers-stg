@@ -50,6 +50,37 @@ class OrderItem {
 }
 
 class WaveOffer {
+  static double _toDouble(dynamic value) {
+    if (value == null) return 0;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString()) ?? 0;
+  }
+
+  // بعض المسارات القديمة قد ترسل المبالغ بوحدة fils (IQD * 1000).
+  // نحولها إلى IQD عندما تظهر بصيغة مضخمة مقارنة بالمرجع.
+  static double _normalizeIqd(dynamic rawAmount, {double? reference}) {
+    final amount = _toDouble(rawAmount);
+    if (amount <= 0) return 0;
+
+    final ref = reference ?? 0;
+    if (ref > 0) {
+      final ratio = amount / ref;
+      if (ratio >= 900 && ratio <= 1100) {
+        return amount / 1000;
+      }
+      // fallback heuristic for legacy payloads: huge order amount vs modest earnings.
+      if (ratio > 200 && amount >= 100000) {
+        return amount / 1000;
+      }
+    }
+
+    if (amount >= 100000 && amount % 1000 == 0) {
+      return amount / 1000;
+    }
+
+    return amount;
+  }
+
   // ===== معلومات العرض =====
   final String offerId;
   final String orderId;
@@ -59,6 +90,7 @@ class WaveOffer {
   final int waveNumber;              // 1, 2, or 3
   final int rank;                    // 1-5 (ترتيب السائق في الموجة)
   final double score;                // النقاط المحسوبة (0-100)
+  final bool isEmergencyWave;        // هل هي موجة طارئة
   
   // ===== تفاصيل المطعم =====
   final String restaurantId;
@@ -82,6 +114,7 @@ class WaveOffer {
   final double bonusAmount;          // المكافأة (البونص) من الموجة
   final double tip;                  // الإكرامية من العميل
   final double estimatedEarnings;    // الأرباح المتوقعة (deliveryFee + bonusAmount)
+  final double? holdRequiredAmount;  // المبلغ المطلوب فعلياً للحجز على المحفظة
   final String currency;             // رمز العملة (IQD, USD, etc.)
   
   // ===== المسافة والوقت =====
@@ -109,6 +142,7 @@ class WaveOffer {
     required this.orderId,
     required this.jobId,
     required this.waveNumber,
+    this.isEmergencyWave = false,
     required this.rank,
     required this.score,
     required this.restaurantId,
@@ -128,6 +162,7 @@ class WaveOffer {
     this.bonusAmount = 0,
     this.tip = 0,
     required this.estimatedEarnings,
+    this.holdRequiredAmount,
     required this.currency,
     required this.distance,
     required this.estimatedMinutes,
@@ -150,12 +185,37 @@ class WaveOffer {
           .toList();
     }
 
+    final deliveryFeeRaw = _toDouble(json['deliveryFee']);
+    final bonusAmountRaw = _toDouble(json['bonusAmount']);
+    final tipRaw = _toDouble(json['tip']);
+    final estimatedEarningsRaw = _toDouble(json['estimatedEarnings']);
+    final orderTotalRaw = _toDouble(json['orderTotal']);
+
+    final normalizedDeliveryFee = _normalizeIqd(deliveryFeeRaw);
+    final normalizedBonusAmount = _normalizeIqd(bonusAmountRaw);
+    final normalizedTip = _normalizeIqd(tipRaw);
+    final normalizedEstimatedEarnings = _normalizeIqd(
+      estimatedEarningsRaw,
+      reference: normalizedDeliveryFee > 0 ? normalizedDeliveryFee : null,
+    );
+    final normalizedOrderTotal = _normalizeIqd(
+      orderTotalRaw,
+      reference: normalizedEstimatedEarnings > 0 ? normalizedEstimatedEarnings : null,
+    );
+    final normalizedHoldRequired = json['holdRequiredAmount'] != null
+        ? _normalizeIqd(
+            json['holdRequiredAmount'],
+            reference: normalizedOrderTotal > 0 ? normalizedOrderTotal : null,
+          )
+        : null;
+
     return WaveOffer(
       offerId: json['offerId'] ?? '',
       orderId: json['orderId'] ?? '',
       jobId: json['jobId'] ?? '',
       
       waveNumber: json['waveNumber'] ?? 1,
+      isEmergencyWave: json['isEmergencyWave'] == true || json['isEmergencyWave']?.toString().toLowerCase() == 'true',
       rank: json['rank'] ?? 1,
       score: (json['score'] ?? 0).toDouble(),
       
@@ -173,11 +233,12 @@ class WaveOffer {
       customerLng: (json['customerLng'] ?? 0).toDouble(),
       customerPhone: json['customerPhone'],
       
-      orderTotal: (json['orderTotal'] ?? 0).toDouble(),
-      deliveryFee: (json['deliveryFee'] ?? 0).toDouble(),
-      bonusAmount: (json['bonusAmount'] ?? 0).toDouble(),
-      tip: (json['tip'] ?? 0).toDouble(),
-      estimatedEarnings: (json['estimatedEarnings'] ?? 0).toDouble(),
+      orderTotal: normalizedOrderTotal,
+      deliveryFee: normalizedDeliveryFee,
+      bonusAmount: normalizedBonusAmount,
+      tip: normalizedTip,
+      estimatedEarnings: normalizedEstimatedEarnings,
+      holdRequiredAmount: normalizedHoldRequired,
       currency: json['currency'] ?? 'IQD',
       
       distance: (json['distance'] ?? 0).toDouble(),
@@ -207,6 +268,7 @@ class WaveOffer {
       'orderId': orderId,
       'jobId': jobId,
       'waveNumber': waveNumber,
+      'isEmergencyWave': isEmergencyWave,
       'rank': rank,
       'score': score,
       'restaurantId': restaurantId,
@@ -224,6 +286,7 @@ class WaveOffer {
       'orderTotal': orderTotal,
       'deliveryFee': deliveryFee,
       'estimatedEarnings': estimatedEarnings,
+      'holdRequiredAmount': holdRequiredAmount,
       'currency': currency,
       'distance': distance,
       'estimatedMinutes': estimatedMinutes,
@@ -250,6 +313,12 @@ class WaveOffer {
   /// هل العرض منتهي؟
   bool get isExpired {
     return DateTime.now().isAfter(expiresAt);
+  }
+
+  /// المبلغ المعتمد للتحقق من كفاية الرصيد
+  double get requiredBalanceAmount {
+    if ((holdRequiredAmount ?? 0) > 0) return holdRequiredAmount!;
+    return orderTotal;
   }
 
   /// مجموع كمية العناصر

@@ -1,28 +1,46 @@
 import 'package:flutter/material.dart';
-import '../../design_system/colors.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../wallet/providers/wallet_provider.dart';
+import '../../providers/riverpod/tab_provider.dart';
 
-class NotificationsScreen extends StatelessWidget {
+class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifications = ref.watch(walletNotificationsProvider);
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'الإشعارات',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 20,
-          ),
-        ),
-        backgroundColor: HadhirColors.secondary,
-        foregroundColor: Colors.white,
-        elevation: 0,
-      ),
-      body: const Center(
-        child: Text(
-          'قريباً: شاشة الإشعارات',
-          style: TextStyle(fontSize: 18),
+      appBar: AppBar(title: const Text('الإشعارات')),
+      body: notifications.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (_, __) => Center(
+            child: TextButton(
+                onPressed: () => ref.invalidate(walletNotificationsProvider),
+                child: const Text('تعذر تحميل الإشعارات — إعادة المحاولة'))),
+        data: (items) => RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(walletNotificationsProvider);
+            await ref.read(walletNotificationsProvider.future);
+          },
+          child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                if (items.isEmpty)
+                  const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Center(child: Text('لا توجد إشعارات للمحفظة'))),
+                ...items.map((item) => ListTile(
+                      leading: Icon(item['type'] == 'wallet_topup_approved'
+                          ? Icons.account_balance_wallet
+                          : Icons.info_outline),
+                      title: Text(item['title'] ?? ''),
+                      subtitle: Text(
+                          '${item['body'] ?? ''}\n${item['createdAt'] ?? ''}'),
+                      onTap: () {
+                        ref.read(walletRefreshProvider.notifier).state++;
+                        ref.read(selectedTabProvider.notifier).state = 2;
+                      },
+                    )),
+              ]),
         ),
       ),
     );

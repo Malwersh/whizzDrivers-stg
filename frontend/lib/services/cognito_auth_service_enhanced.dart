@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/environment.dart';
+import '../utils/iraqi_phone.dart';
 import '../services/logging/auth_logger.dart';
 import 'aws_dynamodb_service.dart';
 
@@ -273,44 +274,9 @@ class CognitoAuthServiceEnhanced {
 
   bool get isAuthenticated => _authToken != null;
 
-  /// Format phone number to E.164 format for Iraqi numbers
-  String _formatPhoneNumber(String phone) {
-    // Remove all non-digits
-    String digitsOnly = phone.replaceAll(RegExp(r'[^\d]'), '');
-    
-    // Handle Iraqi numbers
-    if (digitsOnly.startsWith('07')) {
-      // Convert 07XXXXXXXX to +9647XXXXXXXX
-      return '+964${digitsOnly.substring(1)}';
-    } else if (digitsOnly.startsWith('9647')) {
-      // Already in format 9647XXXXXXXX, add +
-      return '+$digitsOnly';
-    } else if (digitsOnly.startsWith('7') && digitsOnly.length == 10) {
-      // 7XXXXXXXX format, add +964
-      return '+964$digitsOnly';
-    }
-    
-    // Return as is if no pattern matches
-    return phone;
-  }
+  String _formatPhoneNumber(String phone) => IraqiPhone.normalize(phone);
 
-  /// Validate Iraqi phone number format
-  bool isValidIraqiPhone(String phone) {
-    final digitsOnly = phone.replaceAll(RegExp(r'[^\d]'), '');
-    
-    // Check various Iraqi phone formats
-    if (digitsOnly.startsWith('07') && digitsOnly.length == 11) {
-      return true; // 07XXXXXXXXX
-    }
-    if (digitsOnly.startsWith('9647') && digitsOnly.length == 13) {
-      return true; // 9647XXXXXXXXX
-    }
-    if (digitsOnly.startsWith('7') && digitsOnly.length == 10) {
-      return true; // 7XXXXXXXXX
-    }
-    
-    return false;
-  }
+  bool isValidIraqiPhone(String phone) => IraqiPhone.isValid(phone);
 
   /// Get Arabic error message for Cognito exceptions
   String _getArabicErrorMessage(AuthException e) {

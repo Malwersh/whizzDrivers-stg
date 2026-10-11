@@ -106,7 +106,7 @@ class DriverService {
           'join_date': _joinDateIsoFromCreatedAt(data['createdAt']),
           'total_deliveries': 0,
           'rating': 0.0,
-          'is_verified': (data['status'] == 'VERIFIED'),
+          'isVerified': data['isVerified'] == true,
           'preferred_language': 'ar',
           'profile_photo': data['profilePhoto'],
           // Create vehicle object from vehicleType for vehicle info screen

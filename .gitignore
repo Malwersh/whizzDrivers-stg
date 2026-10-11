@@ -63,3 +63,10 @@ frontend/ios/fastlane/test_output
 **/.env
 **/.env.*
 **/.tmp/
+
+# Generated nested dependencies, builds and Python cache
+**/node_modules/
+**/__pycache__/
+*.pyc
+frontend/android/build/
+frontend/android/app/build/
