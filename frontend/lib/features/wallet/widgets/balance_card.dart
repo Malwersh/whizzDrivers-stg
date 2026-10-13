@@ -4,15 +4,17 @@ import '../../../design_system/app_colors.dart';
 import '../../../models/wallet_balance.dart';
 
 /// Balance Card Widget
-/// 
+///
 /// Displays driver's wallet balance including available, locked, and total balance
 /// with visual status indicator
 class BalanceCard extends StatelessWidget {
   final WalletBalance balance;
+  final VoidCallback? onTransfer;
 
   const BalanceCard({
     super.key,
     required this.balance,
+    this.onTransfer,
   });
 
   @override
@@ -54,9 +56,9 @@ class BalanceCard extends StatelessWidget {
               ),
             ],
           ),
-          
+
           const SizedBox(height: 20),
-          
+
           // Balance Columns
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -78,17 +80,17 @@ class BalanceCard extends StatelessWidget {
               ),
             ],
           ),
-          
+
           const SizedBox(height: 20),
-          
+
           // Divider
           Container(
             height: 1,
             color: AppColors.borderLight,
           ),
-          
+
           const SizedBox(height: 16),
-          
+
           // Status Indicator
           _buildStatusIndicator(),
 
@@ -96,6 +98,19 @@ class BalanceCard extends StatelessWidget {
 
           // Actions (top-up / monthly statement) live inside the balance card
           _buildActions(context),
+          if (onTransfer != null) ...[
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+                onPressed: onTransfer,
+                icon: const Icon(Icons.swap_horiz_rounded),
+                label: const Text('تحويل الرصيد'),
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.secondary,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    side: const BorderSide(color: AppColors.secondary),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)))),
+          ],
         ],
       ),
     );
@@ -203,7 +218,7 @@ class BalanceCard extends StatelessWidget {
     final color = isActive ? AppColors.secondary : AppColors.warning;
     final icon = isActive ? Icons.check_circle : Icons.warning;
     final text = isActive ? 'المحفظة نشطة' : 'المحفظة معلقة';
-    
+
     return Container(
       alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -231,8 +246,8 @@ class BalanceCard extends StatelessWidget {
 
   String _formatCurrency(int amount) {
     return amount.toString().replaceAllMapped(
-      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
-      (Match m) => '${m[1]},',
-    );
+          RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+          (Match m) => '${m[1]},',
+        );
   }
 }
