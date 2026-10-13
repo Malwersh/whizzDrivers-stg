@@ -164,6 +164,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   double _locationWaveZoom = 14;
   LatLng? _displayDriverLocation;
   BitmapDescriptor? _driverLocationIcon;
+  final List<BitmapDescriptor> _driverBreathingIcons = [];
   StreamSubscription<Position>? _displayLocationSubscription;
 
   LatLng get _driverMapPoint => _displayDriverLocation ??
@@ -183,7 +184,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   Future<void> _ensureDriverMapMarker() async {
-    final icon = _driverLocationIcon ?? await _createDriverLocationMarker();
+    if (_driverBreathingIcons.isEmpty) {
+      for (var i = 0; i < 16; i++) {
+        final breath = (1 - math.cos(2 * math.pi * i / 16)) / 2;
+        _driverBreathingIcons.add(await _createDriverLocationMarker(breath: breath));
+        if (!mounted) return;
+      }
+    }
+    final icon = _driverLocationIcon ?? _driverBreathingIcons.first;
     if (!mounted) return;
     setState(() {
       _driverLocationIcon = icon;
@@ -204,14 +212,22 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   Set<Circle> _locationWaves(double phase) {
     final metersPerPixel = 156543.03392 * math.cos(_driverMapPoint.latitude * math.pi / 180) /
         math.pow(2, _locationWaveZoom);
-    return {for (var i = 0; i < 3; i++)
-      Circle(circleId: CircleId('driver_wave_$i'),
-        center: _driverMapPoint,
-        radius: (9 + ((phase + i / 3) % 1) * 27) * metersPerPixel,
-        strokeWidth: 3,
-        strokeColor: AppColors.primary.withValues(alpha: .75 * (1 - ((phase + i / 3) % 1))),
-        fillColor: Colors.transparent, zIndex: 1,
-        consumeTapEvents: false)};
+    final breath = (1 - math.cos(2 * math.pi * phase)) / 2;
+    final wave = Curves.easeOut.transform(phase);
+    final fade = math.sin(math.pi * phase);
+    return {
+      Circle(circleId: const CircleId('driver_location_halo'),
+        center:_driverMapPoint,radius:(12 + breath * 2)*metersPerPixel,
+        strokeWidth:0,strokeColor:Colors.transparent,
+        fillColor:AppColors.primary.withValues(alpha:.1 + breath*.04),
+        zIndex:1,consumeTapEvents:false),
+      Circle(circleId: const CircleId('driver_location_wave'),
+        center:_driverMapPoint,radius:(12 + wave*24)*metersPerPixel,
+        strokeWidth:1,
+        strokeColor:AppColors.primary.withValues(alpha:.28*fade),
+        fillColor:AppColors.primary.withValues(alpha:.025*fade),
+        zIndex:2,consumeTapEvents:false),
+    };
   }
   MapDataResponse? _mapData;
   bool _isLoadingMapData = false;
@@ -1812,7 +1828,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         ),
         zoom: 14,
       ),
-      markers: _markers,
+      markers: _markers.map((marker) {
+        if (marker.markerId != const MarkerId('driver_location') || _driverBreathingIcons.isEmpty) return marker;
+        final motionOff = MediaQuery.of(context).disableAnimations;
+        final index = motionOff ? 0 : (phase * _driverBreathingIcons.length).floor() % _driverBreathingIcons.length;
+        return marker.copyWith(iconParam:_driverBreathingIcons[index]);
+      }).toSet(),
       myLocationEnabled: false,
       myLocationButtonEnabled: false,
       zoomControlsEnabled: false,
@@ -2082,17 +2103,17 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   /// 📍 Create driver location marker (blue circle)
-  Future<BitmapDescriptor> _createDriverLocationMarker() async {
+  Future<BitmapDescriptor> _createDriverLocationMarker({double breath = 1}) async {
     try {
-      const double size = 24.0; // حجم صغير
-      const double circleSize = 16.0; // الدائرة الرئيسية
+      const double size = 32.0;
+      final double circleSize = 15.0 + breath;
 
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
 
       // رسم الدائرة الزرقاء (اللون الثانوي للتطبيق)
       final circlePaint = Paint()
-        ..color = AppColors.secondary // اللون الثانوي الأزرق
+        ..color = AppColors.secondary.withValues(alpha: .86 + .14 * breath)
         ..style = PaintingStyle.fill;
 
       canvas.drawCircle(
