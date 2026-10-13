@@ -162,6 +162,36 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   final ValueNotifier<double> _locationWavePhase = ValueNotifier(0);
   Timer? _locationWaveTimer;
   double _locationWaveZoom = 14;
+  LatLng? _displayDriverLocation;
+  BitmapDescriptor? _driverLocationIcon;
+  StreamSubscription<Position>? _displayLocationSubscription;
+
+  LatLng get _driverMapPoint => _displayDriverLocation ??
+      const LatLng(_testLatitude, _testLongitude);
+
+  void _setDisplayDriverLocation(Position position) {
+    if (!mounted) return;
+    setState(() {
+      _displayDriverLocation = LatLng(position.latitude, position.longitude);
+      final icon = _driverLocationIcon;
+      if (icon != null) {
+        _markers.removeWhere((m) => m.markerId == const MarkerId('driver_location'));
+        _markers.add(Marker(markerId: const MarkerId('driver_location'),
+          position: _driverMapPoint, icon: icon, anchor: const Offset(.5,.5), zIndex:1000));
+      }
+    });
+  }
+
+  Future<void> _ensureDriverMapMarker() async {
+    final icon = _driverLocationIcon ?? await _createDriverLocationMarker();
+    if (!mounted) return;
+    setState(() {
+      _driverLocationIcon = icon;
+      _markers.removeWhere((m) => m.markerId == const MarkerId('driver_location'));
+      _markers.add(Marker(markerId: const MarkerId('driver_location'),
+        position:_driverMapPoint,icon:icon,anchor:const Offset(.5,.5),zIndex:1000));
+    });
+  }
 
   void _startLocationWaves() {
     _locationWaveTimer?.cancel();
@@ -172,14 +202,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   Set<Circle> _locationWaves(double phase) {
-    final metersPerPixel = 156543.03392 * math.cos(_testLatitude * math.pi / 180) /
+    final metersPerPixel = 156543.03392 * math.cos(_driverMapPoint.latitude * math.pi / 180) /
         math.pow(2, _locationWaveZoom);
     return {for (var i = 0; i < 3; i++)
       Circle(circleId: CircleId('driver_wave_$i'),
-        center: const LatLng(_testLatitude, _testLongitude),
+        center: _driverMapPoint,
         radius: (9 + ((phase + i / 3) % 1) * 27) * metersPerPixel,
-        strokeWidth: 2,
-        strokeColor: AppColors.primary.withValues(alpha: .5 * (1 - ((phase + i / 3) % 1))),
+        strokeWidth: 3,
+        strokeColor: AppColors.primary.withValues(alpha: .75 * (1 - ((phase + i / 3) % 1))),
         fillColor: Colors.transparent, zIndex: 1,
         consumeTapEvents: false)};
   }
@@ -307,7 +337,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if(state==AppLifecycleState.resumed){_startLocationWaves();}else{_locationWaveTimer?.cancel();}
+    if(state==AppLifecycleState.resumed){_startLocationWaves();_displayLocationSubscription?.resume();}else{_locationWaveTimer?.cancel();_displayLocationSubscription?.pause();}
 
     print('📱 App lifecycle changed: $state');
 
@@ -1022,6 +1052,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       );
 
       if (mounted) {
+        // Display GPS on the map only; keep staging dispatch test coordinates unchanged.
+        _setDisplayDriverLocation(position);
+        _displayLocationSubscription ??= Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(accuracy:LocationAccuracy.high,distanceFilter:5),
+        ).listen(_setDisplayDriverLocation,onError:(Object _) {});
         // 🧪 للاختبار: استخدام الإحداثيات الثابتة بدلاً من GPS الفعلي
         // TODO: بعد الاختبار، أعد تفعيل GPS بإلغاء التعليق على السطر التالي وحذف الكود الثابت
         // _currentPosition = position;
@@ -1768,7 +1803,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   Widget _buildMapView() {
     return ValueListenableBuilder<double>(valueListenable:_locationWavePhase, builder:(context,phase,_)=>GoogleMap(
-      circles: MediaQuery.of(context).disableAnimations ? {} : _locationWaves(phase),
+      circles: _locationWaves(MediaQuery.of(context).disableAnimations ? .2 : phase),
       onCameraMove:(position){_locationWaveZoom=position.zoom;},
       initialCameraPosition: const CameraPosition(
         target: LatLng(
@@ -1778,7 +1813,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         zoom: 14,
       ),
       markers: _markers,
-      myLocationEnabled: true,
+      myLocationEnabled: false,
       myLocationButtonEnabled: false,
       zoomControlsEnabled: false,
       mapType: MapType.normal, // خريطة شوارع عادية
@@ -1790,6 +1825,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       mapToolbarEnabled: false,
       onMapCreated: (controller) {
         _mapController = controller;
+        unawaited(_ensureDriverMapMarker());
         _loadMapData();
       },
     ));
@@ -2243,11 +2279,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
     // 📍 إضافة marker لموقع السائق الحالي
     try {
-      final driverIcon = await _createDriverLocationMarker();
+      final driverIcon = _driverLocationIcon ?? await _createDriverLocationMarker();
+      _driverLocationIcon = driverIcon;
       _markers.add(
         Marker(
           markerId: const MarkerId('driver_location'),
-          position: const LatLng(_testLatitude, _testLongitude),
+          position: _driverMapPoint,
           icon: driverIcon,
           anchor: const Offset(0.5, 0.5),
           zIndex: 1000, // أعلى من باقي الـ markers
@@ -3259,6 +3296,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   void dispose() {
     _locationWaveTimer?.cancel();
     _locationWavePhase.dispose();
+    _displayLocationSubscription?.cancel();
     try {
       print('🧹 Disposing SparkHomeSimpleArabic resources...');
 
