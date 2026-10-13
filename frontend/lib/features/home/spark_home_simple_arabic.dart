@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:http/http.dart' as http;
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -158,6 +159,30 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   // Google Maps
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
+  final ValueNotifier<double> _locationWavePhase = ValueNotifier(0);
+  Timer? _locationWaveTimer;
+  double _locationWaveZoom = 14;
+
+  void _startLocationWaves() {
+    _locationWaveTimer?.cancel();
+    _locationWaveTimer = Timer.periodic(const Duration(milliseconds: 120), (_) {
+      if (!mounted || WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+      _locationWavePhase.value = (_locationWavePhase.value + .05) % 1;
+    });
+  }
+
+  Set<Circle> _locationWaves(double phase) {
+    final metersPerPixel = 156543.03392 * math.cos(_testLatitude * math.pi / 180) /
+        math.pow(2, _locationWaveZoom);
+    return {for (var i = 0; i < 3; i++)
+      Circle(circleId: CircleId('driver_wave_$i'),
+        center: const LatLng(_testLatitude, _testLongitude),
+        radius: (9 + ((phase + i / 3) % 1) * 27) * metersPerPixel,
+        strokeWidth: 2,
+        strokeColor: AppColors.primary.withValues(alpha: .5 * (1 - ((phase + i / 3) % 1))),
+        fillColor: Colors.transparent, zIndex: 1,
+        consumeTapEvents: false)};
+  }
   MapDataResponse? _mapData;
   bool _isLoadingMapData = false;
 
@@ -182,6 +207,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   @override
   void initState() {
     super.initState();
+    _startLocationWaves();
     try {
       print('🚀 Initializing SparkHomeSimpleArabic...');
 
@@ -281,6 +307,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
+    if(state==AppLifecycleState.resumed){_startLocationWaves();}else{_locationWaveTimer?.cancel();}
 
     print('📱 App lifecycle changed: $state');
 
@@ -1740,7 +1767,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   Widget _buildMapView() {
-    return GoogleMap(
+    return ValueListenableBuilder<double>(valueListenable:_locationWavePhase, builder:(context,phase,_)=>GoogleMap(
+      circles: MediaQuery.of(context).disableAnimations ? {} : _locationWaves(phase),
+      onCameraMove:(position){_locationWaveZoom=position.zoom;},
       initialCameraPosition: const CameraPosition(
         target: LatLng(
           _testLatitude,
@@ -1763,7 +1792,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         _mapController = controller;
         _loadMapData();
       },
-    );
+    ));
   }
 
   /// Load map data from backend API
@@ -3228,6 +3257,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   @override
   void dispose() {
+    _locationWaveTimer?.cancel();
+    _locationWavePhase.dispose();
     try {
       print('🧹 Disposing SparkHomeSimpleArabic resources...');
 
