@@ -23,7 +23,9 @@ const h3 = require('h3-js');
 const axios = require('axios');
 
 const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
-const dynamodb = DynamoDBDocumentClient.from(client);
+const {driverRequestContext,driverLifecycleClient,beginDriverUpload}=require('./driver-lifecycle');
+const rawDynamodb = DynamoDBDocumentClient.from(client);
+const dynamodb = driverLifecycleClient(rawDynamodb);
 const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 
 const DRIVERS_TABLE = process.env.DRIVER_TABLE;
@@ -824,7 +826,8 @@ async function proxyWalletRequest(event, httpMethod, walletPath, corsHeaders) {
 /**
  * Main Lambda handler
  */
-exports.handler = async (event) => {
+exports.handler = event => driverRequestContext.run({}, () => handleRequest(event));
+const handleRequest = async (event) => {
   console.log('📨 Driver API v2 - Request:', {path:event.path||event.rawPath,method:event.httpMethod||event.requestContext?.http?.method,requestId:event.requestContext?.requestId});
 
   const httpMethod = event.httpMethod || event.requestContext?.http?.method;
@@ -851,6 +854,7 @@ exports.handler = async (event) => {
 
   // Primary stable driver identity is Cognito `sub`
   let cognitoUsername = jwtClaims?.sub;
+  driverRequestContext.getStore().sub = cognitoUsername;
   const driverIdFallbacks = buildDriverIdFallbacks(jwtClaims);
 
   console.log('🧩 Driver identity:', {
@@ -1457,6 +1461,7 @@ function isProfileComplete(profile) {
  * Body: { documentType, fileName, contentType, fileData, phoneNumber? }
  */
 async function uploadDriverDocument(username, fallbackDriverIds, accessToken, body, headers) {
+  let finishUpload;
   if (!username) {
     return {
       statusCode: 401,
@@ -1490,8 +1495,11 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
     // Ensure profile exists so subsequent PUT /driver/me doesn't 404.
     await ensureProfileExists(username, fallbackDriverIds, accessToken);
 
+    finishUpload = await beginDriverUpload(rawDynamodb, username);
+
     const now = new Date().toISOString();
     const safeFileName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (!['driving_license','registration_paper','national_id'].includes(documentType)) throw new Error('Invalid document type');
     const key = `drivers/${username}/${documentType}/${now}_${safeFileName}`;
     const buffer = Buffer.from(String(fileData), 'base64');
 
@@ -1543,6 +1551,11 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
       headers,
       body: JSON.stringify({ success: false, message: 'فشل رفع المستند', error: error.message }),
     };
+  } finally {
+    if (finishUpload) {
+      try { await finishUpload(); }
+      catch (_) { console.error('Document upload operation requires reconciliation'); }
+    }
   }
 }
 

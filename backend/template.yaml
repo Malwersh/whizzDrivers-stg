@@ -163,6 +163,20 @@ Resources:
         - DynamoDBReadPolicy:
             TableName: WhizzMerchants_BusinessWorkingHours
         - Statement:
+            - Sid: DriverAccountLifecycleFence
+              Effect: Allow
+              Action: [dynamodb:ConditionCheckItem]
+              Resource: arn:aws:dynamodb:us-east-1:699561669180:table/staging-AccountDeletion
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ['ACCOUNT_LIFECYCLE#DRIVER#*']
+            - Sid: DriverDocumentOperations
+              Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:DeleteItem]
+              Resource: arn:aws:dynamodb:us-east-1:699561669180:table/staging-AccountDeletion
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ['ACCOUNT_OPERATION#DRIVER#*']
             - Sid: InvokeWaveSystem
               Effect: Allow
               Action:
