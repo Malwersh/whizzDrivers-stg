@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/logging/auth_logger.dart';
 import '../services/driver_service.dart';
+import 'session_validation_policy.dart';
 
 /// AWS Cognito authentication service for user registration and login
 class CognitoAuthService {
@@ -54,6 +55,10 @@ class CognitoAuthService {
     try {
       final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
       if (session.isSignedIn) {
+        // Read live identity; cached tokens can outlive account deletion.
+        await Amplify.Auth.fetchUserAttributes();
+        final tokens = session.userPoolTokensResult.valueOrNull;
+        if (tokens != null) await _saveToken(tokens.accessToken.raw);
         debugPrint('🔐 CognitoAuthService: Valid session found');
       } else {
         debugPrint('🔐 CognitoAuthService: No valid session, clearing cache');
@@ -63,13 +68,16 @@ class CognitoAuthService {
         await prefs.remove('driver_profile_status');
       }
     } catch (e) {
-      // If we can't validate session, clear cached data to force re-authentication
-      debugPrint('❌ CognitoAuthService: Session validation failed: $e');
-      debugPrint('🧹 CognitoAuthService: Clearing cached auth data');
+      // Never expose a cached identity before live validation. A temporary
+      // network error leaves persisted credentials intact for recovery.
       _authToken = null;
       _lastKnownProfileStatus = null;
-      await prefs.remove('cognito_auth_token');
-      await prefs.remove('driver_profile_status');
+      if (definitiveSessionRejection(e.runtimeType.toString())) {
+        await prefs.remove('cognito_auth_token');
+        await prefs.remove('driver_profile_status');
+      }
+      debugPrint('Cognito session unavailable; cached identity remains inactive');
+
     }
 
     debugPrint(

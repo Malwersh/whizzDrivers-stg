@@ -16,7 +16,8 @@ function loadApi(send) {
     return realRequire(name);
   } };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8') + '\nexports.testHooks = { getDriverTrips, startSearching, acceptWaveOffer, updateDriverProfile, handler: exports.handler };', sandbox);
-  return sandbox.exports.testHooks;
+  const {driverRequestContext}=realRequire('./driver-lifecycle');
+  return Object.fromEntries(Object.entries(sandbox.exports.testHooks).map(([name,fn])=>[name,name==='handler'?fn:(...args)=>driverRequestContext.run({sub:args[0]},()=>fn(...args))]));
 }
 
 test('profile completion never substitutes for approval; suspension takes precedence', () => {
@@ -63,7 +64,7 @@ test('mobile profile update cannot grant approval or change availability', async
   let update;
   const api = loadApi(async command => {
     if (command.constructor.name === 'GetCommand') return { Item: { driverId: 'd', status: 'ACTIVE' } };
-    update = command.input;
+    update = command.input.TransactItems?.find(item=>item.Update)?.Update || command.input;
     return { Attributes: { status: 'PENDING_REVIEW' } };
   });
   await api.updateDriverProfile('d', [], null, { name: 'Driver', city: 'Najaf', vehicleType: 'car', licenseNumber: '123', nationalId: '456', status: 'APPROVED', isActive: true, isOnline: true, isVerified: true }, {});
@@ -89,10 +90,12 @@ test('simplified profile submits three documents and enters review without ID nu
   const body={profileSchemaVersion:2,vehicleType:'motorcycle',name:'سائق اختبار',governorate_id:'g',work_region_id:'work',home_address_text:'قرب المدرسة',drivingLicenseUrl:prefix+'driving_license/photo.jpg',registrationPaperUrl:prefix+'registration_paper/photo.jpg',nationalIdUrl:prefix+'national_id/photo.jpg'};
   const response=await api.updateDriverProfile('d',[],'token',body,{});
   assert.equal(response.statusCode,200);
-  const update=calls.find(c=>c.constructor.name==='UpdateCommand').input;
+  const transaction=calls.find(c=>c.constructor.name==='TransactWriteCommand');
+  const update=transaction.input.TransactItems.find(item=>item.Update).Update;
+  assert.equal(transaction.input.TransactItems[0].ConditionCheck.Key.pk,'ACCOUNT_LIFECYCLE#DRIVER#d');
   assert.equal(update.ExpressionAttributeValues[':pendingReview'],'PENDING_REVIEW');
   assert.equal(Object.values(update.ExpressionAttributeNames).includes('licenseNumber'),false);
   calls.length=0;
   assert.equal((await api.updateDriverProfile('d',[],'token',{...body,governorate_id:'other'},{})).statusCode,400);
-  assert.equal(calls.some(c=>c.constructor.name==='UpdateCommand'),false);
+  assert.equal(calls.some(c=>['UpdateCommand','TransactWriteCommand'].includes(c.constructor.name)),false);
 });

@@ -7,6 +7,8 @@ import '../../providers/driver_auth_provider.dart' as driver_auth;
 import '../../services/phone_otp_auth_service.dart';
 import '../../utils/iraqi_phone.dart';
 import '../../services/profile_completion_service.dart';
+import '../../services/account_deletion_service.dart';
+import '../../features/more/screens/delete_account_screen.dart';
 
 /// Staging pilot. The existing login stays available until migration is complete.
 class PhoneOtpLoginScreen extends ConsumerStatefulWidget {
@@ -25,6 +27,7 @@ class _PhoneOtpLoginScreenState extends ConsumerState<PhoneOtpLoginScreen> {
   bool _sent = false;
   int _cooldown = 0;
   String? _message;
+  final Future<bool> _savedDeletionReceipt = AccountDeletionService.hasSavedReceipt();
 
   @override
   void dispose() {
@@ -175,6 +178,17 @@ class _PhoneOtpLoginScreenState extends ConsumerState<PhoneOtpLoginScreen> {
                           onPressed:
                               _busy ? null : () => context.go('/login-legacy'),
                           child: const Text('ربط أو استعادة حساب سابق')),
+                      FutureBuilder<bool>(
+                        future: _savedDeletionReceipt,
+                        builder: (context, snapshot) => snapshot.data == true
+                            ? TextButton(
+                                onPressed: _busy ? null : () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(builder: (_) => const DeleteAccountScreen()),
+                                ),
+                                child: const Text('متابعة طلب حذف الحساب'),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
                       if (_busy)
                         const Center(child: CircularProgressIndicator()),
                       if (_message != null)

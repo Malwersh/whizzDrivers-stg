@@ -51,7 +51,8 @@ class PushNotificationsService {
   static bool isWalletEvent(Map<String, dynamic> data) =>
       data['type'] == 'wallet_topup_approved' ||
       data['type'] == 'wallet_topup_rejected' ||
-      data['type'] == 'wallet_sandbox_payment_succeeded';
+      data['type'] == 'wallet_sandbox_payment_succeeded' ||
+      data['type'] == 'wallet_transfer_completed';
   static StreamSubscription<String>? _tokenRefreshSub;
   static StreamSubscription<dynamic>? _authHubSub;
   static FutureOr<void> Function(RemoteMessage message)? _onNotificationTap;

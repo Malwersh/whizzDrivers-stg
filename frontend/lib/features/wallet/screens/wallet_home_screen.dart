@@ -1,3 +1,4 @@
+import 'wallet_transfer_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../design_system/app_colors.dart';
@@ -102,7 +103,13 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
   ) {
     return ListView(
       children: [
-        BalanceCard(balance: balance),
+        BalanceCard(
+            balance: balance,
+            onTransfer: () async {
+              await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const WalletTransferScreen()));
+              if (mounted) await _refresh();
+            }),
         const SizedBox(height: 16),
         MinimumBalanceIndicator(balance: balance),
 

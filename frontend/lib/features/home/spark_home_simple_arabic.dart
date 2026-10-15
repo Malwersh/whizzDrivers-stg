@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:http/http.dart' as http;
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -158,6 +159,76 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   // Google Maps
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
+  final ValueNotifier<double> _locationWavePhase = ValueNotifier(0);
+  Timer? _locationWaveTimer;
+  double _locationWaveZoom = 14;
+  LatLng? _displayDriverLocation;
+  BitmapDescriptor? _driverLocationIcon;
+  final List<BitmapDescriptor> _driverBreathingIcons = [];
+  StreamSubscription<Position>? _displayLocationSubscription;
+
+  LatLng get _driverMapPoint => _displayDriverLocation ??
+      const LatLng(_testLatitude, _testLongitude);
+
+  void _setDisplayDriverLocation(Position position) {
+    if (!mounted) return;
+    setState(() {
+      _displayDriverLocation = LatLng(position.latitude, position.longitude);
+      final icon = _driverLocationIcon;
+      if (icon != null) {
+        _markers.removeWhere((m) => m.markerId == const MarkerId('driver_location'));
+        _markers.add(Marker(markerId: const MarkerId('driver_location'),
+          position: _driverMapPoint, icon: icon, anchor: const Offset(.5,.5), zIndex:1000));
+      }
+    });
+  }
+
+  Future<void> _ensureDriverMapMarker() async {
+    if (_driverBreathingIcons.isEmpty) {
+      for (var i = 0; i < 16; i++) {
+        final breath = (1 - math.cos(2 * math.pi * i / 16)) / 2;
+        _driverBreathingIcons.add(await _createDriverLocationMarker(breath: breath));
+        if (!mounted) return;
+      }
+    }
+    final icon = _driverLocationIcon ?? _driverBreathingIcons.first;
+    if (!mounted) return;
+    setState(() {
+      _driverLocationIcon = icon;
+      _markers.removeWhere((m) => m.markerId == const MarkerId('driver_location'));
+      _markers.add(Marker(markerId: const MarkerId('driver_location'),
+        position:_driverMapPoint,icon:icon,anchor:const Offset(.5,.5),zIndex:1000));
+    });
+  }
+
+  void _startLocationWaves() {
+    _locationWaveTimer?.cancel();
+    _locationWaveTimer = Timer.periodic(const Duration(milliseconds: 120), (_) {
+      if (!mounted || WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+      _locationWavePhase.value = (_locationWavePhase.value + .05) % 1;
+    });
+  }
+
+  Set<Circle> _locationWaves(double phase) {
+    final metersPerPixel = 156543.03392 * math.cos(_driverMapPoint.latitude * math.pi / 180) /
+        math.pow(2, _locationWaveZoom);
+    final breath = (1 - math.cos(2 * math.pi * phase)) / 2;
+    final wave = Curves.easeOut.transform(phase);
+    final fade = math.sin(math.pi * phase);
+    return {
+      Circle(circleId: const CircleId('driver_location_halo'),
+        center:_driverMapPoint,radius:(12 + breath * 2)*metersPerPixel,
+        strokeWidth:0,strokeColor:Colors.transparent,
+        fillColor:AppColors.primary.withValues(alpha:.1 + breath*.04),
+        zIndex:1,consumeTapEvents:false),
+      Circle(circleId: const CircleId('driver_location_wave'),
+        center:_driverMapPoint,radius:(12 + wave*24)*metersPerPixel,
+        strokeWidth:1,
+        strokeColor:AppColors.primary.withValues(alpha:.28*fade),
+        fillColor:AppColors.primary.withValues(alpha:.025*fade),
+        zIndex:2,consumeTapEvents:false),
+    };
+  }
   MapDataResponse? _mapData;
   bool _isLoadingMapData = false;
 
@@ -182,6 +253,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   @override
   void initState() {
     super.initState();
+    _startLocationWaves();
     try {
       print('🚀 Initializing SparkHomeSimpleArabic...');
 
@@ -281,6 +353,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
+    if(state==AppLifecycleState.resumed){_startLocationWaves();_displayLocationSubscription?.resume();}else{_locationWaveTimer?.cancel();_displayLocationSubscription?.pause();}
 
     print('📱 App lifecycle changed: $state');
 
@@ -995,6 +1068,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       );
 
       if (mounted) {
+        // Display GPS on the map only; keep staging dispatch test coordinates unchanged.
+        _setDisplayDriverLocation(position);
+        _displayLocationSubscription ??= Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(accuracy:LocationAccuracy.high,distanceFilter:5),
+        ).listen(_setDisplayDriverLocation,onError:(Object _) {});
         // 🧪 للاختبار: استخدام الإحداثيات الثابتة بدلاً من GPS الفعلي
         // TODO: بعد الاختبار، أعد تفعيل GPS بإلغاء التعليق على السطر التالي وحذف الكود الثابت
         // _currentPosition = position;
@@ -1740,7 +1818,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   Widget _buildMapView() {
-    return GoogleMap(
+    return ValueListenableBuilder<double>(valueListenable:_locationWavePhase, builder:(context,phase,_)=>GoogleMap(
+      circles: _locationWaves(MediaQuery.of(context).disableAnimations ? .2 : phase),
+      onCameraMove:(position){_locationWaveZoom=position.zoom;},
       initialCameraPosition: const CameraPosition(
         target: LatLng(
           _testLatitude,
@@ -1748,8 +1828,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         ),
         zoom: 14,
       ),
-      markers: _markers,
-      myLocationEnabled: true,
+      markers: _markers.map((marker) {
+        if (marker.markerId != const MarkerId('driver_location') || _driverBreathingIcons.isEmpty) return marker;
+        final motionOff = MediaQuery.of(context).disableAnimations;
+        final index = motionOff ? 0 : (phase * _driverBreathingIcons.length).floor() % _driverBreathingIcons.length;
+        return marker.copyWith(iconParam:_driverBreathingIcons[index]);
+      }).toSet(),
+      myLocationEnabled: false,
       myLocationButtonEnabled: false,
       zoomControlsEnabled: false,
       mapType: MapType.normal, // خريطة شوارع عادية
@@ -1761,9 +1846,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       mapToolbarEnabled: false,
       onMapCreated: (controller) {
         _mapController = controller;
+        unawaited(_ensureDriverMapMarker());
         _loadMapData();
       },
-    );
+    ));
   }
 
   /// Load map data from backend API
@@ -2017,17 +2103,17 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   /// 📍 Create driver location marker (blue circle)
-  Future<BitmapDescriptor> _createDriverLocationMarker() async {
+  Future<BitmapDescriptor> _createDriverLocationMarker({double breath = 1}) async {
     try {
-      const double size = 24.0; // حجم صغير
-      const double circleSize = 16.0; // الدائرة الرئيسية
+      const double size = 32.0;
+      final double circleSize = 15.0 + breath;
 
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
 
       // رسم الدائرة الزرقاء (اللون الثانوي للتطبيق)
       final circlePaint = Paint()
-        ..color = AppColors.secondary // اللون الثانوي الأزرق
+        ..color = AppColors.secondary.withValues(alpha: .86 + .14 * breath)
         ..style = PaintingStyle.fill;
 
       canvas.drawCircle(
@@ -2214,11 +2300,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
     // 📍 إضافة marker لموقع السائق الحالي
     try {
-      final driverIcon = await _createDriverLocationMarker();
+      final driverIcon = _driverLocationIcon ?? await _createDriverLocationMarker();
+      _driverLocationIcon = driverIcon;
       _markers.add(
         Marker(
           markerId: const MarkerId('driver_location'),
-          position: const LatLng(_testLatitude, _testLongitude),
+          position: _driverMapPoint,
           icon: driverIcon,
           anchor: const Offset(0.5, 0.5),
           zIndex: 1000, // أعلى من باقي الـ markers
@@ -3228,6 +3315,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   @override
   void dispose() {
+    _locationWaveTimer?.cancel();
+    _locationWavePhase.dispose();
+    _displayLocationSubscription?.cancel();
     try {
       print('🧹 Disposing SparkHomeSimpleArabic resources...');
 

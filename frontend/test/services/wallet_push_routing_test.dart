@@ -11,7 +11,8 @@ void main() {
     for (final type in [
       'wallet_topup_approved',
       'wallet_topup_rejected',
-      'wallet_sandbox_payment_succeeded'
+      'wallet_sandbox_payment_succeeded',
+      'wallet_transfer_completed'
     ]) {
       await PushNotificationsService.stashPendingTabFromTap(
           RemoteMessage(data: {'type': type}));

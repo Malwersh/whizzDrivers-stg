@@ -9,6 +9,7 @@ import '../../../design_system/app_colors.dart';
 import '../../../models/driver_profile.dart';
 import '../../../services/driver_service.dart';
 import '../../../widgets/gradient_border_container.dart';
+import 'delete_account_screen.dart';
 
 class AccountDetailsScreen extends StatefulWidget {
   const AccountDetailsScreen({super.key});
@@ -860,7 +861,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                   title: 'Delete Account',
                   icon: Icons.delete_outline,
                   color: AppColors.error,
-                  onTap: () => _showDeleteAccountDialog(),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const DeleteAccountScreen())),
                 ),
               ),
             ],
@@ -1089,174 +1090,5 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
     );
   }
 
-  void _showDeleteAccountDialog() {
-    final passwordController = TextEditingController();
-    String? selectedReason;
-    final reasons = [
-      'Found a better opportunity',
-      'App is difficult to use',
-      'Low earnings',
-      'Safety concerns',
-      'Moving to different city',
-      'Other',
-    ];
 
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text(
-            'Delete Account',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: AppColors.error,
-            ),
-          ),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Are you sure you want to delete your account? This action cannot be undone.',
-                  style: TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  'Please tell us why you\'re leaving:',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: selectedReason,
-                  hint: const Text('Select a reason'),
-                  decoration: InputDecoration(
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                  ),
-                  items: reasons
-                      .map(
-                        (reason) => DropdownMenuItem(
-                          value: reason,
-                          child: Text(reason),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => setState(() => selectedReason = value),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: passwordController,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: 'Enter your password to confirm',
-                    prefixIcon: const Icon(
-                      Icons.lock_outline,
-                      color: AppColors.error,
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: AppColors.error),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text(
-                'Cancel',
-                style: TextStyle(color: AppColors.textSecondary),
-              ),
-            ),
-            TextButton(
-              onPressed: () async {
-                if (selectedReason == null) {
-                  _showErrorSnackBar('Please select a reason');
-                  return;
-                }
-
-                if (passwordController.text.isEmpty) {
-                  _showErrorSnackBar('Please enter your password');
-                  return;
-                }
-
-                // Use local variable for context safety
-                final parentContext = context;
-                Navigator.pop(parentContext);
-
-                // Show confirmation dialog
-                final confirmed = await showDialog<bool>(
-                  context: parentContext,
-                  builder: (dialogContext) => AlertDialog(
-                    title: const Text(
-                      'Final Confirmation',
-                      style: TextStyle(color: AppColors.error),
-                    ),
-                    content: const Text(
-                      'This will permanently delete your account and all associated data. Are you absolutely sure?',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(dialogContext, false),
-                        child: const Text('No, Keep Account'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(dialogContext, true),
-                        style: TextButton.styleFrom(
-                          foregroundColor: AppColors.error,
-                        ),
-                        child: const Text('Yes, Delete Account'),
-                      ),
-                    ],
-                  ),
-                );
-
-                if (confirmed == true) {
-                  final success = await DriverService.deleteAccount(
-                    password: passwordController.text,
-                    reason: selectedReason!,
-                  );
-
-                  if (!parentContext.mounted) return;
-                  if (success) {
-                    _showSuccessSnackBar('Account deleted successfully');
-                    // Navigate to login screen or exit app
-                    Navigator.of(parentContext)
-                        .popUntil((route) => route.isFirst);
-                  } else {
-                    _showErrorSnackBar(
-                      'Failed to delete account. Please check your password.',
-                    );
-                  }
-                }
-              },
-              style: TextButton.styleFrom(foregroundColor: AppColors.error),
-              child: const Text(
-                'Delete Account',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
