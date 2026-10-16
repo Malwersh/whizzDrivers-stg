@@ -1,3 +1,4 @@
+import '../services/financial_order_actions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -63,7 +64,9 @@ class _AtRestaurantScreenState extends ConsumerState<AtRestaurantScreen> {
         orderId: widget.order.orderId,
         onUnassign: (reason) async {
           // استدعاء API فك الارتباط
-          final result = await DriverService.unassignActiveOrder(reason);
+          final result = widget.order.financialAssignment != null
+              ? await FinancialOrderActions().send(widget.order.orderId, 'financial-unassign', widget.order.financialAssignment!, reason: reason)
+              : await DriverService.unassignActiveOrder(reason);
           
           if (result['success'] == true) {
             if (mounted) {

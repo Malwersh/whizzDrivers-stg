@@ -4006,6 +4006,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       final result = await DriverSearchApiService.acceptWaveOffer(
         offerId: waveOffer.offerId,
         driverId: driverId,
+        financialOrderId: waveOffer.financialTerms != null ? waveOffer.orderId : null,
+        financialWaveNumber: waveOffer.financialTerms != null ? waveOffer.waveNumber : null,
       );
 
       print('📡 acceptWaveOffer API response:');
@@ -4557,6 +4559,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         final result = await DriverSearchApiService.rejectWaveOffer(
           offerId: waveOffer.offerId,
           driverId: driverId,
+          financialOrderId: waveOffer.financialTerms != null ? waveOffer.orderId : null,
+          financialWaveNumber: waveOffer.financialTerms != null ? waveOffer.waveNumber : null,
           reason: 'driver_declined',
         );
 

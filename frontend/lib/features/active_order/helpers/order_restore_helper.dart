@@ -7,6 +7,7 @@ import '../screens/heading_to_restaurant_screen.dart';
 import '../screens/at_restaurant_screen.dart';
 import '../screens/heading_to_customer_screen.dart';
 import '../screens/at_customer_screen.dart';
+import '../screens/return_order_screen.dart';
 
 /// Helper للتحقق من واستعادة الطلب النشط عند فتح التطبيق
 class OrderRestoreHelper {
@@ -98,6 +99,11 @@ class OrderRestoreHelper {
         screen = AtCustomerScreen(order: order);
         break;
         
+      case 'returning':
+      case 'return_arrived':
+        screen = ReturnOrderScreen(order: order);
+        break;
+      case 'returned':
       case 'delivered':
       case 'completed':
         // الطلب مكتمل، مسح البيانات المحلية
@@ -285,6 +291,12 @@ class OrderRestoreHelper {
       case 'at_customer':
       case 'arrived_at_customer':
         return 'وصلت للعميل';
+      case 'returning':
+        return 'إرجاع الطلب للفرع';
+      case 'return_arrived':
+        return 'بانتظار تأكيد استلام الفرع';
+      case 'returned':
+        return 'تم إرجاع الطلب';
       case 'delivered':
         return 'تم التسليم';
       case 'completed':

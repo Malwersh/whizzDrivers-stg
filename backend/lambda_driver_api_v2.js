@@ -293,6 +293,15 @@ function normalizeMoneyToIqd(rawAmount, referenceAmount = null) {
 }
 
 function normalizeOrderPricingToIqd(order) {
+  // This writer has a verified fixed scale. Never infer its unit from magnitude.
+  if (order?.currency === 'IQD' && order?.createdBy === 'wizzuser_app' && order?.pricing) {
+    return {
+      goodsSubtotal: order.pricing.goodsSubtotal != null ? toNumber(order.pricing.goodsSubtotal) / 1000 : toNumber(order.subtotal),
+      deliveryFee: order.pricing.deliveryFee != null ? toNumber(order.pricing.deliveryFee) / 1000 : toNumber(order.deliveryFee),
+      tip: toNumber(order.pricing.tip) / 1000,
+      total: order.pricing.total != null ? toNumber(order.pricing.total) / 1000 : toNumber(order.total ?? order.totalAmount),
+    };
+  }
   const rawOrderTotal = toNumber(order?.total ?? order?.totalAmount ?? 0, 0);
 
   const goodsSubtotal = normalizeMoneyToIqd(
@@ -826,7 +835,16 @@ async function proxyWalletRequest(event, httpMethod, walletPath, corsHeaders) {
 /**
  * Main Lambda handler
  */
-exports.handler = event => driverRequestContext.run({}, () => handleRequest(event));
+exports.handler = event => driverRequestContext.run({}, async () => {
+  const response = await handleRequest(event);
+  if (typeof response?.body === 'string') {
+    try {
+      const privateFields = new Set(['financialSnapshot','commercialPricing','financialAcceptance']);
+      response.body = JSON.stringify(JSON.parse(response.body), (key,value) => privateFields.has(key) ? undefined : value);
+    } catch (_) { /* Preserve non-JSON responses. */ }
+  }
+  return response;
+});
 const handleRequest = async (event) => {
   console.log('📨 Driver API v2 - Request:', {path:event.path||event.rawPath,method:event.httpMethod||event.requestContext?.http?.method,requestId:event.requestContext?.requestId});
 
@@ -958,6 +976,18 @@ const handleRequest = async (event) => {
     if (path === '/driver/accept-wave-offer' || path.endsWith('/driver/accept-wave-offer')) {
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
+        if (String(body.offerId || '').startsWith('FINO:')) {
+          try {
+            const {invokeFinancialAcceptance} = require('./financial-accept-client');
+            const accepted = await invokeFinancialAcceptance(body, bearerToken);
+            return {statusCode:200,headers:corsHeaders,body:JSON.stringify(accepted)};
+          } catch (error) {
+            const candidate = error.code || error.message;
+            const code = ['UNAUTHORIZED','FINANCIAL_DISPATCH_DISABLED','INVALID_FINANCIAL_ACCEPTANCE','FINANCIAL_ACCEPTANCE_CONFLICT','INSUFFICIENT_BALANCE','DRIVER_WALLET_UNAVAILABLE'].includes(candidate) ? candidate : 'FINANCIAL_ACCEPTANCE_UNAVAILABLE';
+            return {statusCode:code === 'UNAUTHORIZED' ? 401 : 409,headers:corsHeaders,
+              body:JSON.stringify({success:false,code,message:'تعذر تأكيد القبول؛ حدّث الطلب وأعد المحاولة'})};
+          }
+        }
         return await acceptWaveOffer(cognitoUsername, body, corsHeaders);
       }
     }
@@ -966,6 +996,15 @@ const handleRequest = async (event) => {
     if (path === '/driver/reject-wave-offer' || path.endsWith('/driver/reject-wave-offer')) {
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
+        if (String(body.offerId || '').startsWith('FINO:')) {
+          try {
+            const {invokeFinancialAcceptance} = require('./financial-accept-client');
+            const declined = await invokeFinancialAcceptance({offerId:body.offerId,orderId:body.orderId,waveNumber:body.waveNumber,driverId:body.driverId},bearerToken,true);
+            return {statusCode:200,headers:corsHeaders,body:JSON.stringify(declined)};
+          } catch (_) {
+            return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_DECLINE_UNAVAILABLE'})};
+          }
+        }
         return await rejectWaveOffer(cognitoUsername, body, corsHeaders);
       }
     }
@@ -1061,12 +1100,35 @@ const handleRequest = async (event) => {
       }
     }
 
+    const financialUnassignPath=path.match(/\/driver\/orders\/([^/]+)\/financial-unassign$/);
+    if(financialUnassignPath&&httpMethod==='POST') {
+      try {
+        const body=JSON.parse(event.body||'{}');
+        if(!body||Array.isArray(body)||typeof body!=='object'||Object.keys(body).some(k=>!['offerId','attempt','cashCollected','reason'].includes(k)))throw Error('INVALID_COD_ASSIGNMENT');
+        const {invokeFinancialUnassign}=require('./financial-accept-client');
+        const result=await invokeFinancialUnassign({...body,orderId:financialUnassignPath[1]},bearerToken);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_ASSIGNMENT_UNAVAILABLE',message:'تعذر تأكيد فك الإسناد؛ حدّث الطلب قبل إعادة المحاولة'})};}
+    }
+
+    // Financial return: original credential is verified again by the sole money writer.
+    const returnPath=path.match(/\/driver\/orders\/([^/]+)\/(request-return|arrive-return)$/);
+    if(returnPath&&httpMethod==='POST') {
+      try {
+        const body=JSON.parse(event.body||'{}');
+        if(!body||Array.isArray(body)||typeof body!=='object'||Object.keys(body).some(k=>!['offerId','attempt','reason','cashCollected','returnId'].includes(k)))throw Error('INVALID_COD_RETURN');
+        const {invokeFinancialReturn}=require('./financial-accept-client');
+        const result=await invokeFinancialReturn({...body,orderId:returnPath[1]},bearerToken,returnPath[2]==='request-return'?'request_return':'arrive_return');
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_RETURN_UNAVAILABLE',message:'تعذر تأكيد حالة العودة؛ حدّث الطلب قبل إعادة المحاولة'})};}
+    }
+
     // Deliver order
     if (path.match(/^\/driver\/orders\/[^/]+\/deliver$/) || path.match(/\/driver\/orders\/[^/]+\/deliver$/)) {
       const orderId = path.split('/').slice(-2)[0];
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
-        return await deliverOrder(cognitoUsername, orderId, body, corsHeaders);
+        return await deliverOrder(cognitoUsername, orderId, body, corsHeaders, bearerToken);
       }
     }
 
@@ -3852,7 +3914,12 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     }
     
     const order = orderResult.Item;
-    const normalizedPricing = normalizeOrderPricingToIqd(order);
+    if (Object.prototype.hasOwnProperty.call(order, 'financialSnapshot')) {
+      return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,
+        code:'FINANCIAL_OFFER_REQUIRED',message:'يحتاج هذا الطلب إلى عرضه المالي المعتمد'})};
+    }
+    const financialPricing = Object.prototype.hasOwnProperty.call(order,'financialSnapshot') ? require('./financial-order-view').financialOrderPricing(order) : null;
+    const normalizedPricing = financialPricing || normalizeOrderPricingToIqd(order);
 
     // ✅ استخراج holdAmount من goodsSubtotal (قيمة الطلب فقط - بدون رسوم التوصيل والتِب)
     // holdAmount = قيمة المنتجات فقط (للمنصة)
@@ -4420,7 +4487,8 @@ async function getOrderById(driverId, orderId, corsHeaders) {
     }
     
     // Format response to match ActiveOrder model
-    const normalizedPricing = normalizeOrderPricingToIqd(order);
+    const financialPricing = Object.prototype.hasOwnProperty.call(order,'financialSnapshot') ? require('./financial-order-view').financialOrderPricing(order) : null;
+    const normalizedPricing = financialPricing || normalizeOrderPricingToIqd(order);
 
     const response = {
       orderId: order.orderId,
@@ -4452,8 +4520,10 @@ async function getOrderById(driverId, orderId, corsHeaders) {
       items: order.items || [],
       specialInstructions: order.specialInstructions || order.notes,
       
+      ...(financialPricing ? {financialAssignment:{offerId:order.financialAcceptance.offerId,attempt:order.assignmentAttemptCounter,returnId:order.returnCaseId||null,returnStatus:order.returnStatus||null},driverEarnings:financialPricing.driverEarnings,holdId:order.holdId,holdStatus:order.holdStatus,holdAmount:financialPricing.holdRequiredAmount} : {}),
       // Pricing breakdown (NEW - for frontend display)
       pricing: {
+        ...(financialPricing || {}),
         goodsSubtotal: normalizedPricing.goodsSubtotal,
         deliveryFee: normalizedPricing.deliveryFee,
         tip: normalizedPricing.tip,
@@ -5054,7 +5124,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
  * POST /driver/orders/:orderId/deliver
  * Body: { cashCollected?: number, deliveryNotes?: string }
  */
-async function deliverOrder(driverId, orderId, body, corsHeaders) {
+async function deliverOrder(driverId, orderId, body, corsHeaders, accessToken) {
   try {
     console.log(`✅ Driver ${driverId} delivering order ${orderId}`, body);
     
@@ -5079,6 +5149,16 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
     }
     
     if (order.driverId !== driverId) return {statusCode:403,headers:corsHeaders,body:JSON.stringify({success:false,message:'الطلب غير مسند لهذا السائق'})};
+    if (Object.prototype.hasOwnProperty.call(order,'financialSnapshot')) {
+      try {
+        const pricing=require('./financial-order-view').financialOrderPricing(order);
+        if(body.cashAmount!==undefined&&body.cashAmount!==pricing.total)throw Error('COD_CASH_CONFIRMATION_MISMATCH');
+        const {invokeFinancialCompletion}=require('./financial-accept-client');
+        const result=await invokeFinancialCompletion({orderId,driverId,cashCollected:body.cashCollected===true},accessToken);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_COMPLETION_UNAVAILABLE',message:'تعذر تأكيد التسليم والتسوية؛ حدّث الطلب قبل إعادة المحاولة'})};}
+    }
+
     if (['delivered','completed'].includes(order.status)) {await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,message:'تم تسجيل التوصيل مسبقًا',data:{orderId,holdCaptured:order.holdStatus==='CAPTURED'}})};}
     if (!['picked_up','heading_to_customer','arrived_at_customer'].includes(order.status)) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,message:'حالة الطلب لا تسمح بإكمال التوصيل'})};
     let captureResult=null;
@@ -5128,7 +5208,7 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId AND #status = :originalStatus'
+      ConditionExpression: 'attribute_not_exists(financialSnapshot) AND driverId = :driverId AND #status = :originalStatus'
     }));
     await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);
     // 💰 CAPTURE HOLD if exists and is ACTIVE
@@ -5388,6 +5468,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
       };
     }
     
+    if (Object.prototype.hasOwnProperty.call(orderResult.Item,'financialSnapshot')) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_RETURN_REQUIRED',message:'يلزم مسار العودة المعتمد؛ الحجز باقٍ حتى تأكيد الإرجاع'})};
     const customerUnreachableAttempts = (orderResult.Item.customerUnreachableAttempts || 0) + 1;
     
     // Update order
@@ -5519,6 +5600,8 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
     }
     
     const order = orderResult.Item;
+    if (Object.prototype.hasOwnProperty.call(order,'financialSnapshot')) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_CANCELLATION_REQUIRED',message:'يلزم مسار الإلغاء المالي المعتمد'})};
+
     
     // Verify this order belongs to the driver
     if (order.driverId !== driverId) {
@@ -5665,7 +5748,7 @@ async function getDriverTrips(driverId, query, headers) {
     const pricing = normalizeOrderPricingToIqd(order);
     const rawTotal = toNumber(order.total ?? order.totalAmount, 0);
     const pricingTotal = toNumber(order.pricing?.total, 0);
-    const scale = rawTotal > 0 && pricingTotal / rawTotal >= 900 && pricingTotal / rawTotal <= 1100 ? 1000 : 1;
+    const scale = (order.currency === 'IQD' && order.createdBy === 'wizzuser_app') || (rawTotal > 0 && pricingTotal / rawTotal >= 900 && pricingTotal / rawTotal <= 1100) ? 1000 : 1;
     const fee = order.pricing?.deliveryFee != null ? toNumber(order.pricing.deliveryFee, 0) / scale : pricing.deliveryFee;
     const bonus = order.pricing?.waveBonus != null ? toNumber(order.pricing.waveBonus, 0) / scale : toNumber(order.waveBonus, 0);
 

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../models/active_order_model.dart';
 import '../../../providers/riverpod/active_order_provider.dart';
 import '../widgets/customer_unavailable_dialog.dart';
+import 'return_order_screen.dart';
 import '../services/order_persistence_service.dart';
 
 /// شاشة عند العميل - المرحلة 4 (التسليم النهائي)
@@ -47,6 +48,10 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
   }
 
   void _showUnavailableDialog() {
+    if (widget.order.financialAssignment != null) {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => ReturnOrderScreen(order: widget.order)));
+      return;
+    }
     showDialog(
       context: context,
       builder: (context) => CustomerUnavailableDialog(

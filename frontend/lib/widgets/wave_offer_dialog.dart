@@ -369,6 +369,11 @@ class _WaveOfferDialogState extends State<WaveOfferDialog>
           widget.offer.restaurantName,
           valueColor: const Color(0xFF00296B),
         ),
+        if (widget.offer.financialTerms != null) ...[
+          _buildDetailRow(Icons.payments_outlined,'النقد المطلوب من الزبون','${widget.offer.orderTotal.toStringAsFixed(3)} د.ع'),
+          _buildDetailRow(Icons.lock_outline,'الحجز من المحفظة','${widget.offer.holdRequiredAmount!.toStringAsFixed(3)} د.ع'),
+          _buildDetailRow(Icons.favorite_border,'الإكرامية ضمن إجمالي الاستحقاق','${widget.offer.tip.toStringAsFixed(3)} د.ع'),
+        ],
         const Divider(height: 24),
         _buildDetailRow(
           Icons.location_on,
@@ -399,8 +404,8 @@ class _WaveOfferDialogState extends State<WaveOfferDialog>
         const Divider(height: 24),
         _buildDetailRow(
           Icons.attach_money,
-          'الأرباح',
-          '${widget.offer.estimatedEarnings.toStringAsFixed(0)} د.ع',
+          widget.offer.financialTerms != null ? 'إجمالي الاستحقاق' : 'الأرباح',
+          '${widget.offer.estimatedEarnings.toStringAsFixed(widget.offer.financialTerms != null ? 3 : 0)} د.ع',
           valueColor: Colors.green,
           valueBold: true,
         ),

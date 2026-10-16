@@ -14,3 +14,14 @@ test('acceptance cannot reuse another driver hold',async()=>{const x=acceptSetup
 function cancellationSetup(status='accepted',owner='d'){const src=fs.readFileSync('backend/lambda_driver_api_v2.js','utf8'),start=src.indexOf('async function cancelOrderByDriver('),end=src.indexOf('\nasync function ',start+20);const order={driverId:owner,status,holdStatus:'ACTIVE'};let calls=0,cleanups=0;class GetCommand{constructor(input){this.input=input;}}class UpdateCommand{constructor(input){this.input=input;}}const context={console:{log(){},error(){},warn(){}},GetCommand,UpdateCommand,ORDERS_TABLE:'orders',DRIVER_LIVE_STATE_TABLE:'live',DRIVER_PERFORMANCE_METRICS_TABLE:'metrics',dynamodb:{send:async c=>c instanceof GetCommand?{Item:{...order}}:{}},cleanupFinishedOrder:async()=>{cleanups++;},callOrderService:async()=>{calls++;order.status='canceled_by_driver';throw Error('response lost');}};vm.runInNewContext(src.slice(start,end<0?undefined:end)+'\nglobalThis.cancel=cancelOrderByDriver;',context);return {run:()=>context.cancel('d','o',{reason:'test'},{}),get calls(){return calls;},get cleanups(){return cleanups;}};}
 test('lost cancellation response recovers durable cancellation and repeated requests avoid another call',async()=>{const x=cancellationSetup();assert.equal((await x.run()).statusCode,200);assert.equal((await x.run()).statusCode,200);assert.equal(x.calls,1);assert.equal(x.cleanups,2);});
 test('cancellation never clears another driver live state',async()=>{const x=cancellationSetup('accepted','other');assert.equal((await x.run()).statusCode,403);assert.equal(x.calls,0);assert.equal(x.cleanups,0);});
+test('financial delivery delegates once with original token and never runs legacy capture, cleanup or metrics',async()=>{
+ const src=fs.readFileSync('backend/lambda_driver_api_v2.js','utf8'),start=src.indexOf('async function deliverOrder('),end=src.indexOf('\nasync function ',start+20);let calls=0;
+ class GetCommand{constructor(input){this.input=input;}}
+ const ctx={console:{log(){},warn(){},error(){}},GetCommand,ORDERS_TABLE:'orders',getDriverInfo:async()=>null,
+  dynamodb:{async send(c){assert.ok(c instanceof GetCommand);return {Item:{driverId:'d',financialSnapshot:{},status:'picked_up'}};}},
+  require(name){if(name==='./financial-order-view')return {financialOrderPricing:()=>({total:14500})};
+   assert.equal(name,'./financial-accept-client');return {async invokeFinancialCompletion(body,token){calls++;assert.equal(token,'live-token');assert.equal(body.orderId,'o');assert.equal(body.cashCollected,true);return {success:true,kind:'COD_COMPLETION',orderId:'o'};}};}};
+ vm.runInNewContext(src.slice(start,end)+'\nglobalThis.deliver=deliverOrder;',ctx);
+ assert.equal((await ctx.deliver('d','o',{cashCollected:true,cashAmount:14500},{},'live-token')).statusCode,200);assert.equal(calls,1);
+ assert.equal((await ctx.deliver('d','o',{cashCollected:true,cashAmount:1},{},'live-token')).statusCode,409);assert.equal(calls,1);
+});

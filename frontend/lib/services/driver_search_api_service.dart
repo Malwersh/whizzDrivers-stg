@@ -138,6 +138,8 @@ class DriverSearchApiService {
   static Future<Map<String, dynamic>> acceptWaveOffer({
     required String offerId,
     required String driverId,
+    String? financialOrderId,
+    int? financialWaveNumber,
   }) async {
     try {
       // Get auth token
@@ -149,7 +151,7 @@ class DriverSearchApiService {
       
       // Prepare request body
       // Extract orderId from offerId (format: OFFER_{orderId}_{driverId}_W{waveNumber})
-      String? orderId;
+      String? orderId = financialOrderId;
       if (offerId.startsWith('OFFER_')) {
         final parts = offerId.split('_');
         if (parts.length >= 3) {
@@ -161,6 +163,7 @@ class DriverSearchApiService {
         'offerId': offerId,
         'driverId': driverId,
         if (orderId != null) 'orderId': orderId,
+        if (financialWaveNumber != null) 'waveNumber': financialWaveNumber,
       };
       
       print('🌊 Sending accept-wave-offer request:');
@@ -222,6 +225,8 @@ class DriverSearchApiService {
     required String offerId,
     required String driverId,
     String? reason,
+    String? financialOrderId,
+    int? financialWaveNumber,
   }) async {
     try {
       // Get auth token
@@ -232,7 +237,7 @@ class DriverSearchApiService {
       }
       
       // Extract orderId from offerId (format: OFFER_{orderId}_{driverId}_W{waveNumber})
-      String? orderId;
+      String? orderId = financialOrderId;
       if (offerId.startsWith('OFFER_')) {
         final parts = offerId.split('_');
         if (parts.length >= 3) {
@@ -245,6 +250,7 @@ class DriverSearchApiService {
         'offerId': offerId,
         'driverId': driverId,
         if (orderId != null) 'orderId': orderId,
+        if (financialWaveNumber != null) 'waveNumber': financialWaveNumber,
         'reason': reason ?? 'driver_declined',
       };
       

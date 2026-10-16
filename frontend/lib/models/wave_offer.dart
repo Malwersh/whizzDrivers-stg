@@ -109,6 +109,7 @@ class WaveOffer {
   final String? customerPhone;
   
   // ===== المبالغ =====
+  final Map<String, dynamic>? financialTerms;
   final double orderTotal;           // مجموع الطلب
   final double deliveryFee;          // أجرة التوصيل الأساسية
   final double bonusAmount;          // المكافأة (البونص) من الموجة
@@ -163,6 +164,7 @@ class WaveOffer {
     this.tip = 0,
     required this.estimatedEarnings,
     this.holdRequiredAmount,
+    this.financialTerms,
     required this.currency,
     required this.distance,
     required this.estimatedMinutes,
@@ -177,6 +179,37 @@ class WaveOffer {
   });
 
   factory WaveOffer.fromJson(Map<String, dynamic> json) {
+    if (json['kind'] == 'DRIVER_OFFER_PROPOSAL') {
+      double amount(String field) {
+        final value = json[field];
+        if (value is! Map || value['currency'] != 'IQD' || value['scale'] != 1000 ||
+            value['moneySchemaVersion'] != 1 || value['minorAmount'] is! int ||
+            value['minorAmount'] < 0 || value['minorAmount'] > 9007199254740991) {
+          throw const FormatException('Invalid financial offer money');
+        }
+        return value['minorAmount'] / 1000.0;
+      }
+      if (json['schemaVersion'] != 1 || json['paymentMethod'] != 'COD' ||
+          json['waveNumber'] is! int || json['waveNumber'] < 1 ||
+          json['offerDigest'] is! String || !RegExp(r'^[a-f0-9]{64}$').hasMatch(json['offerDigest']) ||
+          json['offerId'] is! String || !(json['offerId'] as String).startsWith('FINO:')) {
+        throw const FormatException('Invalid financial offer');
+      }
+      for (final field in ['driverCashRetained','laterWalletEarningCredit','laterWalletTipCredit']) { amount(field); }
+      if ((amount('driverEarning') + amount('driverTip') - amount('driverTotalEntitlement')).abs() > 0.00001) {
+        throw const FormatException('Inconsistent financial offer entitlement');
+      }
+      final pickup = json['pickupLocation'] as Map<String, dynamic>;
+      return WaveOffer(offerId:json['offerId'],orderId:json['orderId'],jobId:'',waveNumber:json['waveNumber'],rank:1,score:0,
+        restaurantId:json['branchId'],restaurantName:'استلام الطلب',restaurantAddress:'',
+        restaurantLat:(pickup['latitude'] as num).toDouble(),restaurantLng:(pickup['longitude'] as num).toDouble(),
+        customerId:'',customerName:'',customerAddress:json['deliveryZoneId'],customerLat:0,customerLng:0,
+        orderTotal:amount('customerCashToCollect'),deliveryFee:amount('driverEarning'),tip:amount('driverTip'),
+        estimatedEarnings:amount('driverTotalEntitlement'),holdRequiredAmount:amount('driverWalletHold'),currency:'IQD',
+        distance:(json['totalDistanceMeters'] as num)/1000,estimatedMinutes:((json['totalDurationSeconds'] as num)/60).ceil(),
+        itemsCount:0,items:[],sentAt:DateTime.parse(json['createdAt']),expiresAt:DateTime.parse(json['expiresAt']),
+        financialTerms:Map<String,dynamic>.unmodifiable(json));
+    }
     // Parse items list
     List<OrderItem> itemsList = [];
     if (json['items'] != null && json['items'] is List) {
@@ -263,6 +296,7 @@ class WaveOffer {
   }
 
   Map<String, dynamic> toJson() {
+    if (financialTerms != null) return Map<String,dynamic>.from(financialTerms!);
     return {
       'offerId': offerId,
       'orderId': orderId,

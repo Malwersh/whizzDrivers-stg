@@ -1147,6 +1147,7 @@ class WebSocketService extends ChangeNotifier {
           break;
 
         // 🌊 WAVE SYSTEM OFFERS (Priority-Based Dispatch)
+        case 'financial_wave_offer':
         case 'new_wave_offer':
         case 'wave_offer':
           debugPrint('🌊🌊🌊 WAVE OFFER RECEIVED! 🌊🌊🌊');
@@ -1325,6 +1326,8 @@ class WebSocketService extends ChangeNotifier {
     }
   }
 
+  final Set<String> _financialOfferEvents = <String>{};
+
   /// 🌊 Handle Wave Offer from Wave System (Priority-Based)
   void _handleWaveOffer(Map<String, dynamic> json) {
     try {
@@ -1354,6 +1357,10 @@ class WebSocketService extends ChangeNotifier {
       // Convert to WaveOffer model
       try {
         final waveOffer = WaveOffer.fromJson(offerData);
+        if (waveOffer.financialTerms != null) {
+          if (!waveOffer.expiresAt.isAfter(DateTime.now()) || !_financialOfferEvents.add(waveOffer.offerId)) return;
+          if (_financialOfferEvents.length > 250) _financialOfferEvents.remove(_financialOfferEvents.first);
+        }
         debugPrint('✅ WaveOffer created successfully!');
         debugPrint('   📋 Offer ID: ${waveOffer.offerId}');
         debugPrint('   🌊 Wave Number: ${waveOffer.waveNumber}');
