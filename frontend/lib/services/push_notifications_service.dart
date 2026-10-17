@@ -12,7 +12,9 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/environment.dart';
+import 'offer_closure_inbox.dart';
 
+@pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // Required on background isolate
   try {
@@ -51,7 +53,9 @@ class PushNotificationsService {
   static bool isWalletEvent(Map<String, dynamic> data) =>
       data['type'] == 'wallet_topup_approved' ||
       data['type'] == 'wallet_topup_rejected' ||
-      data['type'] == 'wallet_sandbox_payment_succeeded';
+      data['type'] == 'wallet_sandbox_payment_succeeded' ||
+      data['type'] == 'wallet_transfer_completed' ||
+      data['type'] == 'wallet_cod_lifecycle';
   static StreamSubscription<String>? _tokenRefreshSub;
   static StreamSubscription<dynamic>? _authHubSub;
   static FutureOr<void> Function(RemoteMessage message)? _onNotificationTap;
@@ -123,13 +127,18 @@ class PushNotificationsService {
     });
 
     _foregroundSub?.cancel();
-    _foregroundSub = FirebaseMessaging.onMessage.listen((message) {
+    _foregroundSub = FirebaseMessaging.onMessage.listen((message) async {
+      if (OfferClosureInbox.isClosure(message.data)) {
+        try { await OfferClosureInbox.record(message.data); } catch (_) { /* Resume rechecks persisted events. */ }
+        return;
+      }
       if (isWalletEvent(message.data)) _walletEvents.add(message);
       if (isProfileEvent(message.data)) _profileEvents.add(message);
     });
 
     // Handle notification taps (background -> foreground)
     FirebaseMessaging.onMessageOpenedApp.listen((message) async {
+      if (OfferClosureInbox.isClosure(message.data)) await stashWaveOfferFromTap(message);
       if (isProfileEvent(message.data)) _profileEvents.add(message);
       debugPrint(
           '📲 Push tap (onMessageOpenedApp) data keys: ${message.data.keys.toList()}');
@@ -143,6 +152,7 @@ class PushNotificationsService {
     // Handle notification that opened the app from terminated state
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
+      if (OfferClosureInbox.isClosure(initialMessage.data)) await stashWaveOfferFromTap(initialMessage);
       debugPrint(
           '📲 Push tap (getInitialMessage) data keys: ${initialMessage.data.keys.toList()}');
       debugPrint(
@@ -239,6 +249,12 @@ class PushNotificationsService {
   }
 
   static Future<void> _unregisterSignedOutDevice() async {
+    try {
+      await OfferClosureInbox.clear();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_pendingWaveOfferKey);
+      await prefs.remove(_pendingTabIndexKey);
+    } catch (_) { /* Token unregister must still run if local cleanup fails. */ }
     final token = _lastKnownFcmToken;
     final idToken = _lastRegistrationIdToken;
     _tokenRegistered = false;
@@ -325,6 +341,10 @@ class PushNotificationsService {
   static Future<void> stashWaveOfferFromTap(RemoteMessage message) async {
     try {
       final data = message.data;
+      if (OfferClosureInbox.isClosure(data)) {
+        await OfferClosureInbox.record(data);
+        return;
+      }
       final type = (data['type'] ?? '').toString().trim();
 
       String pick(List<String> keys) {
@@ -344,10 +364,12 @@ class PushNotificationsService {
       // Accept the stash as long as identifiers exist.
       if (offerId.isEmpty || orderId.isEmpty) return;
 
+      if (type.isNotEmpty && !const ['new_wave_offer', 'wave_offer', 'priority_order_offer'].contains(type)) return;
       final effectiveType = type.isEmpty ? 'new_wave_offer' : type;
 
       final payload = <String, dynamic>{
         'type': effectiveType,
+        'cycleId': pick(['cycleId', 'dispatchCycleId']),
         'action': pick(['action']),
         'driverId': pick(['driverId', 'driver_id', 'subjectId', 'subject_id']),
         'offerId': offerId,
@@ -364,6 +386,10 @@ class PushNotificationsService {
         'customerAddress': pick(['customerAddress', 'customer_address']),
         'deliveryFee': pick(['deliveryFee', 'delivery_fee']),
         'bonusAmount': pick(['bonusAmount', 'bonus_amount']),
+        'tip': pick(['tip']),
+        'holdRequiredAmount': pick(['holdRequiredAmount']),
+        'moneyUnit': pick(['moneyUnit']),
+        'legacySourceVersion': pick(['legacySourceVersion']),
         'orderTotal':
             pick(['orderTotal', 'order_total', 'orderValue', 'order_value']),
         'estimatedEarnings': pick(['estimatedEarnings', 'estimated_earnings']),
@@ -376,6 +402,9 @@ class PushNotificationsService {
         'tappedAt': DateTime.now().toIso8601String(),
       };
 
+      for (final field in ['tip', 'holdRequiredAmount', 'moneyUnit', 'legacySourceVersion']) {
+        if (payload[field] == null || payload[field] == '') payload.remove(field);
+      }
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_pendingWaveOfferKey, jsonEncode(payload));
       debugPrint(
@@ -442,6 +471,10 @@ class PushNotificationsService {
       await prefs.remove(_pendingWaveOfferKey);
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
+        if (OfferClosureInbox.isClosure(decoded)) {
+          await OfferClosureInbox.record(decoded);
+          return null;
+        }
         debugPrint('✅ [Consume] Successfully decoded stashed wave offer');
         return decoded;
       }

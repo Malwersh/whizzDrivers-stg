@@ -324,7 +324,7 @@ class ActiveOrderService {
       // إذا تم تمرير cashCollected (المبلغ)، نرسل:
       // 1. cashCollected: true (تأكيد الاستلام)
       // 2. cashAmount: المبلغ الفعلي
-      if (cashCollected != null && cashCollected > 0) {
+      if (cashCollected != null && cashCollected >= 0) {
         body['cashCollected'] = true;
         body['cashAmount'] = cashCollected;
       } else {

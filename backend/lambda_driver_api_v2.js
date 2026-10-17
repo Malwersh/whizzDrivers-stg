@@ -1,3 +1,4 @@
+const {cleanupFinishedOrder}=require('./order-live-cleanup');
 const { registrationOptions, validateRegistration } = require('./registration-regions');
 /**
  * Enhanced Driver API Lambda Function
@@ -22,7 +23,9 @@ const h3 = require('h3-js');
 const axios = require('axios');
 
 const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
-const dynamodb = DynamoDBDocumentClient.from(client);
+const {driverRequestContext,driverLifecycleClient,beginDriverUpload}=require('./driver-lifecycle');
+const rawDynamodb = DynamoDBDocumentClient.from(client);
+const dynamodb = driverLifecycleClient(rawDynamodb);
 const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 
 const DRIVERS_TABLE = process.env.DRIVER_TABLE;
@@ -75,7 +78,7 @@ async function callOrderService(orderId, canceledBy, reason, requestedBy) {
       reason,
       requestedBy
     }, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer '+await getServiceToken() },
       timeout: 10000
     });
     
@@ -111,7 +114,7 @@ async function callOrderServiceUnassign(orderId, driverId, reason, requestedBy) 
       reason,
       requestedBy
     }, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer '+await getServiceToken() },
       timeout: 10000
     });
     
@@ -290,6 +293,15 @@ function normalizeMoneyToIqd(rawAmount, referenceAmount = null) {
 }
 
 function normalizeOrderPricingToIqd(order) {
+  // This writer has a verified fixed scale. Never infer its unit from magnitude.
+  if (order?.currency === 'IQD' && order?.createdBy === 'wizzuser_app' && order?.pricing) {
+    return {
+      goodsSubtotal: order.pricing.goodsSubtotal != null ? toNumber(order.pricing.goodsSubtotal) / 1000 : toNumber(order.subtotal),
+      deliveryFee: order.pricing.deliveryFee != null ? toNumber(order.pricing.deliveryFee) / 1000 : toNumber(order.deliveryFee),
+      tip: toNumber(order.pricing.tip) / 1000,
+      total: order.pricing.total != null ? toNumber(order.pricing.total) / 1000 : toNumber(order.total ?? order.totalAmount),
+    };
+  }
   const rawOrderTotal = toNumber(order?.total ?? order?.totalAmount ?? 0, 0);
 
   const goodsSubtotal = normalizeMoneyToIqd(
@@ -508,7 +520,7 @@ async function getServiceToken() {
  * @param {number} assignmentAttempt - Wave number for reassignment scenarios
  * @returns {Promise<{holdId: string, status: string, amount: number}>}
  */
-async function createWalletHold(driverId, amount, orderId, assignmentAttempt) {
+async function createWalletHold(driverId, amount, orderId, assignmentAttempt, pinnedDispatchAttemptId) {
   try {
     console.log('💰 Creating wallet Hold:');
     console.log('   - Driver ID:', driverId);
@@ -543,7 +555,8 @@ async function createWalletHold(driverId, amount, orderId, assignmentAttempt) {
         metadata: {
           source: 'driver-api',
           timestamp: new Date().toISOString(),
-          waveNumber: assignmentAttempt
+          waveNumber: assignmentAttempt,
+          ...(pinnedDispatchAttemptId?{pinnedDispatchAttemptId}:{})
         }
       })
     });
@@ -590,13 +603,22 @@ async function createWalletHold(driverId, amount, orderId, assignmentAttempt) {
  * @param {string} orderId - Order ID for idempotency
  * @returns {Promise<{success: boolean, message: string}>}
  */
-async function releaseWalletHold(holdId, reason, orderId) {
+async function releaseWalletHold(holdId, reason, orderId, sourceDriverId) {
   try {
     console.log('🔓 Releasing wallet Hold:');
     console.log('   - Hold ID:', holdId);
     console.log('   - Reason:', reason);
     console.log('   - Order ID:', orderId);
     
+    if(reason==='WAVE_ACCEPT_FAILED'){
+      const {Item:order}=await dynamodb.send(new GetCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},ConsistentRead:true}));
+      if(!order)throw new Error('ORDER_NOT_FOUND_FOR_RELEASE_REVIEW');
+      if(order.driverId===sourceDriverId)throw new Error('ASSIGNMENT_CONFIRMED_RELEASE_REQUIRES_REVIEW');
+      await dynamodb.send(new UpdateCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},UpdateExpression:'SET walletReleaseIntents = if_not_exists(walletReleaseIntents, :empty)',ConditionExpression:'attribute_exists(PK)',ExpressionAttributeValues:{':empty':{}}}));
+      await dynamodb.send(new UpdateCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},UpdateExpression:'SET walletReleaseIntents.#hold = :intent',ConditionExpression:'#status = :status AND '+(order.driverId?'driverId = :driver':'attribute_not_exists(driverId)'),ExpressionAttributeNames:{'#hold':holdId,'#status':'status'},ExpressionAttributeValues:{':intent':{reason,requestedAt:new Date().toISOString()},':status':order.status,...(order.driverId?{':driver':order.driverId}:{})}}));
+      // Worker releases with an atomic order snapshot guard, so a late successful assignment is not charged/refunded incorrectly.
+      throw new Error('HOLD_RELEASE_QUEUED');
+    }
     // Get service authentication token
     const token = await getServiceToken();
     
@@ -814,8 +836,18 @@ async function proxyWalletRequest(event, httpMethod, walletPath, corsHeaders) {
 /**
  * Main Lambda handler
  */
-exports.handler = async (event) => {
-  console.log('📨 Driver API v2 - Event:', JSON.stringify(event, null, 2));
+exports.handler = event => driverRequestContext.run({}, async () => {
+  const response = await handleRequest(event);
+  if (typeof response?.body === 'string') {
+    try {
+      const privateFields = new Set(['financeRollout','financialSnapshot','commercialPricing','financialAcceptance']);
+      response.body = JSON.stringify(JSON.parse(response.body), (key,value) => privateFields.has(key) ? undefined : value);
+    } catch (_) { /* Preserve non-JSON responses. */ }
+  }
+  return response;
+});
+const handleRequest = async (event) => {
+  console.log('📨 Driver API v2 - Request:', {path:event.path||event.rawPath,method:event.httpMethod||event.requestContext?.http?.method,requestId:event.requestContext?.requestId});
 
   const httpMethod = event.httpMethod || event.requestContext?.http?.method;
   const path = event.path || event.rawPath || '';
@@ -841,6 +873,7 @@ exports.handler = async (event) => {
 
   // Primary stable driver identity is Cognito `sub`
   let cognitoUsername = jwtClaims?.sub;
+  driverRequestContext.getStore().sub = cognitoUsername;
   const driverIdFallbacks = buildDriverIdFallbacks(jwtClaims);
 
   console.log('🧩 Driver identity:', {
@@ -944,7 +977,19 @@ exports.handler = async (event) => {
     if (path === '/driver/accept-wave-offer' || path.endsWith('/driver/accept-wave-offer')) {
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
-        return await acceptWaveOffer(cognitoUsername, body, corsHeaders);
+        if (String(body.offerId || '').startsWith('FINO:')) {
+          try {
+            const {invokeFinancialAcceptance} = require('./financial-accept-client');
+            const accepted = await invokeFinancialAcceptance(body, bearerToken);
+            return {statusCode:200,headers:corsHeaders,body:JSON.stringify(accepted)};
+          } catch (error) {
+            const candidate = error.code || error.message;
+            const code = ['UNAUTHORIZED','FINANCIAL_DISPATCH_DISABLED','INVALID_FINANCIAL_ACCEPTANCE','FINANCIAL_ACCEPTANCE_CONFLICT','INSUFFICIENT_BALANCE','DRIVER_WALLET_UNAVAILABLE'].includes(candidate) ? candidate : 'FINANCIAL_ACCEPTANCE_UNAVAILABLE';
+            return {statusCode:code === 'UNAUTHORIZED' ? 401 : 409,headers:corsHeaders,
+              body:JSON.stringify({success:false,code,message:'تعذر تأكيد القبول؛ حدّث الطلب وأعد المحاولة'})};
+          }
+        }
+        return await acceptWaveOffer(cognitoUsername, body, corsHeaders, bearerToken);
       }
     }
 
@@ -952,7 +997,16 @@ exports.handler = async (event) => {
     if (path === '/driver/reject-wave-offer' || path.endsWith('/driver/reject-wave-offer')) {
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
-        return await rejectWaveOffer(cognitoUsername, body, corsHeaders);
+        if (String(body.offerId || '').startsWith('FINO:')) {
+          try {
+            const {invokeFinancialAcceptance} = require('./financial-accept-client');
+            const declined = await invokeFinancialAcceptance({offerId:body.offerId,orderId:body.orderId,waveNumber:body.waveNumber,driverId:body.driverId},bearerToken,true);
+            return {statusCode:200,headers:corsHeaders,body:JSON.stringify(declined)};
+          } catch (_) {
+            return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_DECLINE_UNAVAILABLE'})};
+          }
+        }
+        return await rejectWaveOffer(cognitoUsername, body, corsHeaders, bearerToken);
       }
     }
 
@@ -1047,12 +1101,35 @@ exports.handler = async (event) => {
       }
     }
 
+    const financialUnassignPath=path.match(/\/driver\/orders\/([^/]+)\/financial-unassign$/);
+    if(financialUnassignPath&&httpMethod==='POST') {
+      try {
+        const body=JSON.parse(event.body||'{}');
+        if(!body||Array.isArray(body)||typeof body!=='object'||Object.keys(body).some(k=>!['offerId','attempt','cashCollected','reason'].includes(k)))throw Error('INVALID_COD_ASSIGNMENT');
+        const {invokeFinancialUnassign}=require('./financial-accept-client');
+        const result=await invokeFinancialUnassign({...body,orderId:financialUnassignPath[1]},bearerToken);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_ASSIGNMENT_UNAVAILABLE',message:'تعذر تأكيد فك الإسناد؛ حدّث الطلب قبل إعادة المحاولة'})};}
+    }
+
+    // Financial return: original credential is verified again by the sole money writer.
+    const returnPath=path.match(/\/driver\/orders\/([^/]+)\/(request-return|arrive-return)$/);
+    if(returnPath&&httpMethod==='POST') {
+      try {
+        const body=JSON.parse(event.body||'{}');
+        if(!body||Array.isArray(body)||typeof body!=='object'||Object.keys(body).some(k=>!['offerId','attempt','reason','cashCollected','returnId'].includes(k)))throw Error('INVALID_COD_RETURN');
+        const {invokeFinancialReturn}=require('./financial-accept-client');
+        const result=await invokeFinancialReturn({...body,orderId:returnPath[1]},bearerToken,returnPath[2]==='request-return'?'request_return':'arrive_return');
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_RETURN_UNAVAILABLE',message:'تعذر تأكيد حالة العودة؛ حدّث الطلب قبل إعادة المحاولة'})};}
+    }
+
     // Deliver order
     if (path.match(/^\/driver\/orders\/[^/]+\/deliver$/) || path.match(/\/driver\/orders\/[^/]+\/deliver$/)) {
       const orderId = path.split('/').slice(-2)[0];
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
-        return await deliverOrder(cognitoUsername, orderId, body, corsHeaders);
+        return await deliverOrder(cognitoUsername, orderId, body, corsHeaders, bearerToken);
       }
     }
 
@@ -1447,6 +1524,7 @@ function isProfileComplete(profile) {
  * Body: { documentType, fileName, contentType, fileData, phoneNumber? }
  */
 async function uploadDriverDocument(username, fallbackDriverIds, accessToken, body, headers) {
+  let finishUpload;
   if (!username) {
     return {
       statusCode: 401,
@@ -1480,8 +1558,11 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
     // Ensure profile exists so subsequent PUT /driver/me doesn't 404.
     await ensureProfileExists(username, fallbackDriverIds, accessToken);
 
+    finishUpload = await beginDriverUpload(rawDynamodb, username);
+
     const now = new Date().toISOString();
     const safeFileName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (!['driving_license','registration_paper','national_id'].includes(documentType)) throw new Error('Invalid document type');
     const key = `drivers/${username}/${documentType}/${now}_${safeFileName}`;
     const buffer = Buffer.from(String(fileData), 'base64');
 
@@ -1533,6 +1614,11 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
       headers,
       body: JSON.stringify({ success: false, message: 'فشل رفع المستند', error: error.message }),
     };
+  } finally {
+    if (finishUpload) {
+      try { await finishUpload(); }
+      catch (_) { console.error('Document upload operation requires reconciliation'); }
+    }
   }
 }
 
@@ -3155,7 +3241,8 @@ async function getDriverMetricsSnapshot(driverId) {
 
     const snapshot = {
       acceptanceRate: metrics.acceptanceRate || 0,
-      completionRate: metrics.completionRate || 0,
+      completionRate: metrics.completionRateStatus && metrics.completionRateStatus !== 'AVAILABLE' ? null : (metrics.completionRate || 0),
+      completionRateStatus: metrics.completionRateStatus || null,
       responseRate: metrics.responseRate || 0,
       consecutiveRejections: metrics.consecutiveRejections || 0,
       totalOffersWindow: metrics.totalOffersLast100 || 0,
@@ -3739,7 +3826,7 @@ function calculateRegionCoverageKm(stores, centerLat, centerLng) {
  * 🌊 Accept Wave Offer
  * Proxy request to WaveSystem_HandleDriverAccept Lambda
  */
-async function acceptWaveOffer(driverId, body, corsHeaders) {
+async function acceptWaveOffer(driverId, body, corsHeaders, accessToken) {
   console.log('🌊 Accept Wave Offer called');
   console.log('Driver ID from token:', driverId);
   console.log('Request body:', JSON.stringify(body, null, 2));
@@ -3810,6 +3897,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     console.log('📦 Fetching order details for Hold calculation...');
     const orderResult = await dynamodb.send(new GetCommand({
       TableName: ORDERS_TABLE,
+      ConsistentRead: true,
       Key: {
         PK: `ORDER#${orderId}`,
         SK: 'META'
@@ -3828,7 +3916,20 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     }
     
     const order = orderResult.Item;
-    const normalizedPricing = normalizeOrderPricingToIqd(order);
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(order,k))) {
+      return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,
+        code:'FINANCIAL_OFFER_REQUIRED',message:'يحتاج هذا الطلب إلى عرضه المالي المعتمد'})};
+    }
+    // Pinned cycles must not enter the old pre-hold/automatic-release wrapper.
+    const pinnedJob=await dynamodb.send(new GetCommand({TableName:'WizzDispatchJobs_staging',Key:{orderId,SK:'METADATA'},ConsistentRead:true}));
+    if(pinnedJob.Item&&Object.prototype.hasOwnProperty.call(pinnedJob.Item,'dispatchCycle')){
+      if(process.env.DISPATCH_CYCLE_MODE!=='LEGACY_RESPONSES')return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'PINNED_LEGACY_ACCEPTANCE_REQUIRES_COORDINATED_RELEASE',message:'هذا العرض يحتاج مسار القبول المنسق'})};
+      const wave=String(offerId).match(/_W([1-9][0-9]{0,3})$/);if(!wave||Number(wave[1])>1000)return {statusCode:400,headers:corsHeaders,body:JSON.stringify({success:false,code:'INVALID_PINNED_OFFER'})};
+      const result=await require('./pinned-legacy-runtime').acceptPinnedLegacyFromDriver({orderId,offerId,waveNumber:Number(wave[1])},accessToken,finalDriverId,request=>createWalletHold(request.driverId,request.amount,request.orderId,request.assignmentAttempt,request.attemptId));
+      return {statusCode:result.success?200:result.pending?202:409,headers:corsHeaders,body:JSON.stringify(result)};
+    }
+    const financialPricing = Object.prototype.hasOwnProperty.call(order,'financialSnapshot') ? require('./financial-order-view').financialOrderPricing(order) : null;
+    const normalizedPricing = financialPricing || normalizeOrderPricingToIqd(order);
 
     // ✅ استخراج holdAmount من goodsSubtotal (قيمة الطلب فقط - بدون رسوم التوصيل والتِب)
     // holdAmount = قيمة المنتجات فقط (للمنصة)
@@ -3843,6 +3944,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     
     // ✅ نثبت: هل الطلب ثابت؟ Hold التحقق الثنائي
     if (order.holdId && order.holdStatus === 'ACTIVE') {
+      if(order.driverId===finalDriverId&&['accepted','heading_to_store','arrived_at_store','picked_up','heading_to_customer','arrived_at_customer'].includes(order.status))return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,message:'تم قبول الطلب مسبقًا',data:{orderId,driverId:finalDriverId,holdId:order.holdId,holdStatus:order.holdStatus,holdAmount:order.holdAmount}})};
       console.error('❌ Order already has active holdId:', order.holdId);
       console.error('   holdStatus:', order.holdStatus);
       console.error('   holdAmount:', order.holdAmount);
@@ -4037,7 +4139,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
       // IMPORTANT: release hold to avoid orphan ACTIVE hold when accept fails
       let holdReleased = false;
       try {
-        await releaseWalletHold(holdInfo.holdId, 'WAVE_ACCEPT_FAILED', orderId);
+        await releaseWalletHold(holdInfo.holdId, 'WAVE_ACCEPT_FAILED', orderId, finalDriverId);
         holdReleased = true;
       } catch (releaseErr) {
         console.error('⚠️ Failed to release hold after WaveSystem invocation failure:', releaseErr?.message || releaseErr);
@@ -4076,9 +4178,14 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
           PK: `ORDER#${orderId}`,
           SK: 'META'
         },
-        UpdateExpression: 'SET holdId = :holdId, holdStatus = :holdStatus, holdAmount = :holdAmount, pricingFrozen = :frozen, updatedAt = :now',
+        UpdateExpression: 'SET holdId = :holdId, holdStatus = :holdStatus, holdAmount = :holdAmount, pricingFrozen = :frozen, walletFinancialStatus = :holdStatus, updatedAt = :now',
+        ConditionExpression:'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :assignedDriver AND #orderStatus <> :delivered AND #orderStatus <> :completed',
+        ExpressionAttributeNames:{'#orderStatus':'status'},
         ExpressionAttributeValues: {
           ':holdId': holdInfo.holdId,
+          ':assignedDriver': finalDriverId,
+          ':delivered':'delivered',
+          ':completed':'completed',
           ':holdStatus': holdInfo.status,
           ':holdAmount': Number(holdInfo.amount),  // ✅ تأكد من تحويله لرقم
           ':frozen': true,
@@ -4120,7 +4227,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     if (!waveSuccess || waveStatusCode >= 400) {
       let holdReleased = false;
       try {
-        await releaseWalletHold(holdInfo.holdId, 'WAVE_ACCEPT_FAILED', orderId);
+        await releaseWalletHold(holdInfo.holdId, 'WAVE_ACCEPT_FAILED', orderId, finalDriverId);
         holdReleased = true;
       } catch (releaseErr) {
         console.error('⚠️ Failed to release hold after WaveSystem non-success response:', releaseErr?.message || releaseErr);
@@ -4178,7 +4285,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
  * 🚫 Reject Wave Offer
  * Proxy request to WaveSystem_HandleDriverReject Lambda
  */
-async function rejectWaveOffer(driverId, body, corsHeaders) {
+async function rejectWaveOffer(driverId, body, corsHeaders, accessToken) {
   console.log('🚫 Reject Wave Offer called');
   console.log('Driver ID from token:', driverId);
   console.log('Request body:', JSON.stringify(body, null, 2));
@@ -4232,6 +4339,7 @@ async function rejectWaveOffer(driverId, body, corsHeaders) {
     const lambda = new LambdaClient({ region: 'us-east-1' });
     
     const payload = {
+      ...(typeof accessToken === 'string' && accessToken ? {headers:{Authorization:'Bearer '+accessToken}} : {}),
       body: JSON.stringify({
         offerId,
         driverId: finalDriverId,
@@ -4318,7 +4426,8 @@ async function getDriverMetrics(driverId, corsHeaders) {
       body: JSON.stringify({
         acceptanceRate: metrics.acceptanceRate || 0,
         responseRate: metrics.responseRate || 0,
-        completionRate: metrics.completionRate || 0,
+        completionRate: metrics.completionRateStatus && metrics.completionRateStatus !== 'AVAILABLE' ? null : (metrics.completionRate || 0),
+      completionRateStatus: metrics.completionRateStatus || null,
         totalAccepted: metrics.totalAccepted || 0,
         totalRejected: metrics.totalRejected || 0,
         totalExpired: metrics.totalExpired || 0,
@@ -4390,7 +4499,8 @@ async function getOrderById(driverId, orderId, corsHeaders) {
     }
     
     // Format response to match ActiveOrder model
-    const normalizedPricing = normalizeOrderPricingToIqd(order);
+    const financialPricing = Object.prototype.hasOwnProperty.call(order,'financialSnapshot') ? require('./financial-order-view').financialOrderPricing(order) : null;
+    const normalizedPricing = financialPricing || normalizeOrderPricingToIqd(order);
 
     const response = {
       orderId: order.orderId,
@@ -4422,8 +4532,10 @@ async function getOrderById(driverId, orderId, corsHeaders) {
       items: order.items || [],
       specialInstructions: order.specialInstructions || order.notes,
       
+      ...(financialPricing ? {financialAssignment:{offerId:order.financialAcceptance.offerId,attempt:order.assignmentAttemptCounter,returnId:order.returnCaseId||null,returnStatus:order.returnStatus||null},driverEarnings:financialPricing.driverEarnings,holdId:order.holdId,holdStatus:order.holdStatus,holdAmount:financialPricing.holdRequiredAmount} : {}),
       // Pricing breakdown (NEW - for frontend display)
       pricing: {
+        ...(financialPricing || {}),
         goodsSubtotal: normalizedPricing.goodsSubtotal,
         deliveryFee: normalizedPricing.deliveryFee,
         tip: normalizedPricing.tip,
@@ -4604,6 +4716,7 @@ async function unassignActiveOrder(driverId, body, corsHeaders) {
     
     const order = orderResult.Item;
     
+    if(!order.driverId&&order.status==='reassigning'&&(order.driverHistory||[]).some(row=>row.driverId===driverId)){await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,orderId,message:'تم فك ارتباط السائق مسبقًا',holdReleased:order.holdStatus==='RELEASED'})};}
     // Verify this order belongs to the driver
     if (order.driverId !== driverId) {
       return {
@@ -4633,32 +4746,18 @@ async function unassignActiveOrder(driverId, body, corsHeaders) {
     
     // ===== STEP 3: Call Order Service (handles Hold release + DB update + WebSocket) =====
     try {
-      const orderServiceResult = await callOrderServiceUnassign(
-        orderId,
-        driverId,
-        reason,
-        driverId
-      );
+      let orderServiceResult;
+      try{orderServiceResult=await callOrderServiceUnassign(orderId,driverId,reason,driverId);}catch(error){
+        const {Item:latest}=await dynamodb.send(new GetCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},ConsistentRead:true}));
+        if(!latest||latest.driverId||latest.status!=='reassigning'||!(latest.driverHistory||[]).some(row=>row.driverId===driverId))throw error;
+        orderServiceResult={success:true,newStatus:'reassigning',holdReleased:latest.holdStatus==='RELEASED'};
+      }
       
       console.log('✅ Order Service Unassign completed:', orderServiceResult);
       
       // ===== STEP 4: Update WizzDriverLiveState - Make driver available again =====
       console.log(`📊 Updating WizzDriverLiveState for driver ${driverId}`);
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: 'REMOVE currentOrderId, currentWaveOfferId SET #status = :status, isSearching = :searching, activeOrdersCount = if_not_exists(activeOrdersCount, :one) - :one, lastUpdated = :now',
-        ExpressionAttributeNames: {
-          '#status': 'status'
-        },
-        ConditionExpression: 'attribute_exists(driverId)',
-        ExpressionAttributeValues: {
-          ':status': 'available',
-          ':searching': true,
-          ':one': 1,
-          ':now': now
-        }
-      }));
+      await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);
       console.log('✅ Driver live state updated - Driver is now available for new orders');
       
       // ===== STEP 5: Update driver metrics (unassignment tracking) =====
@@ -4730,6 +4829,7 @@ async function unassignActiveOrder(driverId, body, corsHeaders) {
  */
 async function startHeadingToStore(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('heading_to_store');
     console.log(`🚗 Driver ${driverId} started heading to store for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4750,9 +4850,10 @@ async function startHeadingToStore(driverId, orderId, corsHeaders) {
         ':startedAt': now,
         ':updatedAt': now,
         ':updatedBy': 'driver_app',
-        ':driverId': driverId
+        ':driverId': driverId,
+        ...financeFence.values
       },
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     console.log(`✅ Order ${orderId} status updated to heading_to_store`);
@@ -4763,7 +4864,7 @@ async function startHeadingToStore(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating start heading to store:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -4779,6 +4880,7 @@ async function startHeadingToStore(driverId, orderId, corsHeaders) {
  */
 async function arriveAtStore(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('arrived_at_store');
     console.log(`🏪 Driver ${driverId} arrived at store for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4788,14 +4890,15 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
     
     // Update order status with driver info
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt';
+      ? 'SET #status = :status, orderStatus = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, orderStatus = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'arrived_at_store',
       ':arrivedAt': now,
       ':updatedAt': now,
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -4818,7 +4921,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     // Get updated order
@@ -4827,7 +4930,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating arrived at store:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -4843,6 +4946,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
  */
 async function pickupOrder(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('picked_up');
     console.log(`📦 Driver ${driverId} picked up order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4852,14 +4956,15 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
     
     // Update order status with driver info
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt';
+      ? 'SET #status = :status, orderStatus = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, orderStatus = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'picked_up',
       ':pickedUpAt': now,
       ':updatedAt': now,
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -4882,7 +4987,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     // Get updated order
@@ -4891,7 +4996,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating pickup:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update pickup status',
@@ -4907,6 +5012,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
  */
 async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('heading_to_customer');
     console.log(`🚗 Driver ${driverId} started heading to customer for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4924,7 +5030,8 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
       ':startedAt': now,
       ':updatedAt': now,
       ':updatedBy': 'driver_app',
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -4947,7 +5054,7 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     console.log(`✅ Order ${orderId} status updated to heading_to_customer`);
@@ -4958,7 +5065,7 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating start heading to customer:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -4974,6 +5081,7 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
  */
 async function arriveAtCustomer(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('arrived_at_customer');
     console.log(`🏠 Driver ${driverId} arrived at customer for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4983,14 +5091,15 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
     
     // Update order status with driver info
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt';
+      ? 'SET #status = :status, orderStatus = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, orderStatus = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'arrived_at_customer',
       ':arrivedAt': now,
       ':updatedAt': now,
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -5013,7 +5122,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     // Get updated order
@@ -5022,7 +5131,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating arrived at customer:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -5037,7 +5146,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
  * POST /driver/orders/:orderId/deliver
  * Body: { cashCollected?: number, deliveryNotes?: string }
  */
-async function deliverOrder(driverId, orderId, body, corsHeaders) {
+async function deliverOrder(driverId, orderId, body, corsHeaders, accessToken) {
   try {
     console.log(`✅ Driver ${driverId} delivering order ${orderId}`, body);
     
@@ -5049,6 +5158,7 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
     // 🔍 GET ORDER FIRST to check holdId and holdAmount
     const getOrderResult = await dynamodb.send(new GetCommand({
       TableName: ORDERS_TABLE,
+      ConsistentRead: true,
       Key: {
         PK: `ORDER#${orderId}`,
         SK: 'META'
@@ -5060,32 +5170,20 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
       throw new Error(`Order ${orderId} not found`);
     }
     
-    // 💰 CAPTURE HOLD if exists and is ACTIVE
-    let captureResult = null;
-    if (order.holdId && order.holdStatus === 'ACTIVE') {
-      console.log(`💰 Order has active hold: ${order.holdId}, capturing...`);
-      console.log(`💰 Hold Amount to capture: ${order.holdAmount} IQD`);
-      
-      captureResult = await captureWalletHold(
-        order.holdId,
-        order.holdAmount, // Capture the full hold amount (goodsSubtotal only)
-        'Order delivered successfully',
-        orderId
-      );
-      
-      if (!captureResult.success) {
-        console.error(`❌ WARNING: Failed to capture hold for order ${orderId}:`, captureResult.error);
-        // ⚠️ Continue anyway - don't block delivery, but log for manual intervention
-        // The driver delivered the order physically, we can't rollback that
-      } else {
-        console.log(`✅ Hold captured successfully: ${captureResult.capturedAmount} IQD`);
-      }
-    } else {
-      console.log(`ℹ️ No active hold to capture for order ${orderId}`);
-      console.log(`   - holdId: ${order.holdId || 'null'}`);
-      console.log(`   - holdStatus: ${order.holdStatus || 'null'}`);
+    if (order.driverId !== driverId) return {statusCode:403,headers:corsHeaders,body:JSON.stringify({success:false,message:'الطلب غير مسند لهذا السائق'})};
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(order,k))) {
+      try {
+        const pricing=require('./financial-order-view').financialOrderPricing(order);
+        if(body.cashAmount!==undefined&&body.cashAmount!==pricing.total)throw Error('COD_CASH_CONFIRMATION_MISMATCH');
+        const {invokeFinancialCompletion}=require('./financial-accept-client');
+        const result=await invokeFinancialCompletion({orderId,driverId,cashCollected:body.cashCollected===true},accessToken);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_COMPLETION_UNAVAILABLE',message:'تعذر تأكيد التسليم والتسوية؛ حدّث الطلب قبل إعادة المحاولة'})};}
     }
-    
+
+    if (['delivered','completed'].includes(order.status)) {await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,message:'تم تسجيل التوصيل مسبقًا',data:{orderId,holdCaptured:order.holdStatus==='CAPTURED'}})};}
+    if (!['picked_up','heading_to_customer','arrived_at_customer'].includes(order.status)) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,message:'حالة الطلب لا تسمح بإكمال التوصيل'})};
+    let captureResult=null;
     // ✅ Get cashCollected checkbox value from request body
     const cashCollected = body.cashCollected === true; // boolean
     const cashCollectedAmount = body.cashAmount || body.cashCollected || null; // المبلغ الفعلي
@@ -5096,8 +5194,8 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
     
     // Update order status with driver info AND hold status AND cashCollected
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, deliveredAt = :deliveredAt, cashCollected = :cashCollected, cashCollectedAmount = :cashAmount, deliveryNotes = :deliveryNotes, holdStatus = :holdStatus, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, deliveredAt = :deliveredAt, cashCollected = :cashCollected, cashCollectedAmount = :cashAmount, deliveryNotes = :deliveryNotes, holdStatus = :holdStatus, updatedAt = :updatedAt';
+      ? 'SET #status = :status, deliveredAt = :deliveredAt, cashCollected = :cashCollected, cashCollectedAmount = :cashAmount, deliveryNotes = :deliveryNotes, holdStatus = :holdStatus, walletFinancialStatus = :financialStatus, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, deliveredAt = :deliveredAt, cashCollected = :cashCollected, cashCollectedAmount = :cashAmount, deliveryNotes = :deliveryNotes, holdStatus = :holdStatus, walletFinancialStatus = :financialStatus, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'delivered',
@@ -5105,7 +5203,9 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
       ':cashCollected': cashCollected, // ← من checkbox
       ':cashAmount': cashCollectedAmount, // ← المبلغ الفعلي المستلم
       ':deliveryNotes': body.deliveryNotes || null,
-      ':holdStatus': captureResult?.success ? 'CAPTURED' : order.holdStatus, // Update hold status
+      ':holdStatus': order.holdStatus || 'NONE',
+      ':financialStatus': order.holdId && order.holdStatus==='ACTIVE'?'PENDING_CAPTURE':(order.holdStatus||'NONE'),
+      ':originalStatus': order.status,
       ':updatedAt': now,
       ':driverId': driverId
     };
@@ -5130,27 +5230,38 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :driverId AND #status = :originalStatus'
     }));
-    
-    // Update driver live state - make driver available again
-    await dynamodb.send(new UpdateCommand({
-      TableName: DRIVER_LIVE_STATE_TABLE,
-      Key: { driverId },
-      UpdateExpression: 'REMOVE currentOrderId, currentDeliveryJob SET #status = :status, isAvailable = :available, isSearching = :searching, activeOrdersCount = if_not_exists(activeOrdersCount, :one) - :one, lastOnlineAt = :now, updatedAt = :now',
-      ExpressionAttributeNames: {
-        '#status': 'status'
-      },
-      ConditionExpression: 'attribute_exists(driverId) AND activeOrdersCount > :zero',
-      ExpressionAttributeValues: {
-        ':status': 'available',
-        ':available': true,
-        ':searching': true,
-        ':zero': 0,
-        ':one': 1,
-        ':now': now
+    await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);
+    // 💰 CAPTURE HOLD if exists and is ACTIVE
+    if (order.holdId && order.holdStatus === 'ACTIVE') {
+      console.log(`💰 Order has active hold: ${order.holdId}, capturing...`);
+      console.log(`💰 Hold Amount to capture: ${order.holdAmount} IQD`);
+
+      captureResult = await captureWalletHold(
+        order.holdId,
+        order.holdAmount, // Capture the full hold amount (goodsSubtotal only)
+        'Order delivered successfully',
+        orderId
+      );
+
+      if (!captureResult.success) {
+        console.error(`❌ WARNING: Failed to capture hold for order ${orderId}:`, captureResult.error);
+        // ⚠️ Continue anyway - don't block delivery, but log for manual intervention
+        // The driver delivered the order physically, we can't rollback that
+      } else {
+        console.log(`✅ Hold captured successfully: ${captureResult.capturedAmount} IQD`);
       }
-    }));
+    } else {
+      console.log(`ℹ️ No active hold to capture for order ${orderId}`);
+      console.log(`   - holdId: ${order.holdId || 'null'}`);
+      console.log(`   - holdStatus: ${order.holdStatus || 'null'}`);
+    }
+
+    if(captureResult?.success){
+      await dynamodb.send(new UpdateCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},UpdateExpression:'SET holdStatus = :captured, walletFinancialStatus = :captured',ConditionExpression:'driverId = :driverId AND #status = :delivered AND holdId = :holdId',ExpressionAttributeNames:{'#status':'status'},ExpressionAttributeValues:{':captured':'CAPTURED',':driverId':driverId,':delivered':'delivered',':holdId':order.holdId}}));
+    }
+
     
     // Update dispatch job status to completed
     try {
@@ -5379,6 +5490,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
       };
     }
     
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(orderResult.Item,k))) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_RETURN_REQUIRED',message:'يلزم مسار العودة المعتمد؛ الحجز باقٍ حتى تأكيد الإرجاع'})};
     const customerUnreachableAttempts = (orderResult.Item.customerUnreachableAttempts || 0) + 1;
     
     // Update order
@@ -5395,7 +5507,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
         ':updatedAt': now,
         ':driverId': driverId
       },
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :driverId'
     }));
     
     // If 3+ attempts, initiate cancellation protocol
@@ -5406,6 +5518,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
           PK: `ORDER#${orderId}`,
           SK: 'META'
         },
+        ConditionExpression: 'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :driverId',
         UpdateExpression: 'SET #status = :status, cancelledAt = :cancelledAt, cancellationReason = :reason',
         ExpressionAttributeNames: {
           '#status': 'status'
@@ -5413,7 +5526,8 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
         ExpressionAttributeValues: {
           ':status': 'cancelled',
           ':cancelledAt': now,
-          ':reason': 'customer_unreachable'
+          ':reason': 'customer_unreachable',
+          ':driverId': driverId
         }
       }));
       
@@ -5494,7 +5608,8 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
       Key: {
         PK: `ORDER#${orderId}`,
         SK: 'META'
-      }
+      },
+      ConsistentRead: true
     }));
     
     if (!orderResult.Item) {
@@ -5509,6 +5624,8 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
     }
     
     const order = orderResult.Item;
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(order,k))) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_CANCELLATION_REQUIRED',message:'يلزم مسار الإلغاء المالي المعتمد'})};
+
     
     // Verify this order belongs to the driver
     if (order.driverId !== driverId) {
@@ -5522,6 +5639,11 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
       };
     }
     
+    if (String(order.status).startsWith('canceled') || String(order.status).startsWith('cancelled')) {
+      await cleanupFinishedOrder(dynamodb, DRIVER_LIVE_STATE_TABLE, driverId, orderId);
+      return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,orderId,message:'تم إلغاء الطلب مسبقًا',holdReleased:order.holdStatus==='RELEASED',newStatus:order.status})};
+    }
+
     // Verify order can be cancelled
     const allowedStatuses = ['accepted', 'heading_to_store', 'arrived_at_store'];
     if (!allowedStatuses.includes(order.status)) {
@@ -5546,26 +5668,8 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
       
       console.log('✅ Order Service completed:', orderServiceResult);
       
-      // ===== STEP 3: Update WizzDriverLiveState - Make driver available again =====
-      console.log(`📊 Updating WizzDriverLiveState for driver ${driverId}`);
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: 'REMOVE currentOrderId, currentWaveOfferId SET #status = :status, isSearching = :searching, activeOrdersCount = if_not_exists(activeOrdersCount, :one) - :one, lastUpdated = :now',
-        ExpressionAttributeNames: {
-          '#status': 'status'
-        },
-        ConditionExpression: 'attribute_exists(driverId) AND activeOrdersCount > :zero',
-        ExpressionAttributeValues: {
-          ':status': 'available',
-          ':searching': true,
-          ':zero': 0,
-          ':one': 1,
-          ':now': now
-        }
-      }));
-      console.log('✅ Driver live state updated - Driver is now available for new orders');
-      
+      await cleanupFinishedOrder(dynamodb, DRIVER_LIVE_STATE_TABLE, driverId, orderId);
+
       // ===== STEP 4: Update driver metrics (cancellation rate) =====
       try {
         await dynamodb.send(new UpdateCommand({
@@ -5604,6 +5708,12 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
     } catch (orderServiceError) {
       console.error('❌ Order Service failed:', orderServiceError);
       
+      const committed = await dynamodb.send(new GetCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},ConsistentRead:true}));
+      if (committed.Item?.driverId===driverId && /^(canceled|cancelled)/.test(committed.Item.status)) {
+        await cleanupFinishedOrder(dynamodb, DRIVER_LIVE_STATE_TABLE, driverId, orderId);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,orderId,message:'تم تسجيل الإلغاء؛ تُتابع تسوية المحفظة تلقائيًا',holdReleased:committed.Item.holdStatus==='RELEASED',newStatus:committed.Item.status})};
+      }
+
       // Return error to driver
       return {
         statusCode: 500,
@@ -5662,7 +5772,7 @@ async function getDriverTrips(driverId, query, headers) {
     const pricing = normalizeOrderPricingToIqd(order);
     const rawTotal = toNumber(order.total ?? order.totalAmount, 0);
     const pricingTotal = toNumber(order.pricing?.total, 0);
-    const scale = rawTotal > 0 && pricingTotal / rawTotal >= 900 && pricingTotal / rawTotal <= 1100 ? 1000 : 1;
+    const scale = (order.currency === 'IQD' && order.createdBy === 'wizzuser_app') || (rawTotal > 0 && pricingTotal / rawTotal >= 900 && pricingTotal / rawTotal <= 1100) ? 1000 : 1;
     const fee = order.pricing?.deliveryFee != null ? toNumber(order.pricing.deliveryFee, 0) / scale : pricing.deliveryFee;
     const bonus = order.pricing?.waveBonus != null ? toNumber(order.pricing.waveBonus, 0) / scale : toNumber(order.waveBonus, 0);
 

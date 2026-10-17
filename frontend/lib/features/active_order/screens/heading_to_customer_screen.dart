@@ -1,3 +1,4 @@
+import 'return_order_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -328,6 +329,8 @@ class _HeadingToCustomerScreenState
   }
 
   void _showCancelDialog() {
+    if(widget.order.financialAssignment!=null){Navigator.of(context).pushReplacement(MaterialPageRoute(builder:(_)=>ReturnOrderScreen(order:widget.order)));return;}
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
