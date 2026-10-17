@@ -26,8 +26,8 @@ import '../../models/wave_offer.dart' show WaveOffer;
 import '../../models/wave_offer.dart' as wave_model;
 import '../../widgets/wave_offer_dialog.dart';
 import '../../services/push_notifications_service.dart';
+import '../../services/offer_closure_inbox.dart';
 import '../../services/driver_search_api_service.dart';
-import '../../providers/driver_auth_provider.dart';
 import '../../config/environment.dart';
 import '../active_order/services/order_persistence_service.dart';
 import '../active_order/helpers/order_restore_helper.dart';
@@ -148,6 +148,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   StreamSubscription? _waveOfferSubscription;
   StreamSubscription? _offerExpiredSubscription;
   StreamSubscription? _offerTakenSubscription;
+  StreamSubscription<dynamic>? _offerAuthSubscription;
+  final _offerClosureScope = OfferClosureScope();
+  int _offerAuthEpoch = 0;
+  bool _closureRefreshInFlight = false;
   Timer? _offerExpiryCleanupTimer; // 🆕 دوري لتنظيف العروض المنتهية الصلاحية
 
   // WebSocket Service for Wave System
@@ -253,6 +257,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   @override
   void initState() {
     super.initState();
+    _offerAuthSubscription = Amplify.Hub.listen(HubChannel.Auth, (event) {
+      if (event.eventName == 'SIGNED_OUT' || event.eventName == 'SIGNED_IN') {
+        _offerAuthEpoch++;
+        _offerClosureScope.bind(null);
+        if (mounted) setState(() { _currentWaveOffers.clear(); _currentWaveOffer = null; });
+      }
+    });
     _startLocationWaves();
     try {
       print('🚀 Initializing SparkHomeSimpleArabic...');
@@ -260,24 +271,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       // Add app lifecycle observer for background/foreground handling
       WidgetsBinding.instance.addObserver(this);
 
-      // ✅ CRITICAL: Listen for notification taps and consume stash immediately
-      print('🔔 [Home] Setting up notification tap listener...');
-      _notificationTapSubscription =
-          FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-        print('🔔🔔🔔 [Home] NOTIFICATION TAPPED! Data: ${message.data}');
-
-        // Consume immediately + retries
-        _consumeWaveOfferFromPushTap();
-        Future.delayed(const Duration(milliseconds: 500),
-            () => mounted ? _consumeWaveOfferFromPushTap() : null);
-        Future.delayed(const Duration(milliseconds: 1500),
-            () => mounted ? _consumeWaveOfferFromPushTap() : null);
-        Future.delayed(const Duration(milliseconds: 3000),
-            () => mounted ? _consumeWaveOfferFromPushTap() : null);
-      });
-      print('✅ [Home] Notification tap listener setup complete');
-
-      // ✅ CRITICAL: Listen for notification taps and consume stash immediately
+      // One tap listener; closure persistence belongs to PushNotificationsService.
       _setupNotificationTapListener();
 
       // تهيئة مشغل الصوت أولاً مع حماية
@@ -369,6 +363,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
         // ✅ Consume any push-tap stash on resume (background tap case).
         print('🔄 Calling _consumeWaveOfferFromPushTap() on resumed');
+        _refreshOfferClosures();
         _consumeWaveOfferFromPushTap();
         Future.delayed(const Duration(milliseconds: 500), () {
           print(
@@ -550,6 +545,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           '🔄 [Init] About to consume wave offer from push tap (immediate attempt)');
       // ✅ If the app was opened from a push tap (lock screen / terminated),
       // consume the stashed wave offer and show it in the list.
+      await _refreshOfferClosures();
       await _consumeWaveOfferFromPushTap();
 
       // 🆕 Multiple retry attempts to handle race condition:
@@ -586,6 +582,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   Future<void> _consumeWaveOfferFromPushTap() async {
     print('🔍 [Consume] _consumeWaveOfferFromPushTap() called');
+    await _refreshOfferClosures();
     try {
       final data =
           await PushNotificationsService.consumeStashedWaveOfferFromTap();
@@ -598,14 +595,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       final offerId = (data['offerId'] ?? '').toString().trim();
       final orderId = (data['orderId'] ?? '').toString().trim();
-      if (offerId.isEmpty || orderId.isEmpty) return;
+      if (offerId.isEmpty || orderId.isEmpty || OfferClosureInbox.isClosure(data)) return;
+      final owner = await _bindOfferOwner();
+      if (owner == null || data['driverId'] != owner) return;
 
       DateTime? expiresAt;
       final expiresAtRaw = (data['expiresAt'] ?? '').toString().trim();
       if (expiresAtRaw.isNotEmpty) {
         expiresAt = DateTime.tryParse(expiresAtRaw);
       }
-      expiresAt ??= DateTime.now().add(const Duration(seconds: 45));
+      if (expiresAt == null || !expiresAt.isAfter(DateTime.now())) return;
 
       final existing = _currentWaveOffers.any((o) => o.offerId == offerId);
       if (existing) {
@@ -671,10 +670,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           (data['isEmergencyWave'] ?? '').toString().toLowerCase() == 'true';
 
       // Create a full WaveOffer with all details from push notification
-      final placeholder = WaveOffer(
+      var placeholder = WaveOffer(
         offerId: offerId,
         orderId: orderId,
         jobId: 'JOB_$orderId',
+        dispatchCycleId: (data['cycleId'] ?? '').toString().isEmpty ? null : data['cycleId'].toString(),
         waveNumber: waveNumber,
         isEmergencyWave: isEmergencyWave,
         rank: 1,
@@ -706,7 +706,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         expiresAt: expiresAt,
       );
 
-      if (!mounted) return;
+      if (data['legacySourceVersion'] != null || data['moneyUnit'] != null) {
+        // Validate the original push values; a missing field must not become zero.
+        placeholder = WaveOffer.fromJson({
+          ...placeholder.toJson(),
+          for (final field in ['legacySourceVersion', 'moneyUnit', 'currency',
+            'orderTotal', 'deliveryFee', 'bonusAmount', 'tip',
+            'estimatedEarnings', 'holdRequiredAmount']) field: data[field],
+        });
+      }
+      if (!await _offerStillVisible(placeholder) || !mounted) return;
       setState(() {
         _currentWaveOffers.add(placeholder);
       });
@@ -737,6 +746,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     _offerExpiryCleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
 
+      if (_currentWaveOffers.isNotEmpty) unawaited(_refreshOfferClosures());
       final nowUtc = DateTime.now().toUtc();
       int removedCount = 0;
 
@@ -791,20 +801,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         },
       );
 
-      _offerTakenSubscription = _webSocketService.offerTakenStream.listen(
-        (data) {
-          if (mounted) {
-            final offerId = data['offerId'];
-            final takenByDriverId = data['driverId'];
-            print(
-                '👥 Wave offer taken by another driver: $offerId (by $takenByDriverId)');
-            _handleWaveOfferTaken(offerId);
-          }
-        },
-        onError: (error) {
-          print('❌ Offer taken stream error: $error');
-        },
-      );
+      _offerTakenSubscription = OfferClosureInbox.events.listen((closure) async {
+        final epoch = _offerAuthEpoch;
+        final owner = await _bindOfferOwner();
+        if (!mounted || epoch != _offerAuthEpoch || owner != closure.driverId) return;
+        _handleWaveOfferTaken(closure.offerId, orderId: closure.orderId, cycleId: closure.cycleId);
+      }, onError: (_) { _refreshOfferClosures(); });
 
       print('✅ WebSocket callbacks configured successfully (Wave System only)');
     } catch (e) {
@@ -3318,6 +3320,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     _locationWaveTimer?.cancel();
     _locationWavePhase.dispose();
     _displayLocationSubscription?.cancel();
+    _offerAuthEpoch++;
+    _offerClosureScope.bind(null);
+    _offerAuthSubscription?.cancel();
     try {
       print('🧹 Disposing SparkHomeSimpleArabic resources...');
 
@@ -3852,29 +3857,63 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   // 🌊 WAVE SYSTEM HANDLERS
   // ═════════════════════════════════════════════════════════════════════════
 
-  /// معالج استقبال wave offer جديد
+  Future<String?> _bindOfferOwner() async {
+    final epoch = _offerAuthEpoch;
+    try {
+      final user = await Amplify.Auth.getCurrentUser();
+      if (!mounted || epoch != _offerAuthEpoch) return null;
+      if (_offerClosureScope.owner != null && _offerClosureScope.owner != user.userId) {
+        setState(() { _currentWaveOffers.clear(); _currentWaveOffer = null; });
+      }
+      _offerClosureScope.bind(user.userId);
+      return user.userId;
+    } catch (_) {
+      if (mounted && epoch == _offerAuthEpoch) {
+        _offerClosureScope.bind(null);
+        setState(() { _currentWaveOffers.clear(); _currentWaveOffer = null; });
+      }
+      return null;
+    }
+  }
+
+  Future<void> _refreshOfferClosures() async {
+    if (_closureRefreshInFlight || !mounted) return;
+    _closureRefreshInFlight = true;
+    final epoch = _offerAuthEpoch;
+    try {
+      final owner = await _bindOfferOwner();
+      if (owner == null) return;
+      final closures = await OfferClosureInbox.read(owner);
+      if (!mounted || epoch != _offerAuthEpoch || _offerClosureScope.owner != owner) return;
+      for (final closure in closures) {
+        _handleWaveOfferTaken(closure.offerId, orderId:closure.orderId, cycleId:closure.cycleId);
+      }
+    } catch (_) {
+      if (mounted && epoch == _offerAuthEpoch) {
+        setState(() { _currentWaveOffers.clear(); _currentWaveOffer = null; });
+      }
+    } finally { _closureRefreshInFlight = false; }
+  }
+
+  Future<bool> _offerStillVisible(WaveOffer offer) async {
+    try { return await _offerClosureScope.allows(offerId:offer.offerId, orderId:offer.orderId,
+      cycleId:offer.dispatchCycleId, expiresAt:offer.expiresAt); } catch (_) { return false; }
+  }
+
+  /// Both live offers and cached push offers consult the same closure scope.
   void _handleWaveOffer(WaveOffer waveOffer) async {
     try {
-      print('🌊 Processing wave offer: ${waveOffer.offerId}');
-      print(
-          '🌊 Wave ${waveOffer.waveNumber}, Rank ${waveOffer.rank}, Score ${waveOffer.score}');
-
-      // إضافة إلى قائمة العروض الحالية (بدلاً من فتح dialog)
+      final owner = await _bindOfferOwner();
+      if (owner == null || _webSocketService.driverId != owner ||
+          !await _offerStillVisible(waveOffer) || !mounted) return;
+      final existing = _currentWaveOffers.any((o) => o.offerId == waveOffer.offerId);
       setState(() {
-        // Remove any existing offer with same ID (e.g., placeholder injected from push tap)
         _currentWaveOffers.removeWhere((o) => o.offerId == waveOffer.offerId);
         _currentWaveOffers.add(waveOffer);
-        _currentWaveOffer = waveOffer; // للتوافق مع الكود القديم
+        _currentWaveOffer = waveOffer;
       });
-
-      // تشغيل صوت الإشعار
-      await _playNotificationSound();
-
-      print(
-          '✅ Wave offer added to list. Total offers: ${_currentWaveOffers.length}');
-    } catch (e) {
-      print('❌ Error handling wave offer: $e');
-    }
+      if (!existing) await _playNotificationSound();
+    } catch (_) { /* A failed scope check cannot display a stale offer. */ }
   }
 
   /// معالج انتهاء صلاحية wave offer
@@ -3913,29 +3952,23 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   /// معالج قبول wave offer من سائق آخر
-  void _handleWaveOfferTaken(String offerId) {
-    print('👥 Wave offer taken by another driver: $offerId');
-
-    setState(() {
-      _currentWaveOffers.removeWhere((offer) => offer.offerId == offerId);
-      if (_currentWaveOffer?.offerId == offerId) {
-        _currentWaveOffer = null;
-      }
-    });
-
-    // عرض رسالة
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('تم قبول هذا الطلب من سائق آخر'),
-          backgroundColor: Colors.orange,
-          duration: Duration(seconds: 3),
-        ),
-      );
+  void _handleWaveOfferTaken(String offerId, {String? orderId, String? cycleId}) {
+    if (!mounted) return;
+    bool matches(WaveOffer o) => o.offerId == offerId &&
+        (orderId == null || o.orderId == orderId) &&
+        (cycleId == null || o.dispatchCycleId == null || o.dispatchCycleId == cycleId);
+    final existed = _currentWaveOffers.any(matches);
+    if (!existed) return; // Push + WebSocket + resume produce one UI removal.
+    if (_currentRejectConfirmationOfferId == offerId) {
+      _currentRejectConfirmationOfferId = null;
+      if (Navigator.canPop(context)) Navigator.pop(context);
     }
-
-    print(
-        '✅ Offer removed from list. Remaining offers: ${_currentWaveOffers.length}');
+    setState(() {
+      _currentWaveOffers.removeWhere(matches);
+      if (_currentWaveOffer != null && matches(_currentWaveOffer!)) _currentWaveOffer = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content:Text('لم يعد هذا العرض متاحًا'),duration:Duration(seconds:2)));
   }
 
   /// عرض dialog لـ wave offer
@@ -3967,6 +4000,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   /// قبول wave offer
   Future<void> _acceptWaveOffer(WaveOffer waveOffer) async {
     try {
+      final epoch = _offerAuthEpoch;
+      final owner = await _bindOfferOwner();
+      if (owner == null || !await _offerStillVisible(waveOffer) || !mounted || !_currentWaveOffers.any((o) => o.offerId == waveOffer.offerId)) return;
       print('✅ Accepting wave offer: ${waveOffer.offerId}');
 
       // Show loading
@@ -3990,9 +4026,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
 
       // Get driver ID from authenticated session
-      final driverId = await DriverAuthHelper.getCurrentDriverId();
+      final driverId = owner;
 
-      if (driverId == null || driverId.isEmpty) {
+      if (driverId.isEmpty) {
         throw Exception('معرف السائق غير موجود - يرجى تسجيل الدخول مرة أخرى');
       }
 
@@ -4010,6 +4046,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         financialWaveNumber: waveOffer.financialTerms != null ? waveOffer.waveNumber : null,
       );
 
+      if (!mounted || epoch != _offerAuthEpoch || _offerClosureScope.owner != owner) return;
       print('📡 acceptWaveOffer API response:');
       print('   - success: ${result['success']}');
       print('   - message: ${result['message']}');
@@ -4526,6 +4563,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   /// رفض wave offer
   Future<void> _rejectWaveOffer(WaveOffer waveOffer) async {
+    final epoch = _offerAuthEpoch;
+    final owner = await _bindOfferOwner();
+    if (owner == null || !await _offerStillVisible(waveOffer) || !mounted || !_currentWaveOffers.any((o) => o.offerId == waveOffer.offerId)) return;
     print('🚀🚀🚀 REJECT BUTTON PRESSED! 🚀🚀🚀');
     print('📋 WaveOffer details:');
     print('   - offerId: ${waveOffer.offerId}');
@@ -4536,9 +4576,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       // Get driver ID FIRST before removing from UI
       print('❌ [2/5] Getting driver ID...');
-      final driverId = await DriverAuthHelper.getCurrentDriverId();
+      final driverId = owner;
 
-      if (driverId == null || driverId.isEmpty) {
+      if (driverId.isEmpty) {
         print('⚠️ Driver ID not found - ABORTING');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -4563,6 +4603,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           financialWaveNumber: waveOffer.financialTerms != null ? waveOffer.waveNumber : null,
           reason: 'driver_declined',
         );
+        if (!mounted || epoch != _offerAuthEpoch || _offerClosureScope.owner != owner) return;
 
         print('✅ [4/5] API response received: $result');
 
@@ -4609,6 +4650,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   /// التحقق من كفاية رصيد المحفظة لقبول العرض
   bool _canAcceptWaveOfferFromDetails(WaveOffer offer) {
+    if (!_currentWaveOffers.any((o) => o.offerId == offer.offerId) || !offer.expiresAt.isAfter(DateTime.now())) return false;
     final walletState = ref.read(walletBalanceProvider);
     return walletState.maybeWhen(
       data: (wallet) {

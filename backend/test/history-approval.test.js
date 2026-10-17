@@ -6,16 +6,19 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 const { isDriverApproved } = require('../driver_eligibility');
 
-function loadApi(send) {
+function loadApi(send, options = {}) {
   const filename = path.resolve(__dirname, '../lambda_driver_api_v2.js');
   const realRequire = createRequire(filename);
   const env = Object.fromEntries(['DRIVER_TABLE', 'DRIVER_LIVE_STATE_TABLE', 'ORDERS_TABLE', 'WEBSOCKET_CONNECTIONS_TABLE', 'REGIONS_TABLE', 'REGION_INDEX_TABLE', 'REGION_NEIGHBORS_TABLE', 'ORDER_SERVICE_URL', 'DRIVER_DOCUMENTS_BUCKET'].map(key => [key, key]));
+  Object.assign(env, options.env || {});
   const sandbox = { Buffer, URL, setTimeout, clearTimeout, process: { env }, exports: {}, console: { log() {}, warn() {}, error() {} }, require(name) {
+    if (name === '@aws-sdk/client-lambda' && options.invoke) return { ...realRequire(name), LambdaClient: class { async send(c) { return options.invoke(c); } } };
+    if (name === './pinned-legacy-runtime' && options.bridge) return { acceptPinnedLegacyFromDriver: options.bridge };
     if (name === '@aws-sdk/client-cognito-identity-provider') return { ...realRequire(name), CognitoIdentityProviderClient: class { async send() { throw new Error('Invalid token'); } } };
     if (name === '@aws-sdk/lib-dynamodb') return { ...realRequire(name), DynamoDBDocumentClient: { from: () => ({ send }) } };
     return realRequire(name);
   } };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8') + '\nexports.testHooks = { getDriverTrips, startSearching, acceptWaveOffer, updateDriverProfile, handler: exports.handler };', sandbox);
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8') + '\nexports.testHooks = { getDriverTrips, startSearching, acceptWaveOffer, rejectWaveOffer, updateDriverProfile, handler: exports.handler };', sandbox);
   const {driverRequestContext}=realRequire('./driver-lifecycle');
   return Object.fromEntries(Object.entries(sandbox.exports.testHooks).map(([name,fn])=>[name,name==='handler'?fn:(...args)=>driverRequestContext.run({sub:args[0]},()=>fn(...args))]));
 }
@@ -98,4 +101,23 @@ test('simplified profile submits three documents and enters review without ID nu
   calls.length=0;
   assert.equal((await api.updateDriverProfile('d',[],'token',{...body,governorate_id:'other'},{})).statusCode,400);
   assert.equal(calls.some(c=>['UpdateCommand','TransactWriteCommand'].includes(c.constructor.name)),false);
+});
+
+test('pinned cycles never enter the old pre-hold and automatic release wrapper',async()=>{
+ const calls=[];const api=loadApi(async command=>{calls.push(command);const q=command.input;if(q.TableName==='DRIVER_TABLE')return {Item:{driverId:'d',status:'APPROVED'}};if(q.TableName==='ORDERS_TABLE')return {Item:{orderId:'o',status:'ready_for_pickup'}};if(q.TableName==='WizzDispatchJobs_staging')return {Item:{dispatchCycle:null}};throw Error('unexpected table');});
+ const r=await api.acceptWaveOffer('d',{offerId:'OFFER_o_d_W1',orderId:'o'},{});assert.equal(r.statusCode,409);assert.equal(JSON.parse(r.body).code,'PINNED_LEGACY_ACCEPTANCE_REQUIRES_COORDINATED_RELEASE');assert(calls.every(c=>c.constructor.name==='GetCommand'));
+});
+
+
+test('pinned driver acceptance passes token and selectors to durable bridge, keeps pending separate from success',async()=>{
+ for(const result of [{success:false,pending:true,requestId:'LA:test'},{success:false,reviewRequired:true},{success:true}]){
+ const calls=[],routed=[];const api=loadApi(async c=>{calls.push(c);if(c.input.TableName==='DRIVER_TABLE')return {Item:{driverId:'d',status:'APPROVED'}};if(c.input.TableName==='ORDERS_TABLE')return {Item:{orderId:'o',status:'ready_for_pickup'}};if(c.input.TableName==='WizzDispatchJobs_staging')return {Item:{dispatchCycle:{id:'cycle'}}};throw Error('unexpected old write');},{env:{DISPATCH_CYCLE_MODE:'LEGACY_RESPONSES'},bridge:async(...args)=>{routed.push(args);return result;}});
+ const response=await api.acceptWaveOffer('d',{offerId:'OFFER_o_d_W1',orderId:'o',driverId:'forged',holdAmount:1},{},'test-token');
+ assert.equal(response.statusCode,result.success?200:result.pending?202:409);assert.equal(routed.length,1);assert.deepEqual(Object.keys(routed[0][0]).sort(),['offerId','orderId','waveNumber']);assert.equal(routed[0][1],'test-token');assert.equal(routed[0][2],'d');assert.equal(typeof routed[0][3],'function');assert(calls.every(c=>c.constructor.name==='GetCommand'));
+ }
+});
+
+test('driver rejection forwards bearer identity to pinned response handler without body financial claims',async()=>{
+ let payload;const api=loadApi(async()=>{throw Error('no database required');},{env:{WAVESYSTEM_HANDLE_DRIVER_REJECT_FUNCTION_NAME:'WaveSystem_HandleDriverReject'},invoke:async c=>{payload=JSON.parse(c.input.Payload);return {Payload:Buffer.from(JSON.stringify({statusCode:200,body:JSON.stringify({success:true})}))};}});
+ const r=await api.rejectWaveOffer('d',{orderId:'o',offerId:'OFFER_o_d_W1',driverId:'forged',holdAmount:1},{},'test-token');assert.equal(r.statusCode,200);assert.equal(payload.headers.Authorization,'Bearer test-token');assert.deepEqual(JSON.parse(payload.body),{orderId:'o',offerId:'OFFER_o_d_W1',driverId:'d'});
 });

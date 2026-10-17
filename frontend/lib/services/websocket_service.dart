@@ -14,6 +14,7 @@ import '../config/environment.dart';
 import '../models/order_model.dart';
 import '../models/wave_offer.dart';
 import 'native_websocket_channel.dart';
+import 'offer_closure_inbox.dart';
 
 enum WebSocketStatus {
   disconnected,
@@ -1399,20 +1400,15 @@ class WebSocketService extends ChangeNotifier {
   }
 
   /// Handle offer accepted by another driver
-  void _handleOfferAcceptedByOther(Map<String, dynamic> json) {
+  void _handleOfferAcceptedByOther(Map<String, dynamic> json) async {
     try {
-      final offerId = json['offerId'] ?? json['offer_id'] ?? json['id'];
-
-      if (offerId != null) {
-        debugPrint('🤝 Wave offer accepted by another driver: $offerId');
-        _offerTakenController.add({
-          'offerId': offerId,
-          'message': json['message'] ?? 'Offer taken by another driver'
-        });
-      }
-    } catch (e) {
-      debugPrint('❌ Error handling offer acceptance by other: $e');
-    }
+      final owner = _driverId;
+      if (owner == null) return;
+      final closure = await OfferClosureInbox.record(json, socketDriverId: owner);
+      if (closure == null || _driverId != owner) return;
+      _offerTakenController.add({'offerId': closure.offerId, 'orderId': closure.orderId,
+        'cycleId': closure.cycleId, 'eventId': closure.eventId, 'driverId': owner});
+    } catch (e) { debugPrint('Offer closure could not be saved: $e'); }
   }
 
   /// Handle offer acceptance confirmation

@@ -85,6 +85,7 @@ class WaveOffer {
   final String offerId;
   final String orderId;
   final String jobId;
+  final String? dispatchCycleId;
   
   // ===== معلومات الموجة =====
   final int waveNumber;              // 1, 2, or 3
@@ -110,6 +111,8 @@ class WaveOffer {
   
   // ===== المبالغ =====
   final Map<String, dynamic>? financialTerms;
+  final int? legacySourceVersion;
+  final String? moneyUnit;
   final double orderTotal;           // مجموع الطلب
   final double deliveryFee;          // أجرة التوصيل الأساسية
   final double bonusAmount;          // المكافأة (البونص) من الموجة
@@ -142,6 +145,7 @@ class WaveOffer {
     required this.offerId,
     required this.orderId,
     required this.jobId,
+    this.dispatchCycleId,
     required this.waveNumber,
     this.isEmergencyWave = false,
     required this.rank,
@@ -165,6 +169,8 @@ class WaveOffer {
     required this.estimatedEarnings,
     this.holdRequiredAmount,
     this.financialTerms,
+    this.legacySourceVersion,
+    this.moneyUnit,
     required this.currency,
     required this.distance,
     required this.estimatedMinutes,
@@ -200,7 +206,7 @@ class WaveOffer {
         throw const FormatException('Inconsistent financial offer entitlement');
       }
       final pickup = json['pickupLocation'] as Map<String, dynamic>;
-      return WaveOffer(offerId:json['offerId'],orderId:json['orderId'],jobId:'',waveNumber:json['waveNumber'],rank:1,score:0,
+      return WaveOffer(dispatchCycleId:json['dispatchCycleId'],offerId:json['offerId'],orderId:json['orderId'],jobId:'',waveNumber:json['waveNumber'],rank:1,score:0,
         restaurantId:json['branchId'],restaurantName:'استلام الطلب',restaurantAddress:'',
         restaurantLat:(pickup['latitude'] as num).toDouble(),restaurantLng:(pickup['longitude'] as num).toDouble(),
         customerId:'',customerName:'',customerAddress:json['deliveryZoneId'],customerLat:0,customerLng:0,
@@ -218,24 +224,46 @@ class WaveOffer {
           .toList();
     }
 
+    final explicitLegacy = json['legacySourceVersion'] != null || json['moneyUnit'] != null;
+    double whole(String field) {
+      final raw = json[field];
+      final value = raw is num ? raw.toDouble() :
+          raw is String && RegExp(r'^\d+$').hasMatch(raw) ? double.tryParse(raw) : null;
+      if (value == null || !value.isFinite || value < 0 ||
+          value > 9007199254740991 || value != value.truncateToDouble()) {
+        throw const FormatException('Invalid explicit IQD amount');
+      }
+      return value;
+    }
+    if (explicitLegacy) {
+      if (json['legacySourceVersion'].toString() != '1' || json['moneyUnit'] != 'IQD_WHOLE' ||
+          json['currency'] != 'IQD' || whole('bonusAmount') != 0 ||
+          json['isEmergencyWave'] == true || json['isEmergencyWave'] == 'true' ||
+          whole('deliveryFee') + whole('tip') > 9007199254740991 ||
+          whole('estimatedEarnings') != whole('deliveryFee') + whole('tip') ||
+          whole('holdRequiredAmount') + whole('estimatedEarnings') > 9007199254740991 ||
+          whole('orderTotal') != whole('holdRequiredAmount') + whole('estimatedEarnings')) {
+        throw const FormatException('Inconsistent explicit legacy offer');
+      }
+    }
     final deliveryFeeRaw = _toDouble(json['deliveryFee']);
     final bonusAmountRaw = _toDouble(json['bonusAmount']);
     final tipRaw = _toDouble(json['tip']);
     final estimatedEarningsRaw = _toDouble(json['estimatedEarnings']);
     final orderTotalRaw = _toDouble(json['orderTotal']);
 
-    final normalizedDeliveryFee = _normalizeIqd(deliveryFeeRaw);
-    final normalizedBonusAmount = _normalizeIqd(bonusAmountRaw);
-    final normalizedTip = _normalizeIqd(tipRaw);
-    final normalizedEstimatedEarnings = _normalizeIqd(
+    final normalizedDeliveryFee = explicitLegacy ? whole('deliveryFee') : _normalizeIqd(deliveryFeeRaw);
+    final normalizedBonusAmount = explicitLegacy ? whole('bonusAmount') : _normalizeIqd(bonusAmountRaw);
+    final normalizedTip = explicitLegacy ? whole('tip') : _normalizeIqd(tipRaw);
+    final normalizedEstimatedEarnings = explicitLegacy ? whole('estimatedEarnings') : _normalizeIqd(
       estimatedEarningsRaw,
       reference: normalizedDeliveryFee > 0 ? normalizedDeliveryFee : null,
     );
-    final normalizedOrderTotal = _normalizeIqd(
+    final normalizedOrderTotal = explicitLegacy ? whole('orderTotal') : _normalizeIqd(
       orderTotalRaw,
       reference: normalizedEstimatedEarnings > 0 ? normalizedEstimatedEarnings : null,
     );
-    final normalizedHoldRequired = json['holdRequiredAmount'] != null
+    final normalizedHoldRequired = explicitLegacy ? whole('holdRequiredAmount') : json['holdRequiredAmount'] != null
         ? _normalizeIqd(
             json['holdRequiredAmount'],
             reference: normalizedOrderTotal > 0 ? normalizedOrderTotal : null,
@@ -246,6 +274,7 @@ class WaveOffer {
       offerId: json['offerId'] ?? '',
       orderId: json['orderId'] ?? '',
       jobId: json['jobId'] ?? '',
+      dispatchCycleId: json['dispatchCycleId'] ?? json['cycleId'],
       
       waveNumber: json['waveNumber'] ?? 1,
       isEmergencyWave: json['isEmergencyWave'] == true || json['isEmergencyWave']?.toString().toLowerCase() == 'true',
@@ -266,6 +295,8 @@ class WaveOffer {
       customerLng: (json['customerLng'] ?? 0).toDouble(),
       customerPhone: json['customerPhone'],
       
+      legacySourceVersion: explicitLegacy ? 1 : null,
+      moneyUnit: explicitLegacy ? 'IQD_WHOLE' : null,
       orderTotal: normalizedOrderTotal,
       deliveryFee: normalizedDeliveryFee,
       bonusAmount: normalizedBonusAmount,
@@ -301,6 +332,7 @@ class WaveOffer {
       'offerId': offerId,
       'orderId': orderId,
       'jobId': jobId,
+      if (dispatchCycleId != null) 'dispatchCycleId': dispatchCycleId,
       'waveNumber': waveNumber,
       'isEmergencyWave': isEmergencyWave,
       'rank': rank,
@@ -317,6 +349,10 @@ class WaveOffer {
       'customerLat': customerLat,
       'customerLng': customerLng,
       'customerPhone': customerPhone,
+      if (legacySourceVersion != null) 'legacySourceVersion': legacySourceVersion,
+      if (moneyUnit != null) 'moneyUnit': moneyUnit,
+      'tip': tip,
+      'bonusAmount': bonusAmount,
       'orderTotal': orderTotal,
       'deliveryFee': deliveryFee,
       'estimatedEarnings': estimatedEarnings,
@@ -351,7 +387,7 @@ class WaveOffer {
 
   /// المبلغ المعتمد للتحقق من كفاية الرصيد
   double get requiredBalanceAmount {
-    if ((holdRequiredAmount ?? 0) > 0) return holdRequiredAmount!;
+    if (holdRequiredAmount != null && holdRequiredAmount! >= 0) return holdRequiredAmount!;
     return orderTotal;
   }
 

@@ -520,7 +520,7 @@ async function getServiceToken() {
  * @param {number} assignmentAttempt - Wave number for reassignment scenarios
  * @returns {Promise<{holdId: string, status: string, amount: number}>}
  */
-async function createWalletHold(driverId, amount, orderId, assignmentAttempt) {
+async function createWalletHold(driverId, amount, orderId, assignmentAttempt, pinnedDispatchAttemptId) {
   try {
     console.log('💰 Creating wallet Hold:');
     console.log('   - Driver ID:', driverId);
@@ -555,7 +555,8 @@ async function createWalletHold(driverId, amount, orderId, assignmentAttempt) {
         metadata: {
           source: 'driver-api',
           timestamp: new Date().toISOString(),
-          waveNumber: assignmentAttempt
+          waveNumber: assignmentAttempt,
+          ...(pinnedDispatchAttemptId?{pinnedDispatchAttemptId}:{})
         }
       })
     });
@@ -839,7 +840,7 @@ exports.handler = event => driverRequestContext.run({}, async () => {
   const response = await handleRequest(event);
   if (typeof response?.body === 'string') {
     try {
-      const privateFields = new Set(['financialSnapshot','commercialPricing','financialAcceptance']);
+      const privateFields = new Set(['financeRollout','financialSnapshot','commercialPricing','financialAcceptance']);
       response.body = JSON.stringify(JSON.parse(response.body), (key,value) => privateFields.has(key) ? undefined : value);
     } catch (_) { /* Preserve non-JSON responses. */ }
   }
@@ -988,7 +989,7 @@ const handleRequest = async (event) => {
               body:JSON.stringify({success:false,code,message:'تعذر تأكيد القبول؛ حدّث الطلب وأعد المحاولة'})};
           }
         }
-        return await acceptWaveOffer(cognitoUsername, body, corsHeaders);
+        return await acceptWaveOffer(cognitoUsername, body, corsHeaders, bearerToken);
       }
     }
 
@@ -1005,7 +1006,7 @@ const handleRequest = async (event) => {
             return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_DECLINE_UNAVAILABLE'})};
           }
         }
-        return await rejectWaveOffer(cognitoUsername, body, corsHeaders);
+        return await rejectWaveOffer(cognitoUsername, body, corsHeaders, bearerToken);
       }
     }
 
@@ -3240,7 +3241,8 @@ async function getDriverMetricsSnapshot(driverId) {
 
     const snapshot = {
       acceptanceRate: metrics.acceptanceRate || 0,
-      completionRate: metrics.completionRate || 0,
+      completionRate: metrics.completionRateStatus && metrics.completionRateStatus !== 'AVAILABLE' ? null : (metrics.completionRate || 0),
+      completionRateStatus: metrics.completionRateStatus || null,
       responseRate: metrics.responseRate || 0,
       consecutiveRejections: metrics.consecutiveRejections || 0,
       totalOffersWindow: metrics.totalOffersLast100 || 0,
@@ -3824,7 +3826,7 @@ function calculateRegionCoverageKm(stores, centerLat, centerLng) {
  * 🌊 Accept Wave Offer
  * Proxy request to WaveSystem_HandleDriverAccept Lambda
  */
-async function acceptWaveOffer(driverId, body, corsHeaders) {
+async function acceptWaveOffer(driverId, body, corsHeaders, accessToken) {
   console.log('🌊 Accept Wave Offer called');
   console.log('Driver ID from token:', driverId);
   console.log('Request body:', JSON.stringify(body, null, 2));
@@ -3914,9 +3916,17 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     }
     
     const order = orderResult.Item;
-    if (Object.prototype.hasOwnProperty.call(order, 'financialSnapshot')) {
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(order,k))) {
       return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,
         code:'FINANCIAL_OFFER_REQUIRED',message:'يحتاج هذا الطلب إلى عرضه المالي المعتمد'})};
+    }
+    // Pinned cycles must not enter the old pre-hold/automatic-release wrapper.
+    const pinnedJob=await dynamodb.send(new GetCommand({TableName:'WizzDispatchJobs_staging',Key:{orderId,SK:'METADATA'},ConsistentRead:true}));
+    if(pinnedJob.Item&&Object.prototype.hasOwnProperty.call(pinnedJob.Item,'dispatchCycle')){
+      if(process.env.DISPATCH_CYCLE_MODE!=='LEGACY_RESPONSES')return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'PINNED_LEGACY_ACCEPTANCE_REQUIRES_COORDINATED_RELEASE',message:'هذا العرض يحتاج مسار القبول المنسق'})};
+      const wave=String(offerId).match(/_W([1-9][0-9]{0,3})$/);if(!wave||Number(wave[1])>1000)return {statusCode:400,headers:corsHeaders,body:JSON.stringify({success:false,code:'INVALID_PINNED_OFFER'})};
+      const result=await require('./pinned-legacy-runtime').acceptPinnedLegacyFromDriver({orderId,offerId,waveNumber:Number(wave[1])},accessToken,finalDriverId,request=>createWalletHold(request.driverId,request.amount,request.orderId,request.assignmentAttempt,request.attemptId));
+      return {statusCode:result.success?200:result.pending?202:409,headers:corsHeaders,body:JSON.stringify(result)};
     }
     const financialPricing = Object.prototype.hasOwnProperty.call(order,'financialSnapshot') ? require('./financial-order-view').financialOrderPricing(order) : null;
     const normalizedPricing = financialPricing || normalizeOrderPricingToIqd(order);
@@ -4169,7 +4179,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
           SK: 'META'
         },
         UpdateExpression: 'SET holdId = :holdId, holdStatus = :holdStatus, holdAmount = :holdAmount, pricingFrozen = :frozen, walletFinancialStatus = :holdStatus, updatedAt = :now',
-        ConditionExpression:'driverId = :assignedDriver AND #orderStatus <> :delivered AND #orderStatus <> :completed',
+        ConditionExpression:'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :assignedDriver AND #orderStatus <> :delivered AND #orderStatus <> :completed',
         ExpressionAttributeNames:{'#orderStatus':'status'},
         ExpressionAttributeValues: {
           ':holdId': holdInfo.holdId,
@@ -4275,7 +4285,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
  * 🚫 Reject Wave Offer
  * Proxy request to WaveSystem_HandleDriverReject Lambda
  */
-async function rejectWaveOffer(driverId, body, corsHeaders) {
+async function rejectWaveOffer(driverId, body, corsHeaders, accessToken) {
   console.log('🚫 Reject Wave Offer called');
   console.log('Driver ID from token:', driverId);
   console.log('Request body:', JSON.stringify(body, null, 2));
@@ -4329,6 +4339,7 @@ async function rejectWaveOffer(driverId, body, corsHeaders) {
     const lambda = new LambdaClient({ region: 'us-east-1' });
     
     const payload = {
+      ...(typeof accessToken === 'string' && accessToken ? {headers:{Authorization:'Bearer '+accessToken}} : {}),
       body: JSON.stringify({
         offerId,
         driverId: finalDriverId,
@@ -4415,7 +4426,8 @@ async function getDriverMetrics(driverId, corsHeaders) {
       body: JSON.stringify({
         acceptanceRate: metrics.acceptanceRate || 0,
         responseRate: metrics.responseRate || 0,
-        completionRate: metrics.completionRate || 0,
+        completionRate: metrics.completionRateStatus && metrics.completionRateStatus !== 'AVAILABLE' ? null : (metrics.completionRate || 0),
+      completionRateStatus: metrics.completionRateStatus || null,
         totalAccepted: metrics.totalAccepted || 0,
         totalRejected: metrics.totalRejected || 0,
         totalExpired: metrics.totalExpired || 0,
@@ -4817,6 +4829,7 @@ async function unassignActiveOrder(driverId, body, corsHeaders) {
  */
 async function startHeadingToStore(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('heading_to_store');
     console.log(`🚗 Driver ${driverId} started heading to store for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4837,9 +4850,10 @@ async function startHeadingToStore(driverId, orderId, corsHeaders) {
         ':startedAt': now,
         ':updatedAt': now,
         ':updatedBy': 'driver_app',
-        ':driverId': driverId
+        ':driverId': driverId,
+        ...financeFence.values
       },
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     console.log(`✅ Order ${orderId} status updated to heading_to_store`);
@@ -4850,7 +4864,7 @@ async function startHeadingToStore(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating start heading to store:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -4866,6 +4880,7 @@ async function startHeadingToStore(driverId, orderId, corsHeaders) {
  */
 async function arriveAtStore(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('arrived_at_store');
     console.log(`🏪 Driver ${driverId} arrived at store for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4875,14 +4890,15 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
     
     // Update order status with driver info
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt';
+      ? 'SET #status = :status, orderStatus = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, orderStatus = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'arrived_at_store',
       ':arrivedAt': now,
       ':updatedAt': now,
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -4905,7 +4921,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     // Get updated order
@@ -4914,7 +4930,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating arrived at store:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -4930,6 +4946,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
  */
 async function pickupOrder(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('picked_up');
     console.log(`📦 Driver ${driverId} picked up order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4939,14 +4956,15 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
     
     // Update order status with driver info
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt';
+      ? 'SET #status = :status, orderStatus = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, orderStatus = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'picked_up',
       ':pickedUpAt': now,
       ':updatedAt': now,
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -4969,7 +4987,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     // Get updated order
@@ -4978,7 +4996,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating pickup:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update pickup status',
@@ -4994,6 +5012,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
  */
 async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('heading_to_customer');
     console.log(`🚗 Driver ${driverId} started heading to customer for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -5011,7 +5030,8 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
       ':startedAt': now,
       ':updatedAt': now,
       ':updatedBy': 'driver_app',
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -5034,7 +5054,7 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     console.log(`✅ Order ${orderId} status updated to heading_to_customer`);
@@ -5045,7 +5065,7 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating start heading to customer:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -5061,6 +5081,7 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
  */
 async function arriveAtCustomer(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('arrived_at_customer');
     console.log(`🏠 Driver ${driverId} arrived at customer for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -5070,14 +5091,15 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
     
     // Update order status with driver info
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt';
+      ? 'SET #status = :status, orderStatus = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, orderStatus = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'arrived_at_customer',
       ':arrivedAt': now,
       ':updatedAt': now,
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -5100,7 +5122,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     // Get updated order
@@ -5109,7 +5131,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating arrived at customer:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -5149,7 +5171,7 @@ async function deliverOrder(driverId, orderId, body, corsHeaders, accessToken) {
     }
     
     if (order.driverId !== driverId) return {statusCode:403,headers:corsHeaders,body:JSON.stringify({success:false,message:'الطلب غير مسند لهذا السائق'})};
-    if (Object.prototype.hasOwnProperty.call(order,'financialSnapshot')) {
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(order,k))) {
       try {
         const pricing=require('./financial-order-view').financialOrderPricing(order);
         if(body.cashAmount!==undefined&&body.cashAmount!==pricing.total)throw Error('COD_CASH_CONFIRMATION_MISMATCH');
@@ -5208,7 +5230,7 @@ async function deliverOrder(driverId, orderId, body, corsHeaders, accessToken) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'attribute_not_exists(financialSnapshot) AND driverId = :driverId AND #status = :originalStatus'
+      ConditionExpression: 'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :driverId AND #status = :originalStatus'
     }));
     await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);
     // 💰 CAPTURE HOLD if exists and is ACTIVE
@@ -5468,7 +5490,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
       };
     }
     
-    if (Object.prototype.hasOwnProperty.call(orderResult.Item,'financialSnapshot')) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_RETURN_REQUIRED',message:'يلزم مسار العودة المعتمد؛ الحجز باقٍ حتى تأكيد الإرجاع'})};
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(orderResult.Item,k))) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_RETURN_REQUIRED',message:'يلزم مسار العودة المعتمد؛ الحجز باقٍ حتى تأكيد الإرجاع'})};
     const customerUnreachableAttempts = (orderResult.Item.customerUnreachableAttempts || 0) + 1;
     
     // Update order
@@ -5485,7 +5507,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
         ':updatedAt': now,
         ':driverId': driverId
       },
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :driverId'
     }));
     
     // If 3+ attempts, initiate cancellation protocol
@@ -5496,6 +5518,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
           PK: `ORDER#${orderId}`,
           SK: 'META'
         },
+        ConditionExpression: 'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :driverId',
         UpdateExpression: 'SET #status = :status, cancelledAt = :cancelledAt, cancellationReason = :reason',
         ExpressionAttributeNames: {
           '#status': 'status'
@@ -5503,7 +5526,8 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
         ExpressionAttributeValues: {
           ':status': 'cancelled',
           ':cancelledAt': now,
-          ':reason': 'customer_unreachable'
+          ':reason': 'customer_unreachable',
+          ':driverId': driverId
         }
       }));
       
@@ -5600,7 +5624,7 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
     }
     
     const order = orderResult.Item;
-    if (Object.prototype.hasOwnProperty.call(order,'financialSnapshot')) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_CANCELLATION_REQUIRED',message:'يلزم مسار الإلغاء المالي المعتمد'})};
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(order,k))) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_CANCELLATION_REQUIRED',message:'يلزم مسار الإلغاء المالي المعتمد'})};
 
     
     // Verify this order belongs to the driver

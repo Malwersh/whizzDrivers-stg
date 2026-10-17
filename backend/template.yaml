@@ -64,6 +64,12 @@ Globals:
     Architectures:
       - x86_64
 
+Conditions:
+  IsPinnedDispatchStaging: !And
+    - !Equals [!Ref Environment, staging]
+    - !Equals [!Ref 'AWS::Region', us-east-1]
+    - !Equals [!Ref 'AWS::AccountId', '699561669180']
+
 Resources:
   DriversDocumentsBucket:
     Type: AWS::S3::Bucket
@@ -130,6 +136,13 @@ Resources:
           WAVESYSTEM_HANDLE_DRIVER_REJECT_FUNCTION_NAME: !Ref WaveSystemHandleDriverRejectFunctionName
           DRIVER_DOCUMENTS_BUCKET: !Ref DriversDocumentsBucket
       Policies:
+        - !If
+          - IsPinnedDispatchStaging
+          - Statement:
+              Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: arn:aws:dynamodb:us-east-1:699561669180:table/WizzDispatchJobs_staging
+          - !Ref 'AWS::NoValue'
         - S3CrudPolicy:
             BucketName: !Ref DriversDocumentsBucket
         - DynamoDBCrudPolicy:
