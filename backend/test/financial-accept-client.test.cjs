@@ -1,6 +1,15 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {invokeFinancialAcceptance:invoke}=require('../financial-accept-client');
 const arn='arn:aws:lambda:us-east-1:699561669180:function:staging-driver-financial-accept';
+test('offer hydration uses the fixed authenticated financial service and read action only',async()=>{
+ const {invokeFinancialOfferRead}=require('../financial-accept-client'),saved={...process.env};
+ try{
+  process.env.FINANCIAL_DISPATCH_MODE='REQUIRED';process.env.FINANCIAL_ACCEPT_FUNCTION_ARN=arn;
+  const ref={financialPushVersion:1,offerId:'FINO:1'};
+  const result=await invokeFinancialOfferRead(ref,'credential',{async send(command){assert.equal(command.input.FunctionName,arn);assert.deepEqual(JSON.parse(Buffer.from(command.input.Payload)),{action:'read_offer',body:ref,accessToken:'credential'});return {Payload:Buffer.from(JSON.stringify({statusCode:200,result:{success:true,message:{type:'financial_wave_offer'}}}))};}});
+  assert.equal(result.message.type,'financial_wave_offer');
+ }finally{process.env=saved;}
+});
 test('financial client is disabled by default and cannot invoke a different target',async()=>{
  const old={...process.env};let calls=0;
  try{delete process.env.FINANCIAL_DISPATCH_MODE;await assert.rejects(invoke({},'test',false,{async send(){calls++;}}));

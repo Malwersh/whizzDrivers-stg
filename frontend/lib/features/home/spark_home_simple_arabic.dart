@@ -1,3 +1,6 @@
+import '../../services/financial_offer_reference.dart';
+import '../../services/driver_offer_audio.dart';
+import '../../services/notification_sound_policy.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -125,6 +128,8 @@ class SparkHomeSimpleArabic extends ConsumerStatefulWidget {
 class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     with WidgetsBindingObserver {
   bool _isSearchingForOffers = false;
+  bool _isStartingOnline = false;
+  double _onlineSheetOpacity = 1;
   DateTime? _searchEndTime;
   DateTime? _selectedEndTime;
   Position? _currentPosition;
@@ -165,6 +170,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   final Set<Marker> _markers = {};
   final ValueNotifier<double> _locationWavePhase = ValueNotifier(0);
   Timer? _locationWaveTimer;
+  Timer? _searchPositionTimer;
+  bool _searchPositionBusy = false;
   double _locationWaveZoom = 14;
   LatLng? _displayDriverLocation;
   BitmapDescriptor? _driverLocationIcon;
@@ -265,6 +272,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
     });
     _startLocationWaves();
+    _searchPositionTimer = Timer.periodic(const Duration(seconds: 30), (_) => _refreshSearchPosition());
     try {
       print('🚀 Initializing SparkHomeSimpleArabic...');
 
@@ -360,6 +368,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       case AppLifecycleState.resumed:
         print('📱 App resumed - home screen specific handling');
         _refreshLocationIfStale();
+        _refreshSearchPosition();
 
         // ✅ Consume any push-tap stash on resume (background tap case).
         print('🔄 Calling _consumeWaveOfferFromPushTap() on resumed');
@@ -410,6 +419,19 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       default:
         print('📱 App lifecycle: $state');
     }
+  }
+
+  Future<void> _refreshSearchPosition() async {
+    if (!mounted || !_isSearchingForOffers || _searchPositionBusy ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+    _searchPositionBusy = true;
+    try {
+      // Preserve the home screen's existing test coordinates.
+      await DriverSearchApiService.refreshSearchPosition(
+        latitude: _testLatitude, longitude: _testLongitude);
+    } catch (_) {
+      // Retry on the next foreground tick after a transient session/network failure.
+    } finally { _searchPositionBusy = false; }
   }
 
   void _refreshLocationIfStale() {
@@ -478,9 +500,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       final prefs = await SharedPreferences.getInstance();
       final driverId = prefs.getString('driver_id') ??
           '74b83488-f041-70a4-52d7-d2370b7eec06';
-      final authToken = prefs.getString('auth_token') ??
-          prefs.getString('id_token') ??
-          'mock_token';
+      final authToken = await CognitoTokenService.getIdToken();
+      if(authToken==null)throw const DriverSearchStartException('تعذر تجديد جلسة الدخول. أعد تسجيل الدخول.',code:'AUTH_REQUIRED');
 
       // إعادة تهيئة WebSocket
       await _webSocketService.initialize(
@@ -609,6 +630,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       final existing = _currentWaveOffers.any((o) => o.offerId == offerId);
       if (existing) {
         print('ℹ️ Push-tap wave offer already in list: $offerId');
+        return;
+      }
+
+      if (data['type'] == 'financial_wave_offer_available') {
+        final hydrated = await FinancialOfferReference.hydrate(data, owner);
+        if (!mounted || await _bindOfferOwner() != owner) return;
+        final offer = WaveOffer.fromJson(hydrated);
+        if (!await _offerStillVisible(offer) || !mounted || _currentWaveOffers.any((o) => o.offerId == offer.offerId)) return;
+        setState(() => _currentWaveOffers.add(offer));
+        await PushNotificationsService.clearStashedFinancialOffer(data);
         return;
       }
 
@@ -918,47 +949,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   // تشغيل صوت الإشعار عند وصول طلب جديد مع حماية كاملة من الانغلاق
-  Future<void> _playNotificationSound() async {
-    try {
-      if (!mounted) {
-        print('⚠️ Widget not mounted, skipping sound');
-        return;
-      }
 
-      // التحقق من تهيئة مشغل الصوت
-      try {
-        // Ensure audio player is properly initialized
-        await Future.delayed(const Duration(
-            milliseconds: 50)); // Small delay to ensure stability
-      } catch (initError) {
-        print('❌ Audio player check failed: $initError');
-        return;
-      }
-
-      // محاولة تشغيل الصوت مع timeout
-      try {
-        await _audioPlayer
-            .play(AssetSource('sounds/Driver_Noti.mp3'))
-            .timeout(const Duration(seconds: 5)); // 5 second timeout
-        print('🔊 تم تشغيل صوت الإشعار بنجاح');
-      } catch (playError) {
-        print('❌ خطأ في تشغيل الصوت: $playError');
-
-        // محاولة بديلة بصوت النظام
-        try {
-          await _audioPlayer.play(AssetSource('sounds/notification.mp3'));
-          print('🔊 تم تشغيل الصوت البديل');
-        } catch (fallbackError) {
-          print('❌ خطأ في الصوت البديل: $fallbackError');
-          // Continue without sound - don't crash
-        }
-      }
-    } catch (e, stackTrace) {
-      print('🚨 CRITICAL: خطأ غير متوقع في تشغيل الصوت: $e');
-      print('Stack trace: $stackTrace');
-      // Log but don't crash the app
-    }
-  }
 
   /// تهيئة خدمة الموقع مع حماية كاملة من الانغلاق
   void _initializeLocation() async {
@@ -1182,11 +1173,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   void _confirmSparkNow(DateTime endTime) async {
+    if (_isStartingOnline) return;
+    final wasSearching = _isSearchingForOffers;
+    _isStartingOnline = true;
     try {
       if (!mounted) {
         print('⚠️ Widget not mounted, cancelling search start');
         return;
       }
+
+      Navigator.pop(context);
 
       // 🔒 SECURITY: Check wallet balance before starting search
       print('💰 فحص رصيد المحفظة قبل بدء البحث...');
@@ -1217,10 +1213,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         print(hasMinimumBalance ? '✅ الرصيد كافٍ' : '❌ الرصيد غير كافٍ');
 
         if (!hasMinimumBalance) {
-          // Close bottom sheet first
-          if (mounted) {
-            Navigator.pop(context);
-          }
           // Show error dialog
           if (mounted) {
             showDialog(
@@ -1337,59 +1329,48 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         return;
       }
 
-      // Close bottom sheet after successful wallet check
-      if (mounted) {
-        Navigator.pop(context);
+      // Prepare the selected sound before exposing the searching state.
+      bool soundReady = false;
+      if (!wasSearching) {
+        try {
+          await NotificationSoundPolicy.refresh();
+          final file = NotificationSoundPolicy.file('driverGoOnline');
+          if (file != null && mounted) {
+            await _audioPlayer.setSource(NotificationSoundFiles.source(file));
+            soundReady = true;
+          }
+        } catch (_) {
+          // Audio is optional; a failed download must not block going online.
+        }
       }
-
-      print('🚀 بدء تأكيد البحث عن الطلبات...');
-      print(
-          '🧪 TEST MODE: زر "تشغيل" يستخدم إحداثيات النجف الثابتة ($_testLatitude, $_testLongitude)');
-
-      // تغيير الحالة بشكل آمن
-      if (mounted) {
-        setState(() {
-          _isSearchingForOffers = true;
-          _searchEndTime = endTime;
-        });
+      await _startRealWebSocketConnection(failOnError: true);
+      if (!mounted) return;
+      if (!wasSearching) {
+        setState(() => _onlineSheetOpacity = 0);
+        await Future<void>.delayed(const Duration(milliseconds: 180));
+        if (!mounted) return;
       }
-
-      // حفظ الحالة مع معالجة الأخطاء
-      try {
-        _saveSearchState();
-        print('💾 تم حفظ حالة البحث');
-      } catch (saveError) {
-        print('⚠️ خطأ في حفظ الحالة: $saveError');
+      setState(() {
+        _isSearchingForOffers = true;
+        _searchEndTime = endTime;
+        _onlineSheetOpacity = 1;
+      });
+      if (!wasSearching && soundReady &&
+          WidgetsBinding.instance.lifecycleState != AppLifecycleState.paused) {
+        unawaited(_audioPlayer.resume().catchError((Object _) {}));
       }
-
-      // بدء Timer للتحقق من انتهاء الوقت
+      _saveSearchState();
       _startSearchTimer();
-
-      // إغلاق الـ modal أولاً
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-
-      // تأخير قصير لضمان استقرار الواجهة
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      // **تشغيل نظام البحث بشكل آمن**
+    } catch (error) {
       if (mounted) {
-        await _startRealWebSocketConnection();
+        setState(() => _onlineSheetOpacity = 1);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error is DriverSearchStartException?error.message:'تعذر بدء استقبال الطلبات. أعد المحاولة.'),
+        ));
       }
-
-      print('✅ تم بدء البحث حتى: ${_formatTime(endTime)}');
-    } catch (e, stackTrace) {
-      print('🚨 CRITICAL: خطأ في تأكيد البحث: $e');
-      print('Stack trace: $stackTrace');
-
-      // التراجع عن التغييرات في حالة الخطأ
-      if (mounted) {
-        setState(() {
-          _isSearchingForOffers = false;
-          _searchEndTime = null;
-        });
-      }
+    } finally {
+      _isStartingOnline = false;
+      if (mounted) setState(() => _isCheckingWalletBalance = false);
     }
   }
 
@@ -1503,7 +1484,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   /// بدء البحث عن الطلبات مع WebSocket الموجود أو تهيئة جديد
-  Future<void> _startRealWebSocketConnection() async {
+  Future<void> _startRealWebSocketConnection({bool failOnError = false}) async {
     try {
       if (!mounted) {
         print('⚠️ Widget not mounted, skipping WebSocket setup');
@@ -1557,91 +1538,19 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         print('❌ WebSocket re-initialization failed: $wsError');
         print('⚠️ Wave System requires WebSocket connection');
         print('💡 User should check internet connection and retry');
-        // No simulation fallback - Wave System only
+        if (failOnError) rethrow;
       }
     } catch (e, stackTrace) {
       print('🚨 CRITICAL: خطأ في نظام البحث: $e');
       print('Stack trace: $stackTrace');
-      // Wave System requires WebSocket - no simulation fallback
+      if (failOnError) rethrow;
     }
   }
 
   /// استدعاء REST API /driver/start-searching لكتابة البيانات الكاملة
   Future<void> _callStartSearchingAPI() async {
-    try {
-      print(
-          '📡 استدعاء REST API /driver/start-searching لكتابة البيانات الكاملة...');
-
-      final prefs = await SharedPreferences.getInstance();
-      final authToken =
-          prefs.getString('auth_token') ?? prefs.getString('id_token');
-
-      if (authToken != null) {
-        // 🧪 TEST MODE: استخدام إحداثيات النجف الثابتة
-        final response = await http.post(
-          Uri.parse('${Environment.apiBaseUrl}/driver/start-searching'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $authToken',
-          },
-          body: json.encode({
-            'lat': _testLatitude, // 31.915514
-            'lng': _testLongitude, // 44.471916
-          }),
-        );
-
-        if (response.statusCode == 200) {
-          final responseData = json.decode(response.body);
-          print('✅ REST API: تم كتابة البيانات الكاملة في WizzDriverLiveState');
-          print(
-              '📍 المنطقة: ${responseData['data']['current_work_region']['name']}');
-          print(
-              '🏠 المحافظة: ${responseData['data']['current_work_region']['governorate_name']}');
-
-          // 🌊 WAVE SYSTEM: الآن WizzDriverLiveState محدث بـ:
-          // - isSearching = true
-          // - current_work_region_id = naj_center_001
-          // - allowed_region_ids = [...]
-          // - metricsSnapshot_* = ...
-
-          print('🌊 Wave System: السائق مسجل في النظام الموجي');
-          print('✅ البيانات الكاملة محفوظة - جاهز للاتصال WebSocket');
-        } else if (response.statusCode == 403) {
-          final errorData = json.decode(response.body);
-          print('⚠️ REST API: غير مسموح بالعمل في هذه المنطقة');
-          print('📍 الرسالة: ${errorData['message']}');
-
-          // إظهار رسالة للسائق
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                    errorData['message'] ?? 'لا يمكن العمل في هذه المنطقة'),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 5),
-              ),
-            );
-          }
-
-          // إيقاف البحث
-          setState(() {
-            _isSearchingForOffers = false;
-            _searchEndTime = null;
-          });
-          throw Exception('Region not allowed');
-        } else {
-          print('⚠️ REST API: فشل بدء البحث - ${response.statusCode}');
-          print('📄 الرد: ${response.body}');
-          throw Exception('REST API failed: ${response.statusCode}');
-        }
-      } else {
-        print('⚠️ لا يوجد Auth Token - لا يمكن استدعاء REST API');
-        throw Exception('No auth token');
-      }
-    } catch (apiError) {
-      print('❌ خطأ في استدعاء start-searching API: $apiError');
-      rethrow;
-    }
+    final result=await DriverSearchApiService.startSearching(latitude:_testLatitude,longitude:_testLongitude);
+    if(result['success']!=true)throw DriverSearchStartException(result['message']?.toString()??'تعذر بدء استقبال الطلبات.',code:result['code']?.toString());
   }
 
   // بدء محاكاة وصول طلبات جديدة
@@ -2936,7 +2845,20 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                   controller: scrollController,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                  child: _buildSheetContent(),
+                  child: IgnorePointer(
+                    ignoring: _isStartingOnline,
+                    child: AnimatedOpacity(
+                      opacity: _onlineSheetOpacity,
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeInOut,
+                      child: _isStartingOnline && !_isSearchingForOffers
+                          ? const Center(child: Padding(
+                              padding: EdgeInsets.all(24),
+                              child: CircularProgressIndicator(),
+                            ))
+                          : _buildSheetContent(),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -3317,6 +3239,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   @override
   void dispose() {
+    _searchPositionTimer?.cancel();
     _locationWaveTimer?.cancel();
     _locationWavePhase.dispose();
     _displayLocationSubscription?.cancel();
@@ -3676,7 +3599,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                   height: 56,
                   child: ElevatedButton(
                     onPressed:
-                        (_selectedEndTime != null && !_isCheckingWalletBalance)
+                        (_selectedEndTime != null && !_isCheckingWalletBalance && !_isStartingOnline)
                             ? () {
                                 _confirmSparkNow(_selectedEndTime!);
                               }
@@ -3912,7 +3835,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         _currentWaveOffers.add(waveOffer);
         _currentWaveOffer = waveOffer;
       });
-      if (!existing) await _playNotificationSound();
+      if (!existing) await DriverOfferAudio.play(waveOffer.offerId);
     } catch (_) { /* A failed scope check cannot display a stale offer. */ }
   }
 

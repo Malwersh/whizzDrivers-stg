@@ -210,10 +210,29 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
         }
     
     GeneratedPluginRegistrant.register(with: self)
+    if let soundRegistrar = self.registrar(forPlugin: "NotificationSoundFiles") { NotificationSoundFiles.register(with: soundRegistrar) }
     
     // Register Native WebSocket plugin
     NativeWebSocketPlugin.register(with: self.registrar(forPlugin: "NativeWebSocketPlugin")!)
     
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
+}
+
+final class NotificationSoundFiles: NSObject, FlutterPlugin {
+ static func register(with registrar: FlutterPluginRegistrar) {
+  let channel=FlutterMethodChannel(name:"wizz/notification-sound-files",binaryMessenger:registrar.messenger())
+  registrar.addMethodCallDelegate(NotificationSoundFiles(),channel:channel)
+ }
+ func handle(_ call: FlutterMethodCall,result: @escaping FlutterResult) {
+  guard call.method == "install" else { result(FlutterMethodNotImplemented);return }
+  guard let args=call.arguments as? [String:Any],let name=args["file"] as? String,name.range(of:"^custom_[a-f0-9]{64}\\.wav$",options:.regularExpression) != nil,let value=args["bytes"] as? FlutterStandardTypedData,value.data.count>=44,value.data.count<=256000 else {result(FlutterError(code:"INVALID_SOUND",message:nil,details:nil));return}
+  do {
+   let dir=FileManager.default.urls(for:.libraryDirectory,in:.userDomainMask)[0].appendingPathComponent("Sounds",isDirectory:true)
+   try FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true)
+   let file=dir.appendingPathComponent(name)
+   if !FileManager.default.fileExists(atPath:file.path){try value.data.write(to:file,options:.atomic)}
+   result(["path":file.path,"uri":file.absoluteString])
+  } catch {result(FlutterError(code:"SOUND_INSTALL_FAILED",message:nil,details:nil))}
+ }
 }

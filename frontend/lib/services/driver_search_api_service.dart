@@ -4,6 +4,14 @@ import 'package:geolocator/geolocator.dart';
 import '../config/environment.dart';
 import '../providers/driver_auth_provider.dart';
 
+class DriverSearchStartException implements Exception {
+  final String message;
+  final String? code;
+  const DriverSearchStartException(this.message,{this.code});
+  @override
+  String toString()=>message;
+}
+
 /// ✨ Driver Search API Service
 /// Handles start/stop searching via REST API
 class DriverSearchApiService {
@@ -20,15 +28,17 @@ class DriverSearchApiService {
   /// - Returns region information and confirmation
   static Future<Map<String, dynamic>> startSearching({
     required double latitude,
-    required longitude,
+    required double longitude,
     Map<String, dynamic>? deviceInfo,
+    http.Client? client,
+    Future<String?> Function()? tokenProvider,
   }) async {
     try {
       // Get auth token
-      final authToken = await DriverAuthHelper.getCurrentAccessToken();
+      final authToken = await (tokenProvider ?? DriverAuthHelper.getCurrentAccessToken)();
       
       if (authToken == null) {
-        throw Exception('Authentication required');
+        return {'success':false,'code':'AUTH_REQUIRED','message':'تعذر تجديد جلسة الدخول. أعد تسجيل الدخول.'};
       }
       
       // Prepare request body
@@ -41,14 +51,14 @@ class DriverSearchApiService {
       print('📡 Sending start-searching request: $body');
       
       // Make API call
-      final response = await http.post(
+      final response = await (client?.post ?? http.post)(
         Uri.parse('$_baseUrl/driver/start-searching'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $authToken',
         },
         body: jsonEncode(body),
-      );
+      ).timeout(const Duration(seconds:20));
       
       print('📥 Response status: ${response.statusCode}');
       print('📥 Response body: ${response.body}');
@@ -63,7 +73,9 @@ class DriverSearchApiService {
       } else {
         return {
           'success': false,
-          'message': data['message'] ?? 'فشل في بدء البحث',
+          'code':response.statusCode==401?'AUTH_REQUIRED':data['code'],
+          'statusCode':response.statusCode,
+          'message':response.statusCode==401?'تعذر تجديد جلسة الدخول. أعد تسجيل الدخول.':data['message'] ?? 'فشل في بدء البحث',
           'error': data,
         };
       }
@@ -71,11 +83,26 @@ class DriverSearchApiService {
       print('❌ Error in startSearching: $e');
       return {
         'success': false,
-        'message': 'خطأ في الاتصال: $e',
+        'code':'CONNECTION_FAILED',
+        'message':'تعذر الاتصال بخدمة استقبال الطلبات. أعد المحاولة.',
       };
     }
   }
   
+  /// Refresh search position using the current authenticated session.
+  static Future<bool> refreshSearchPosition({required double latitude, required double longitude}) async {
+    final token = await DriverAuthHelper.getCurrentAccessToken();
+    if (token == null) return false;
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/driver/update-location'),
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+        body: jsonEncode({'lat': latitude, 'lng': longitude}),
+      ).timeout(const Duration(seconds: 10));
+      return response.statusCode == 200 && jsonDecode(response.body)['success'] == true;
+    } catch (_) { return false; }
+  }
+
   /// Stop searching for orders
   /// 
   /// This API call:

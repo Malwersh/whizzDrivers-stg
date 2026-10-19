@@ -973,6 +973,13 @@ const handleRequest = async (event) => {
       }
     }
 
+    if ((path === '/driver/financial-wave-offer' || path.endsWith('/driver/financial-wave-offer')) && httpMethod === 'POST') {
+      try {
+        const result = await require('./financial-accept-client').invokeFinancialOfferRead(JSON.parse(event.body || '{}'), bearerToken);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch (_) { return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_OFFER_NOT_AVAILABLE'})}; }
+    }
+
     // ✨ NEW: Accept Wave Offer endpoint
     if (path === '/driver/accept-wave-offer' || path.endsWith('/driver/accept-wave-offer')) {
       if (httpMethod === 'POST') {

@@ -12,6 +12,7 @@ class WalletTransaction {
   final int amount;              // بالدينار العراقي
   final String type;             // TOPUP, HOLD, RELEASE_HOLD, SETTLE_GROSS, SETTLE_EARNINGS, etc.
   final String status;           // POSTED, REVERSED
+  final String? balanceType;     // Explicit AVAILABLE/LOCKED ledger bucket.
   final String? description;
   final String? relatedOrderId;
   final String? relatedHoldId;
@@ -25,6 +26,7 @@ class WalletTransaction {
     required this.amount,
     required this.type,
     required this.status,
+    this.balanceType,
     this.description,
     this.relatedOrderId,
     this.relatedHoldId,
@@ -69,6 +71,7 @@ class WalletTransaction {
   /// money and confuses the driver.
   bool get isInternalMirror {
     if (entryId.endsWith('#HOLD_CREDIT')) return true;
+    if (isHoldCreated && balanceType == 'LOCKED' && isCredit) return true;
     if (isHoldReleased && isDebit) return true;
     return false;
   }
@@ -198,7 +201,7 @@ class WalletTransaction {
 
     final rawType = (json['type'] ?? '').toString().toUpperCase();
     final rawCategory = (json['category'] ?? '').toString().toUpperCase();
-    final normalizedType = rawCategory.isNotEmpty ? rawCategory : rawType;
+    var normalizedType = rawCategory.isNotEmpty ? rawCategory : rawType;
 
     final direction = (json['direction'] as String?) ??
       (rawType == 'DEBIT' || rawType == 'CREDIT'
@@ -207,6 +210,12 @@ class WalletTransaction {
           ? 'DEBIT'
           : 'CREDIT'));
 
+    final bucket = metadata['balanceType']?.toString().toUpperCase();
+    if (rawCategory == 'COD_COMPLETED' && metadata['financialSchemaVersion'] == 2 &&
+        (json['walletId']?.toString().startsWith('WALLET#DRIVER#') ?? false) &&
+        bucket == 'LOCKED' && direction == 'DEBIT') {
+      normalizedType = 'HOLD_CAPTURED';
+    }
     final amountNum = (json['amount'] as num?) ?? 0;
 
     return WalletTransaction(
@@ -222,6 +231,7 @@ class WalletTransaction {
         '${json['walletId'] ?? 'wallet'}-${json['createdAt'] ?? json['timestamp'] ?? DateTime.now().toIso8601String()}',
       walletId: (json['walletId'] as String?) ?? '',
       direction: direction,
+      balanceType: bucket,
       amount: amountNum.abs().toInt(),
       type: normalizedType.isNotEmpty ? normalizedType : 'TRANSFER',
       status: (json['status'] as String?) ?? 'POSTED',
@@ -256,6 +266,7 @@ class WalletTransaction {
       'entryId': entryId,
       'walletId': walletId,
       'direction': direction,
+      'metadata': {if (balanceType != null) 'balanceType': balanceType},
       'amount': amount,
       'type': type,
       'status': status,

@@ -406,11 +406,11 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'عدد الأصناف',
+                  'الأصناف والكمية',
                   style: TextStyle(fontSize: 15, color: Colors.grey[600]),
                 ),
                 Text(
-                  '${widget.order.items.length} صنف',
+                  '${widget.order.items.length} صنف • ${widget.order.items.fold<int>(0, (n, item) => n + item.quantity)} قطعة',
                   style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.bold,
