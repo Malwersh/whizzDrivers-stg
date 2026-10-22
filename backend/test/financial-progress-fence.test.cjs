@@ -8,5 +8,9 @@ for(const name of ['startHeadingToStore','arriveAtStore','pickupOrder','startHea
  const ctx={console:{log(){},error(){},warn(){}},require:n=>{assert.equal(n,'./legacy-order-policy');return policy;},UpdateCommand,ORDERS_TABLE:'orders',getDriverInfo:async()=>null,getOrderById:async()=>({statusCode:200}),dynamodb:{async send(c){captured=c.input;if(fail)throw Object.assign(Error('race'),{name:'ConditionalCheckFailedException'});return {};}}};
  vm.runInNewContext(source.slice(start,end)+'\nthis.run='+name,ctx);assert.equal((await ctx.run('d','o',{})).statusCode,200);
  assert.match(captured.UpdateExpression,/orderStatus = :status/);assert.match(captured.ConditionExpression,/driverId = :driverId AND/);assert.match(captured.ConditionExpression,/attribute_not_exists\(financialOutcome\)/);assert.equal(captured.ExpressionAttributeValues[':lfSchema'],1);
+ assert.equal(captured.ExpressionAttributeValues[':lfFundingSchema'],2);
+ assert.equal(captured.ExpressionAttributeValues[':lfAllocationV2'],'ORDER_ALLOCATION_V2_DELIVERY_FUNDING');
+ assert.match(captured.ConditionExpression,/financialAcceptance.paymentMethod=:lfCod/);
+ assert.match(captured.ConditionExpression,/financialAcceptance.schemaVersion=:lfFundingSchema AND financialAcceptance.allocation.ruleVersion=:lfAllocationV2/);
  fail=true;assert.equal((await ctx.run('d','o',{})).statusCode,409);
 });

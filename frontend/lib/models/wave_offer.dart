@@ -119,6 +119,8 @@ class WaveOffer {
   final double tip; // الإكرامية من العميل
   final double
       estimatedEarnings; // الأرباح المتوقعة (deliveryFee + bonusAmount)
+  final double? driverCashRetained;
+  final double? walletCreditAfterDelivery;
   final double? holdRequiredAmount; // المبلغ المطلوب فعلياً للحجز على المحفظة
   final String currency; // رمز العملة (IQD, USD, etc.)
 
@@ -169,6 +171,8 @@ class WaveOffer {
     this.tip = 0,
     required this.estimatedEarnings,
     this.holdRequiredAmount,
+    this.driverCashRetained,
+    this.walletCreditAfterDelivery,
     this.financialTerms,
     this.legacySourceVersion,
     this.moneyUnit,
@@ -186,8 +190,11 @@ class WaveOffer {
   });
 
   factory WaveOffer.fromJson(Map<String, dynamic> json) {
-    if (['DRIVER_OFFER_PROPOSAL', 'DRIVER_DELIVERY_FUNDED_OFFER']
-        .contains(json['kind'])) {
+    if ([
+      'DRIVER_OFFER_PROPOSAL',
+      'DRIVER_DELIVERY_FUNDED_OFFER',
+      'DRIVER_FULL_CASH_OFFER'
+    ].contains(json['kind'])) {
       double readAmount(dynamic value) {
         if (value is! Map ||
             value['currency'] != 'IQD' ||
@@ -204,7 +211,8 @@ class WaveOffer {
       double amount(String field) => readAmount(json[field]);
       if ((json['kind'] == 'DRIVER_OFFER_PROPOSAL'
               ? json['schemaVersion'] != 1
-              : json['schemaVersion'] != 2) ||
+              : json['schemaVersion'] !=
+                  (json['kind'] == 'DRIVER_FULL_CASH_OFFER' ? 3 : 2)) ||
           json['paymentMethod'] != 'COD' ||
           json['waveNumber'] is! int ||
           json['waveNumber'] < 1 ||
@@ -227,6 +235,20 @@ class WaveOffer {
               .abs() >
           0.00001) {
         throw const FormatException('Inconsistent financial offer entitlement');
+      }
+      if (json['kind'] == 'DRIVER_FULL_CASH_OFFER') {
+        final cash = amount('customerCashToCollect');
+        final earning = amount('driverTotalEntitlement');
+        final retained = cash < earning ? cash : earning;
+        final credit =
+            amount('laterWalletEarningCredit') + amount('laterWalletTipCredit');
+        if (json['settlementModel'] != 'FULL_CASH_AT_DELIVERY_V1' ||
+            json['collectionRequired'] != true ||
+            (amount('driverCashRetained') - retained).abs() > 0.00001 ||
+            (amount('driverWalletHold') - (cash - retained)).abs() > 0.00001 ||
+            (credit - (earning - retained)).abs() > 0.00001) {
+          throw const FormatException('Inconsistent cash collection terms');
+        }
       }
       final display = json['display'];
       final displayItems = <OrderItem>[];
@@ -301,6 +323,8 @@ class WaveOffer {
           tip: amount('driverTip'),
           estimatedEarnings: amount('driverTotalEntitlement'),
           holdRequiredAmount: amount('driverWalletHold'),
+          driverCashRetained: amount('driverCashRetained'),
+          walletCreditAfterDelivery: amount('laterWalletEarningCredit') + amount('laterWalletTipCredit'),
           currency: 'IQD',
           distance: (json['totalDistanceMeters'] as num) / 1000,
           estimatedMinutes: ((json['totalDurationSeconds'] as num) / 60).ceil(),

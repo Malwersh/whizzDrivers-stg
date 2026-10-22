@@ -1119,14 +1119,44 @@ const handleRequest = async (event) => {
       } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_ASSIGNMENT_UNAVAILABLE',message:'تعذر تأكيد فك الإسناد؛ حدّث الطلب قبل إعادة المحاولة'})};}
     }
 
+    const attemptPath=path.match(/\/driver\/orders\/([^/]+)\/delivery-attempt(\/contact)?$/);
+    if(attemptPath&&['GET','POST'].includes(httpMethod)) {
+      try {
+        const contact=!!attemptPath[2];if(contact&&httpMethod!=='POST')throw Error('INVALID_DELIVERY_ATTEMPT');
+        const input=httpMethod==='GET'?event.queryStringParameters||{}:JSON.parse(event.body||'{}');
+        const fields=httpMethod==='GET'?['offerId','attempt']:contact?['offerId','attempt','eventId','channel']:['offerId','attempt','position'];
+        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).sort().join(',')!==fields.sort().join(','))throw Error('INVALID_DELIVERY_ATTEMPT');
+        const body={...input,attempt:httpMethod==='GET'?Number(input.attempt):input.attempt,orderId:attemptPath[1]};
+        const result=await require('./financial-accept-client').invokeFinancialOperation(body,bearerToken,httpMethod==='GET'?'read_delivery_attempt':contact?'record_contact_attempt':'start_delivery_attempt');
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch(e) {
+        const safe=['INVALID_DELIVERY_ATTEMPT','DELIVERY_ATTEMPT_CONFLICT','ORDER_EXCEPTION_POLICY_REQUIRED','ARRIVAL_LOCATION_REQUIRED','ARRIVAL_LOCATION_STALE','ARRIVAL_OUTSIDE_RADIUS','CONTACT_ATTEMPT_TOO_SOON','NO_RESPONSE_REQUIREMENTS_NOT_MET','EXCEPTION_SETTINGS_UNAVAILABLE','UNAUTHORIZED'];
+        return {statusCode:e.code==='UNAUTHORIZED'?401:409,headers:corsHeaders,body:JSON.stringify({success:false,code:safe.includes(e.code||e.message)?e.code||e.message:'DELIVERY_ATTEMPT_UNAVAILABLE'})};
+      }
+    }
+
+    const cashReviewPath=path.match(/\/driver\/orders\/([^/]+)\/cash-review$/);
+    if(cashReviewPath&&httpMethod==='POST'){
+      try{const input=JSON.parse(event.body||'{}');if(!input||typeof input!=='object'||Array.isArray(input)||!['READ_CUSTOMER_CASH_CASE','REPORT_CASH_PAYMENT','EXECUTE_CUSTOMER_REFUND'].includes(input.action)||Object.prototype.hasOwnProperty.call(input,'orderId'))throw Error('INVALID_CASH_REVIEW');
+       const result=await require('./financial-accept-client').invokeFinancialOperation({...input,orderId:cashReviewPath[1]},bearerToken,'driver_cash_case');return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      }catch(e){const code=e.code||e.message,safe=['UNAUTHORIZED','CASH_REVIEW_FORBIDDEN','CASH_REVIEW_CONFLICT','INVALID_CASH_REVIEW','CASH_REVIEW_UNAVAILABLE','CASH_REVIEW_CLOSED','CASH_REVIEW_PROOF_REQUIRED','REFUND_CUSTODIAN_REQUIRED','REFUND_STATE_CONFLICT','REFUND_SOURCE_PROOF_CHANGED'];return {statusCode:code==='UNAUTHORIZED'?401:409,headers:corsHeaders,body:JSON.stringify({success:false,code:safe.includes(code)?code:'CASH_REVIEW_UNAVAILABLE'})};}
+    }
+
+    const continuationPath=path.match(/\/driver\/orders\/([^/]+)\/return-case$/);
+    if(continuationPath&&httpMethod==='POST'){
+      try{const input=JSON.parse(event.body||'{}');if(!input||typeof input!=='object'||Array.isArray(input)||!['READ_RETURN_CONTINUATION','RECORD_RETURN_HANDOVER','OPEN_CASE_APPEAL'].includes(input.action)||Object.prototype.hasOwnProperty.call(input,'orderId'))throw Error('INVALID_RETURN_CONTINUATION');
+       const result=await require('./financial-accept-client').invokeFinancialOperation({...input,orderId:continuationPath[1]},bearerToken,'return_case_driver');return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      }catch(e){const code=e.code||e.message,safe=['UNAUTHORIZED','FORBIDDEN','RETURN_CONTINUATION_CONFLICT','INVALID_RETURN_CONTINUATION','RETURN_RECIPIENT_UNAVAILABLE','CASE_APPEAL_ALREADY_OPEN','CASE_APPEAL_WINDOW_EXPIRED','EXCEPTION_CASE_UNAVAILABLE'];return {statusCode:code==='UNAUTHORIZED'?401:409,headers:corsHeaders,body:JSON.stringify({success:false,code:safe.includes(code)?code:'RETURN_CONTINUATION_UNAVAILABLE'})};}
+    }
+
     // Financial return: original credential is verified again by the sole money writer.
-    const returnPath=path.match(/\/driver\/orders\/([^/]+)\/(request-return|arrive-return)$/);
+    const returnPath=path.match(/\/driver\/orders\/([^/]+)\/(request-return|arrive-return|report-return-obstacle)$/);
     if(returnPath&&httpMethod==='POST') {
       try {
         const body=JSON.parse(event.body||'{}');
-        if(!body||Array.isArray(body)||typeof body!=='object'||Object.keys(body).some(k=>!['offerId','attempt','reason','cashCollected','returnId'].includes(k)))throw Error('INVALID_COD_RETURN');
+        if(!body||Array.isArray(body)||typeof body!=='object'||Object.keys(body).some(k=>!['offerId','attempt','reason','cashCollected','returnId','position','issueId','note'].includes(k)))throw Error('INVALID_COD_RETURN');
         const {invokeFinancialReturn}=require('./financial-accept-client');
-        const result=await invokeFinancialReturn({...body,orderId:returnPath[1]},bearerToken,returnPath[2]==='request-return'?'request_return':'arrive_return');
+        const result=await invokeFinancialReturn({...body,orderId:returnPath[1]},bearerToken,returnPath[2]==='request-return'?'request_return':returnPath[2]==='report-return-obstacle'?'report_return_obstacle':'arrive_return');
         return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
       } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_RETURN_UNAVAILABLE',message:'تعذر تأكيد حالة العودة؛ حدّث الطلب قبل إعادة المحاولة'})};}
     }
@@ -4539,7 +4569,7 @@ async function getOrderById(driverId, orderId, corsHeaders) {
       items: order.items || [],
       specialInstructions: order.specialInstructions || order.notes,
       
-      ...(financialPricing ? {financialAssignment:{offerId:order.financialAcceptance.offerId,attempt:order.assignmentAttemptCounter,returnId:order.returnCaseId||null,returnStatus:order.returnStatus||null},driverEarnings:financialPricing.driverEarnings,holdId:order.holdId,holdStatus:order.holdStatus,holdAmount:financialPricing.holdRequiredAmount} : {}),
+      ...(financialPricing ? {financialAssignment:{offerId:order.financialAcceptance.offerId,attempt:order.assignmentAttemptCounter,...(order.exceptionPolicy?{exceptionPolicyVersion:order.exceptionPolicy.version}:{}),returnId:order.returnCaseId||null,returnStatus:order.returnStatus||null,serverNow:new Date().toISOString(),returnHandover:order.returnHandover||null,returnInstructions:order.returnInstructions||null},driverEarnings:financialPricing.driverEarnings,holdId:order.holdId,holdStatus:order.holdStatus,holdAmount:financialPricing.holdRequiredAmount} : {}),
       // Pricing breakdown (NEW - for frontend display)
       pricing: {
         ...(financialPricing || {}),
@@ -4612,19 +4642,11 @@ async function getActiveOrder(driverId, corsHeaders) {
     // Fetch order details
     const orderResponse = await getOrderById(driverId, currentOrderId, corsHeaders);
     
-    // Check if order fetch was successful
+    // A failed read must remain an error; it does not mean the assignment vanished.
     if (orderResponse.statusCode !== 200) {
-      console.error(`❌ Failed to fetch order ${currentOrderId}:`, orderResponse);
-      return {
-        statusCode: 200,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          hasActiveOrder: false,
-          order: null
-        })
-      };
+      return orderResponse;
     }
-    
+
     // Parse order data
     const orderData = JSON.parse(orderResponse.body);
     

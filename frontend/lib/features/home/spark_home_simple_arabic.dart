@@ -422,8 +422,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   Future<void> _refreshSearchPosition() async {
-    if (!mounted || !_isSearchingForOffers || _searchPositionBusy ||
-        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+    if (!mounted || !_isSearchingForOffers || _searchPositionBusy) return;
     _searchPositionBusy = true;
     try {
       // Preserve the home screen's existing test coordinates.
@@ -879,6 +878,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             await _webSocketService.refreshConnection();
             print('✅ Connection verified - ready to receive offers');
           }
+          // Reconcile an existing unexpired online session after a completed/returned order.
+          // The endpoint rechecks approval and preserves any newly assigned order.
+          await DriverSearchApiService.startSearching(
+            latitude: _testLatitude, longitude: _testLongitude);
         } else {
           // الوقت انتهى، إيقاف البحث
           _clearSearchState();
@@ -1117,22 +1120,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         return;
       }
 
-      final prefs = await SharedPreferences.getInstance();
-      final token = await CognitoTokenService.getAccessToken() ?? prefs.getString('auth_token');
-      final response = await http.get(
-        Uri.parse('${Environment.apiBaseUrl}/driver/me'),
-        headers: {'Authorization': 'Bearer ${token ?? ''}'},
-      ).timeout(const Duration(seconds: 15));
+      await DriverSearchApiService.checkSearchEligibility();
       if (!mounted) return;
-      final profile = response.statusCode == 200
-          ? json.decode(response.body)['data'] as Map<String, dynamic>?
-          : null;
-      if (profile?['isVerified'] != true) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('حسابك بانتظار تحقق الإدارة. يمكنك بدء العمل بعد الموافقة.'),
-        ));
-        return;
-      }
 
       print('📱 فتح نافذة اختيار وقت البحث...');
 
@@ -1141,8 +1130,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     } catch (e, stackTrace) {
       print('🚨 خطأ في بدء البحث: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('تعذر التحقق من حالة حسابك. حاول مرة أخرى.'),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e is DriverSearchStartException ? e.message : 'تعذر التحقق من حالة حسابك. حاول مرة أخرى.'),
         ));
       }
 
@@ -1360,6 +1349,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         unawaited(_audioPlayer.resume().catchError((Object _) {}));
       }
       _saveSearchState();
+      unawaited(_refreshSearchPosition());
       _startSearchTimer();
     } catch (error) {
       if (mounted) {

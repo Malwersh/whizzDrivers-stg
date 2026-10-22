@@ -120,4 +120,21 @@ void main() {
     raw['schemaVersion'] = 1;
     expect(() => WaveOffer.fromJson(raw), throwsFormatException);
   });
+  test(
+      'full cash offer validates collateral and cash entitlement before display',
+      () {
+    final raw = offer()
+      ..['schemaVersion'] = 3
+      ..['kind'] = 'DRIVER_FULL_CASH_OFFER'
+      ..['settlementModel'] = 'FULL_CASH_AT_DELIVERY_V1'
+      ..['collectionRequired'] = true;
+    final model = WaveOffer.fromJson(raw);
+    expect(model.orderTotal, 14500.125);
+    expect(model.estimatedEarnings, 4000.125);
+    expect(model.holdRequiredAmount, 10500);
+    expect(model.driverCashRetained, 4000.125);
+    expect(model.walletCreditAfterDelivery, 0);
+    raw['driverWalletHold'] = money(11500000);
+    expect(() => WaveOffer.fromJson(raw), throwsFormatException);
+  });
 }

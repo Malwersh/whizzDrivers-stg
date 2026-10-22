@@ -55,7 +55,7 @@ class ActiveOrderService {
     try {
       print('🔍 ActiveOrderService: Fetching active order...');
       final headers = await _headers;
-      print('🔑 Headers: $headers');
+
       
       final url = '$baseUrl/driver/active-order';
       print('📡 URL: $url');
@@ -81,7 +81,7 @@ class ActiveOrderService {
         // تحقق من نوع البيانات
         if (data is! Map<String, dynamic>) {
           print('⚠️ Invalid data format');
-          return null;
+          throw Exception('تنسيق بيانات الطلب غير صحيح');
         }
 
         if (data['hasActiveOrder'] == true && data['order'] != null) {
@@ -93,14 +93,13 @@ class ActiveOrderService {
       } else if (response.statusCode == 404) {
         print('ℹ️ No active order (404)');
       } else {
-        print('❌ Failed with status: ${response.statusCode}');
+        throw Exception('تعذر جلب الطلب النشط (${response.statusCode})؛ أعد المحاولة');
       }
 
       return null;
     } catch (e) {
       print('❌ Error fetching active order: $e');
-      // لا نرمي Exception هنا لأن عدم وجود طلب نشط هو حالة طبيعية
-      return null;
+      rethrow;
     }
   }
 
@@ -109,7 +108,7 @@ class ActiveOrderService {
     try {
       print('🔍 ActiveOrderService: Fetching order by ID: $orderId');
       final headers = await _headers;
-      print('🔑 Headers: $headers');
+
       
       final url = '$baseUrl/driver/orders/$orderId';
       print('📡 URL: $url');

@@ -1,3 +1,5 @@
+import 'customer_cash_review_screen.dart';
+import '../services/customer_cash_review_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -29,7 +31,8 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
   bool _cashCollected = false;
 
   // Calculate total cash amount using new pricing model
-  double get cashAmount => widget.order.pricing?.total ?? widget.order.totalAmount;
+  double get cashAmount =>
+      widget.order.pricing?.total ?? widget.order.totalAmount;
 
   @override
   void initState() {
@@ -40,7 +43,7 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
     debugPrint('   totalAmount: ${widget.order.totalAmount}');
     debugPrint('   total: ${widget.order.total}');
     debugPrint('   FINAL cashAmount: $cashAmount');
-    
+
     // تحديث الـ Provider بالطلب الحالي (مهم بعد hot restart)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(activeOrderProvider.notifier).updateOrder(widget.order);
@@ -49,7 +52,8 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
 
   void _showUnavailableDialog() {
     if (widget.order.financialAssignment != null) {
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => ReturnOrderScreen(order: widget.order)));
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+          builder: (_) => ReturnOrderScreen(order: widget.order)));
       return;
     }
     showDialog(
@@ -64,6 +68,17 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _openCashReview() async {
+    setState(() => _cashCollected = false);
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => CustomerCashReviewScreen(
+        driver: true,
+        call: (body) =>
+            CustomerCashReviewService().call(widget.order.orderId, body),
+      ),
+    ));
   }
 
   Future<void> _takePhoto() async {
@@ -116,9 +131,9 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
     // نستخدم pricing.total (goodsSubtotal + deliveryFee + tip) وهو المبلغ الذي يستلمه السائق نقداً
     // يشمل: deliveryFee + tip (يستلمهما السائق نقداً) + goodsSubtotal (يحجز من محفظة السائق)
     final result = await ref.read(activeOrderProvider.notifier).deliverOrder(
-      cashCollected: _cashCollected ? cashAmount : null,
-      deliveryNotes: null,
-    );
+          cashCollected: _cashCollected ? cashAmount : null,
+          deliveryNotes: null,
+        );
 
     setState(() => _isLoading = false);
 
@@ -126,12 +141,13 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
       // ✅ مسح الطلب النشط من التخزين المحلي بعد التسليم الناجح
       try {
         await OrderPersistenceService.clearActiveOrder();
-        debugPrint('🗑️ Active order cleared from local storage after successful delivery');
+        debugPrint(
+            '🗑️ Active order cleared from local storage after successful delivery');
       } catch (e) {
         debugPrint('⚠️ Failed to clear active order from local storage: $e');
         // لا نفشل العملية بسبب مشكلة المسح
       }
-      
+
       // Show success dialog
       showDialog(
         context: context,
@@ -185,7 +201,7 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
               onPressed: () {
                 // Close dialog first
                 Navigator.of(context).pop();
-                
+
                 // Navigate to home using GoRouter (page-based routing)
                 Future.delayed(const Duration(milliseconds: 100), () {
                   if (context.mounted) {
@@ -208,7 +224,8 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(result?['message'] ?? 'فشل تأكيد التسليم. حاول مرة أخرى.'),
+          content:
+              Text(result?['message'] ?? 'فشل تأكيد التسليم. حاول مرة أخرى.'),
           backgroundColor: Colors.red,
         ),
       );
@@ -221,6 +238,12 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
         title: const Text('تسليم الطلب'),
+        actions: [
+          IconButton(
+              tooltip: 'مراجعة النقد ورد المبلغ',
+              icon: const Icon(Icons.payments_outlined),
+              onPressed: _isLoading ? null : _openCashReview)
+        ],
         centerTitle: true,
         elevation: 0,
         backgroundColor: Colors.purple,
@@ -606,6 +629,16 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
             ],
           ),
           const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: _isLoading ? null : _openCashReview,
+            icon: const Icon(Icons.report_problem_outlined),
+            label: const Text('مشكلة في التحصيل / استلمت مبلغًا أقل'),
+          ),
+          const Padding(
+            padding: EdgeInsets.only(top: 4, bottom: 12),
+            child: Text(
+                'إذا دفع الزبون مبلغًا أقل، سجّل المبلغ الفعلي للمراجعة. لا تؤكد استلام المبلغ بالكامل.'),
+          ),
           // Checkbox
           InkWell(
             onTap: () => setState(() => _cashCollected = !_cashCollected),
@@ -615,15 +648,19 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
                 color: _cashCollected ? Colors.green[50] : Colors.white,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: _cashCollected ? Colors.green[300]! : Colors.grey[300]!,
+                  color:
+                      _cashCollected ? Colors.green[300]! : Colors.grey[300]!,
                   width: 2,
                 ),
               ),
               child: Row(
                 children: [
                   Icon(
-                    _cashCollected ? Icons.check_box : Icons.check_box_outline_blank,
-                    color: _cashCollected ? Colors.green[700] : Colors.grey[400],
+                    _cashCollected
+                        ? Icons.check_box
+                        : Icons.check_box_outline_blank,
+                    color:
+                        _cashCollected ? Colors.green[700] : Colors.grey[400],
                     size: 28,
                   ),
                   const SizedBox(width: 12),
@@ -633,7 +670,9 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
-                        color: _cashCollected ? Colors.green[900] : Colors.grey[700],
+                        color: _cashCollected
+                            ? Colors.green[900]
+                            : Colors.grey[700],
                       ),
                     ),
                   ),

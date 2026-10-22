@@ -1,3 +1,5 @@
+import 'package:go_router/go_router.dart';
+import '../services/order_persistence_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/active_order_model.dart';
@@ -37,6 +39,19 @@ class _DriverActiveOrderOverviewScreenState
       await ref.read(activeOrderProvider.notifier).fetchOrderById(widget.orderId!);
     } else {
       await ref.read(activeOrderProvider.notifier).fetchActiveOrder();
+    }
+    if (!mounted) return;
+    final state = ref.read(activeOrderProvider);
+    if (state.error == null && (state.order == null ||
+        ['returned','delivered','completed','cancelled'].contains(state.order!.status))) {
+      if (state.order != null) {
+        await OrderPersistenceService.clearActiveOrder(expectedOrderId: state.order!.orderId);
+        if (!mounted) return;
+        if (ref.read(activeOrderProvider).order?.orderId == state.order!.orderId) {
+          ref.read(activeOrderProvider.notifier).clearOrder();
+        }
+      }
+      if (mounted) context.go('/');
     }
   }
 

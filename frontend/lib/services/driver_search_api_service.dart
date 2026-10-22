@@ -18,6 +18,36 @@ class DriverSearchApiService {
   // API Gateway base URL for driver profile API
   static String get _baseUrl => Environment.apiBaseUrl;
   
+  /// Distinguish an unavailable profile/session from a real approval refusal.
+  static Future<void> checkSearchEligibility({
+    http.Client? client,
+    Future<String?> Function()? tokenProvider,
+  }) async {
+    final token = await (tokenProvider ?? DriverAuthHelper.getCurrentAccessToken)()
+        .timeout(const Duration(seconds: 8));
+    if (token == null) {
+      throw const DriverSearchStartException('تعذر تجديد جلسة الدخول. أعد تسجيل الدخول.', code: 'AUTH_REQUIRED');
+    }
+    final response = await (client?.get ?? http.get)(
+      Uri.parse('$_baseUrl/driver/me'),
+      headers: {'Authorization': 'Bearer $token'},
+    ).timeout(const Duration(seconds: 15));
+    if (response.statusCode == 401) {
+      throw const DriverSearchStartException('تعذر تجديد جلسة الدخول. أعد تسجيل الدخول.', code: 'AUTH_REQUIRED');
+    }
+    if (response.statusCode != 200) {
+      throw const DriverSearchStartException('تعذر التحقق من حالة حسابك. حاول مرة أخرى.', code: 'PROFILE_UNAVAILABLE');
+    }
+    final body = jsonDecode(response.body);
+    final profile = body is Map ? body['data'] : null;
+    if (profile is! Map || profile['isVerified'] is! bool) {
+      throw const DriverSearchStartException('تعذر التحقق من حالة حسابك. حاول مرة أخرى.', code: 'PROFILE_UNAVAILABLE');
+    }
+    if (profile['isVerified'] != true) {
+      throw const DriverSearchStartException('حسابك بانتظار تحقق الإدارة. يمكنك بدء العمل بعد الموافقة.', code: 'APPROVAL_REQUIRED');
+    }
+  }
+
   /// Start searching for orders
   /// 
   /// This API call:
@@ -90,17 +120,29 @@ class DriverSearchApiService {
   }
   
   /// Refresh search position using the current authenticated session.
-  static Future<bool> refreshSearchPosition({required double latitude, required double longitude}) async {
-    final token = await DriverAuthHelper.getCurrentAccessToken();
-    if (token == null) return false;
+  static Future<bool> refreshSearchPosition({
+    required double latitude,
+    required double longitude,
+    http.Client? client,
+    Future<String?> Function()? tokenProvider,
+  }) async {
     try {
-      final response = await http.post(
+      final token = await (tokenProvider ?? DriverAuthHelper.getCurrentAccessToken)()
+          .timeout(const Duration(seconds: 8));
+      if (token == null) return false;
+      final response = await (client?.post ?? http.post)(
         Uri.parse('$_baseUrl/driver/update-location'),
         headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
         body: jsonEncode({'lat': latitude, 'lng': longitude}),
       ).timeout(const Duration(seconds: 10));
-      return response.statusCode == 200 && jsonDecode(response.body)['success'] == true;
-    } catch (_) { return false; }
+      final succeeded = response.statusCode == 200 &&
+          jsonDecode(response.body)['success'] == true;
+      if (!succeeded) print('Search position refresh failed: HTTP ${response.statusCode}');
+      return succeeded;
+    } catch (_) {
+      print('Search position refresh unavailable; will retry.');
+      return false;
+    }
   }
 
   /// Stop searching for orders

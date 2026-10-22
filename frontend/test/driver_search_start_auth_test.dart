@@ -7,6 +7,23 @@ import 'package:wizz_driver/services/driver_search_api_service.dart';
 
 void main(){
  TestWidgetsFlutterBinding.ensureInitialized();
+ test('profile errors do not masquerade as awaiting approval', () async {
+  for (final status in [401, 403, 500]) {
+   await expectLater(DriverSearchApiService.checkSearchEligibility(
+    tokenProvider: () async => 'current',
+    client: MockClient((_) async => http.Response('{}', status))),
+    throwsA(isA<DriverSearchStartException>().having((e)=>e.code,'code',status==401?'AUTH_REQUIRED':'PROFILE_UNAVAILABLE')));
+  }
+ });
+ test('only a successful explicit unverified profile shows approval refusal', () async {
+  await expectLater(DriverSearchApiService.checkSearchEligibility(tokenProvider:()async=>'current',client:MockClient((_)async=>http.Response('{"data":{"isVerified":false}}',200))),throwsA(isA<DriverSearchStartException>().having((e)=>e.code,'code','APPROVAL_REQUIRED')));
+  await DriverSearchApiService.checkSearchEligibility(tokenProvider:()async=>'current',client:MockClient((r)async{expect(r.headers['Authorization'],'Bearer current');return http.Response('{"data":{"isVerified":true}}',200);}));
+ });
+ test('position refresh uses current auth and reports server failure', () async {
+  final ok=await DriverSearchApiService.refreshSearchPosition(latitude:31.9,longitude:44.4,tokenProvider:()async=>'current',client:MockClient((r)async{expect(r.url.path,endsWith('/driver/update-location'));expect(r.headers['Authorization'],'Bearer current');expect(jsonDecode(r.body),{'lat':31.9,'lng':44.4});return http.Response('{"success":true}',200);}));
+  expect(ok,true);
+  expect(await DriverSearchApiService.refreshSearchPosition(latitude:31.9,longitude:44.4,tokenProvider:()async=>'current',client:MockClient((_)async=>http.Response('{}',503))),false);
+ });
  test('start search uses the current session instead of stale preferences',()async{
   SharedPreferences.setMockInitialValues({'auth_token':'expired','id_token':'old-id'});
   var requested=0;

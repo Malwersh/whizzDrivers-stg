@@ -168,6 +168,12 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                           const SizedBox(height: 12),
                           _buildEarningsRow('النقد المطلوب تحصيله من الزبون',
                               '${offer.orderTotal.toStringAsFixed(0)} د.ع'),
+                          if (offer.driverCashRetained != null)
+                            _buildEarningsRow('تحتفظ به نقدًا من التحصيل',
+                                '${offer.driverCashRetained!.toStringAsFixed(0)} د.ع'),
+                          if ((offer.walletCreditAfterDelivery ?? 0) > 0)
+                            _buildEarningsRow('يُضاف لمحفظتك بعد التسليم',
+                                '${offer.walletCreditAfterDelivery!.toStringAsFixed(0)} د.ع'),
                           if (offer.financialTerms != null &&
                               offer.holdRequiredAmount != null)
                             _buildEarningsRow('يُحجز من المحفظة عند القبول',

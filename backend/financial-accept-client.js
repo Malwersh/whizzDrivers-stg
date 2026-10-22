@@ -3,9 +3,9 @@ const {LambdaClient,InvokeCommand}=require('@aws-sdk/client-lambda');
 const TARGET='arn:aws:lambda:us-east-1:699561669180:function:staging-driver-financial-accept';
 // Drivers API only invokes the financial writer. It never acquires wallet mutation permissions.
 async function invokeFinancialOperation(body,accessToken,action,client=new LambdaClient({region:'us-east-1'})) {
- if(!['read_offer','accept','decline','complete_cod','request_return','arrive_return','unassign_financial'].includes(action))throw Error('INVALID_FINANCIAL_ACTION');
+ if(!['driver_cash_case','return_case_driver','read_offer','accept','decline','complete_cod','request_return','arrive_return','report_return_obstacle','unassign_financial','start_delivery_attempt','read_delivery_attempt','record_contact_attempt'].includes(action))throw Error('INVALID_FINANCIAL_ACTION');
  if(action==='unassign_financial'&&process.env.FINANCIAL_COD_ASSIGNMENTS_MODE!=='REQUIRED')throw Error('COD_ASSIGNMENTS_DISABLED');
- if(['request_return','arrive_return'].includes(action)&&process.env.FINANCIAL_COD_RETURNS_MODE!=='REQUIRED')throw Error('COD_RETURNS_DISABLED');
+ if(['driver_cash_case','return_case_driver','request_return','arrive_return','report_return_obstacle','start_delivery_attempt','read_delivery_attempt','record_contact_attempt'].includes(action)&&process.env.FINANCIAL_COD_RETURNS_MODE!=='REQUIRED')throw Error('COD_RETURNS_DISABLED');
  if(action==='complete_cod'&&process.env.FINANCIAL_COD_COMPLETION_MODE!=='REQUIRED')throw Error('COD_COMPLETION_DISABLED');
  if(process.env.FINANCIAL_DISPATCH_MODE!=='REQUIRED'||process.env.FINANCIAL_ACCEPT_FUNCTION_ARN!==TARGET)throw Error('FINANCIAL_DISPATCH_DISABLED');
  const result=await client.send(new InvokeCommand({FunctionName:TARGET,InvocationType:'RequestResponse',
@@ -17,7 +17,7 @@ async function invokeFinancialOperation(body,accessToken,action,client=new Lambd
 }
 function invokeFinancialAcceptance(body,accessToken,decline=false,client){return invokeFinancialOperation(body,accessToken,decline?'decline':'accept',client);}
 function invokeFinancialCompletion(body,accessToken,client){return invokeFinancialOperation(body,accessToken,'complete_cod',client);}
-function invokeFinancialReturn(body,accessToken,action,client){if(!['request_return','arrive_return'].includes(action))throw Error('INVALID_COD_RETURN');return invokeFinancialOperation(body,accessToken,action,client);}
+function invokeFinancialReturn(body,accessToken,action,client){if(!['request_return','arrive_return','report_return_obstacle'].includes(action))throw Error('INVALID_COD_RETURN');return invokeFinancialOperation(body,accessToken,action,client);}
 function invokeFinancialUnassign(body,accessToken,client){return invokeFinancialOperation(body,accessToken,'unassign_financial',client);}
 function invokeFinancialOfferRead(body,accessToken,client){return invokeFinancialOperation(body,accessToken,'read_offer',client);}
-module.exports={invokeFinancialOfferRead,invokeFinancialAcceptance,invokeFinancialCompletion,invokeFinancialReturn,invokeFinancialUnassign};
+module.exports={invokeFinancialOperation,invokeFinancialOfferRead,invokeFinancialAcceptance,invokeFinancialCompletion,invokeFinancialReturn,invokeFinancialUnassign};

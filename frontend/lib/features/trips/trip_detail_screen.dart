@@ -1,3 +1,7 @@
+import '../active_order/screens/customer_cash_review_screen.dart';
+import '../active_order/services/customer_cash_review_service.dart';
+import '../active_order/screens/return_continuation_screen.dart';
+import '../active_order/services/return_continuation_service.dart';
 import 'package:flutter/material.dart';
 import '../../design_system/colors.dart';
 import '../../models/trip_model.dart';
@@ -33,6 +37,20 @@ class TripDetailScreen extends StatelessWidget {
       body: SingleChildScrollView(
         child: Column(
           children: [
+            if (trip.orderId.isNotEmpty)
+              OutlinedButton(
+                  onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => ReturnContinuationScreen(
+                              orderId: trip.orderId,
+                              caseKey: 'CURRENT',
+                              driver: true,
+                              call: (body) => ReturnContinuationService()
+                                  .call(trip.orderId, body)))),
+                  child: const Text('قضية المرتجع والاعتراضات إن وجدت')),
+            if (trip.orderId.isNotEmpty)
+              OutlinedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CustomerCashReviewScreen(driver: true, call: (body) => CustomerCashReviewService().call(trip.orderId, body)))), child: const Text('مراجعة النقد ورد المبلغ')),
             // Delivery fee section
             Container(
               width: double.infinity,
@@ -49,7 +67,7 @@ class TripDetailScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  
+
                   // عرض التفاصيل إذا كان هناك بونص أو إكرامية
                   if (trip.waveBonus > 0 || trip.tip > 0) ...[
                     // الرسوم الأساسية
@@ -76,7 +94,7 @@ class TripDetailScreen extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 6),
-                    
+
                     // المكافئة (البونص) - إذا وُجد
                     if (trip.waveBonus > 0) ...[
                       Row(
@@ -111,7 +129,7 @@ class TripDetailScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                     ],
-                    
+
                     // الإكرامية (إذا وُجدت)
                     if (trip.tip > 0) ...[
                       Row(
@@ -146,7 +164,7 @@ class TripDetailScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                     ],
-                    
+
                     // خط فاصل
                     Container(
                       width: 120,
@@ -154,7 +172,7 @@ class TripDetailScreen extends StatelessWidget {
                       color: Colors.white30,
                       margin: const EdgeInsets.symmetric(vertical: 8),
                     ),
-                    
+
                     // الإجمالي
                     Column(
                       children: [
@@ -221,7 +239,8 @@ class TripDetailScreen extends StatelessWidget {
                     title: 'استلام الطلب',
                     subtitle: trip.restaurantName,
                     time: trip.getFormattedPickupTime(),
-                    location: '${trip.pickupLocation['lat']}, ${trip.pickupLocation['lng']}',
+                    location:
+                        '${trip.pickupLocation['lat']}, ${trip.pickupLocation['lng']}',
                     address: trip.pickupAddress,
                     isLast: false,
                   ),
@@ -233,7 +252,8 @@ class TripDetailScreen extends StatelessWidget {
                     title: 'تسليم الطلب',
                     subtitle: trip.customerName,
                     time: trip.getFormattedDeliveryTime(),
-                    location: '${trip.deliveryLocation['lat']}, ${trip.deliveryLocation['lng']}',
+                    location:
+                        '${trip.deliveryLocation['lat']}, ${trip.deliveryLocation['lng']}',
                     address: trip.deliveryAddress,
                     isLast: true,
                   ),

@@ -52,10 +52,13 @@ function canonicalFinancialPreparation(item,record){
 function driverProgressFence(target){
  const graph={heading_to_store:['assigned','accepted'],arrived_at_store:['heading_to_store'],picked_up:['arrived_at_store'],heading_to_customer:['picked_up'],arrived_at_customer:['heading_to_customer']};
  if(!graph[target])throw workflowRequired();
- const values={':lfSchema':1,':lfNull':null,':lfNotDeleted':false};
+ const values={':lfSchema':1,':lfFundingSchema':2,':lfAllocationV1':'ORDER_ALLOCATION_V1',':lfAllocationV2':'ORDER_ALLOCATION_V2_DELIVERY_FUNDING',':lfCod':'COD',':lfNull':null,':lfNotDeleted':false};
+ const fullCash=process.env.FINANCIAL_SETTLEMENT_MODEL==='FULL_CASH_AT_DELIVERY_V1';
+ if(fullCash)Object.assign(values,{':lfFullSchema':3,':lfFullAllocation':'ORDER_ALLOCATION_V3_FULL_CASH',':lfFullModel':'FULL_CASH_AT_DELIVERY_V1'});
+ const fullFence=fullCash?' OR (financialAcceptance.schemaVersion=:lfFullSchema AND financialAcceptance.settlementModel=:lfFullModel AND financialAcceptance.allocation.ruleVersion=:lfFullAllocation)':'';
  const previous=graph[target].map((v,i)=>{values[':lfPrev'+i]=v;return ':lfPrev'+i;});
  const absent=['returnCaseId','returnStatus','cancellationRequestId','cancellationStatus'].map(k=>'(attribute_not_exists('+k+') OR '+k+'=:lfNull)').join(' AND ');
- return {values,condition:'('+LEGACY_ONLY+') OR (attribute_exists(financialSnapshot) AND financialAcceptance.schemaVersion=:lfSchema AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND attribute_not_exists(deletionRequestId) AND attribute_not_exists(deletedAt) AND (attribute_not_exists(isDeleted) OR isDeleted=:lfNotDeleted) AND '+absent+' AND #status IN ('+previous.concat(':status').join(',')+'))'};
+ return {values,condition:'('+LEGACY_ONLY+') OR (attribute_exists(financialSnapshot) AND ((financialAcceptance.schemaVersion=:lfSchema AND financialAcceptance.allocation.ruleVersion=:lfAllocationV1) OR (financialAcceptance.schemaVersion=:lfFundingSchema AND financialAcceptance.allocation.ruleVersion=:lfAllocationV2)'+fullFence+') AND financialAcceptance.paymentMethod=:lfCod AND financialAcceptance.allocation.paymentMethod=:lfCod AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND attribute_not_exists(deletionRequestId) AND attribute_not_exists(deletedAt) AND (attribute_not_exists(isDeleted) OR isDeleted=:lfNotDeleted) AND '+absent+' AND #status IN ('+previous.concat(':status').join(',')+'))'};
 }
 function customerStatusFilter(kind){
  if(!['active','completed'].includes(kind))throw Error('INVALID_STATUS_FILTER');

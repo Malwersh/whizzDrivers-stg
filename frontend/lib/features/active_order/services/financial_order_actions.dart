@@ -13,9 +13,16 @@ class FinancialOrderActions {
 
   Future<Map<String, dynamic>> send(
       String orderId, String action, Map<String, dynamic> assignment,
-      {String? reason}) async {
-    if (!['request-return', 'arrive-return', 'financial-unassign']
-            .contains(action) ||
+      {String? reason,
+      Map<String, dynamic>? position,
+      String? issueId,
+      String? note}) async {
+    if (![
+          'request-return',
+          'arrive-return',
+          'report-return-obstacle',
+          'financial-unassign'
+        ].contains(action) ||
         assignment['offerId'] is! String ||
         assignment['attempt'] is! int) {
       throw Exception('بيانات محاولة الإسناد غير متاحة؛ حدّث الطلب');
@@ -27,7 +34,15 @@ class FinancialOrderActions {
       'offerId': assignment['offerId'],
       'attempt': assignment['attempt']
     };
-    if (action == 'request-return') {
+    if (position != null) body['position'] = position;
+    if (action == 'report-return-obstacle') {
+      body.addAll({
+        'returnId': assignment['returnId'],
+        'issueId': issueId,
+        'reason': reason,
+        'note': note
+      });
+    } else if (action == 'request-return') {
       body.addAll({'reason': reason, 'cashCollected': false});
     } else if (action == 'arrive-return') {
       body['returnId'] = assignment['returnId'];

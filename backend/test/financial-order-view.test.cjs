@@ -9,3 +9,19 @@ test('active financial order separates customer D from driver E, cash and H and 
 test('malformed explicit money and missing financial acceptance cannot fall back to legacy pricing',()=>{
  const order=fixture();order.financialAcceptance.allocation.customerTotal.scale=1;assert.throws(()=>view(order));assert.throws(()=>view({financialSnapshot:{},pricing:{total:14500}}));
 });
+
+test('delivery funding allocation V2 remains readable after acceptance',()=>{
+ const order=fixture();order.financialAcceptance.schemaVersion=2;order.financialAcceptance.allocation.ruleVersion='ORDER_ALLOCATION_V2_DELIVERY_FUNDING';
+ assert.equal(view(order).total,14500);assert.equal(view(order).holdRequiredAmount,10500);
+ order.financialAcceptance.allocation.ruleVersion='UNKNOWN';assert.throws(()=>view(order));
+});
+test('full cash pricing is explicit and rejects inconsistent retained cash',()=>{
+ const old=process.env.FINANCIAL_SETTLEMENT_MODEL;
+ try{
+  const o=fixture(),t=o.financialAcceptance;t.schemaVersion=3;t.settlementModel='FULL_CASH_AT_DELIVERY_V1';t.allocation.ruleVersion='ORDER_ALLOCATION_V3_FULL_CASH';
+  assert.throws(()=>view(o));process.env.FINANCIAL_SETTLEMENT_MODEL='FULL_CASH_AT_DELIVERY_V1';
+  t.allocation.driverCashRetained=m(5000);t.allocation.driverWalletHold=m(9500);t.allocation.driverWalletCreditTotal=m(0);
+  assert.equal(view(o).driverCashRetained,5000);assert.equal(view(o).holdRequiredAmount,9500);
+  t.allocation.driverWalletHold=m(10500);assert.throws(()=>view(o));
+ }finally{if(old===undefined)delete process.env.FINANCIAL_SETTLEMENT_MODEL;else process.env.FINANCIAL_SETTLEMENT_MODEL=old;}
+});

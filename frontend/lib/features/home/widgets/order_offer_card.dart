@@ -265,7 +265,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          'المطلوب تحصيله: ${_formatAmount(widget.offer.orderTotal)} ${widget.offer.currency}',
+                          'حصّل من الزبون: ${_formatAmount(widget.offer.orderTotal)} ${widget.offer.currency}',
                           style: const TextStyle(
                             fontSize: 13,
                             color: AppColors.secondary,
@@ -279,6 +279,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                   const SizedBox(height: 12),
 
                   if (widget.offer.financialTerms != null &&
+                      widget.offer.financialTerms?['schemaVersion'] != 3 &&
                       widget.offer.holdRequiredAmount != null) ...[
                     Text(
                         'يُحجز عند القبول: ${_formatAmount(widget.offer.holdRequiredAmount!)} د.ع',
