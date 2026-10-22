@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import 'dart:async';
 import 'package:go_router/go_router.dart';
 import '../models/active_order_model.dart';
 import '../../../providers/riverpod/active_order_provider.dart';
@@ -24,11 +25,15 @@ class AtCustomerScreen extends ConsumerStatefulWidget {
   ConsumerState<AtCustomerScreen> createState() => _AtCustomerScreenState();
 }
 
-class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
+class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen>
+    with WidgetsBindingObserver {
   bool _isLoading = false;
   File? _deliveryPhoto;
   final ImagePicker _picker = ImagePicker();
   bool _cashCollected = false;
+  Timer? _completionPoll;
+  bool _checkingCompletion = false;
+  bool _leaving = false;
 
   // Calculate total cash amount using new pricing model
   double get cashAmount =>
@@ -37,6 +42,16 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _completionPoll = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!_isLoading &&
+          ModalRoute.of(context)?.isCurrent == true &&
+          (WidgetsBinding.instance.lifecycleState == null ||
+              WidgetsBinding.instance.lifecycleState ==
+                  AppLifecycleState.resumed)) {
+        _refreshCompletion();
+      }
+    });
     // Debug: طباعة قيم المبلغ
     debugPrint('💰 DEBUG cashAmount:');
     debugPrint('   pricing?.total: ${widget.order.pricing?.total}');
@@ -46,8 +61,62 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
 
     // تحديث الـ Provider بالطلب الحالي (مهم بعد hot restart)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(activeOrderProvider.notifier).updateOrder(widget.order);
+      if (!mounted) return;
+      final current = ref.read(activeOrderProvider).order;
+      if (current == null || current.orderId == widget.order.orderId) {
+        ref.read(activeOrderProvider.notifier).updateOrder(widget.order);
+      }
+      _refreshCompletion();
     });
+  }
+
+  @override
+  void dispose() {
+    _completionPoll?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_isLoading) _refreshCompletion();
+  }
+
+  // Read the specific order. Missing data or a read failure never proves delivery.
+  Future<bool?> _refreshCompletion({bool showError = false}) async {
+    if (!mounted || _checkingCompletion || _leaving) return null;
+    _checkingCompletion = true;
+    try {
+      final latest = await ref
+          .read(activeOrderServiceProvider)
+          .getOrderById(widget.order.orderId);
+      if (!mounted || latest.orderId != widget.order.orderId) return null;
+      if (!['delivered', 'completed', 'returned', 'cancelled']
+          .contains(latest.status.toLowerCase())) {
+        return false;
+      }
+      _leaving = true;
+      _completionPoll?.cancel();
+      await OrderPersistenceService.clearActiveOrder(
+          expectedOrderId: widget.order.orderId);
+      if (!mounted) return true;
+      if (ref.read(activeOrderProvider).order?.orderId ==
+          widget.order.orderId) {
+        ref.read(activeOrderProvider.notifier).clearOrder();
+      }
+      if (mounted) context.go('/');
+      return true;
+    } catch (_) {
+      if (mounted && showError) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:
+              Text('تعذر تحديث حالة الطلب؛ أعد المحاولة قبل تأكيد التسليم.'),
+        ));
+      }
+      return null;
+    } finally {
+      _checkingCompletion = false;
+    }
   }
 
   void _showUnavailableDialog() {
@@ -64,7 +133,7 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
         onConfirmUnavailable: () async {
           // TODO: Call API to report customer unreachable
           await Future.delayed(const Duration(seconds: 1));
-          print('Customer unavailable reported');
+          debugPrint('Customer unavailable reported');
         },
       ),
     );
@@ -79,6 +148,7 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
             CustomerCashReviewService().call(widget.order.orderId, body),
       ),
     ));
+    if (mounted) await _refreshCompletion(showError: true);
   }
 
   Future<void> _takePhoto() async {
@@ -96,7 +166,7 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
         });
       }
     } catch (e) {
-      print('❌ Error taking photo: $e');
+      debugPrint('❌ Error taking photo: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -109,6 +179,9 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
   }
 
   Future<void> _completeDelivery() async {
+    if (_isLoading || _leaving || _checkingCompletion) return;
+    final finished = await _refreshCompletion(showError: true);
+    if (!mounted || finished != false) return;
     // تحقق من checkbox إذا كان الدفع نقدي
     if (widget.order.isCashPayment && !_cashCollected) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -135,6 +208,7 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
           deliveryNotes: null,
         );
 
+    if (!mounted) return;
     setState(() => _isLoading = false);
 
     if (result != null && result['success'] == true && mounted) {
@@ -148,6 +222,7 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
         // لا نفشل العملية بسبب مشكلة المسح
       }
 
+      if (!mounted) return;
       // Show success dialog
       showDialog(
         context: context,
@@ -239,6 +314,12 @@ class _AtCustomerScreenState extends ConsumerState<AtCustomerScreen> {
       appBar: AppBar(
         title: const Text('تسليم الطلب'),
         actions: [
+          IconButton(
+            tooltip: 'تحديث حالة الطلب',
+            icon: const Icon(Icons.refresh),
+            onPressed:
+                _isLoading ? null : () => _refreshCompletion(showError: true),
+          ),
           IconButton(
               tooltip: 'مراجعة النقد ورد المبلغ',
               icon: const Icon(Icons.payments_outlined),
