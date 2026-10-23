@@ -8,6 +8,7 @@ class DriverProfile {
   final String licenseNumber;
   final String nationalId;
   final double rating;
+  final int customerRatingCount;
   final int totalDeliveries;
   final DateTime joinDate;
   final String status;
@@ -82,6 +83,7 @@ class DriverProfile {
     required this.licenseNumber,
     required this.nationalId,
     required this.rating,
+    this.customerRatingCount = 0,
     required this.totalDeliveries,
     required this.joinDate,
     required this.status,
@@ -146,7 +148,8 @@ class DriverProfile {
               : ''),
       licenseNumber: json['license_number'] ?? json['licenseNumber'] ?? '',
       nationalId: json['national_id'] ?? json['nationalId'] ?? '',
-      rating: (json['rating'] ?? 0.0).toDouble(),
+      rating: (json['customerRating'] ?? json['rating'] ?? 0.0).toDouble(),
+      customerRatingCount: (json['customerRatingCount'] as num?)?.toInt() ?? 0,
       totalDeliveries:
           json['total_deliveries'] ??
           json['totalDeliveries'] ??
@@ -288,6 +291,7 @@ class DriverProfile {
       'national_id': nationalId,
       'nationalId': nationalId,
       'rating': rating,
+      'customerRatingCount': customerRatingCount,
       'total_deliveries': totalDeliveries,
       'totalTrips': totalTrips ?? totalDeliveries,
       'totalEarnings': totalEarnings,
@@ -399,6 +403,7 @@ class DriverProfile {
       licenseNumber: licenseNumber ?? this.licenseNumber,
       nationalId: nationalId ?? this.nationalId,
       rating: rating ?? this.rating,
+      customerRatingCount: customerRatingCount,
       totalDeliveries: totalDeliveries ?? this.totalDeliveries,
       joinDate: joinDate ?? this.joinDate,
       status: status ?? this.status,

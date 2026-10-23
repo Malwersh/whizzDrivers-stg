@@ -58,6 +58,7 @@ class _MoreTabState extends ConsumerState<MoreTab> {
         });
       }
       final profile = await DriverService.getDriverProfile();
+      if (!mounted) return;
       setState(() {
         _driverProfile = profile;
         _isLoading = false;
@@ -73,6 +74,7 @@ class _MoreTabState extends ConsumerState<MoreTab> {
         }
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -103,6 +105,11 @@ class _MoreTabState extends ConsumerState<MoreTab> {
         toolbarHeight: 50, // Thin app bar
         automaticallyImplyLeading: false, // Remove back button
         centerTitle: true,
+        actions: [IconButton(
+          tooltip: 'تحديث الملف والتقييم',
+          onPressed: _isLoading ? null : _loadDriverProfile,
+          icon: const Icon(Icons.refresh_rounded),
+        )],
         titleSpacing: 20,
         leading: const Padding(
           padding: EdgeInsets.all(8.0),
@@ -541,7 +548,7 @@ class _MoreTabState extends ConsumerState<MoreTab> {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        '${_driverProfile?.rating.toStringAsFixed(1) ?? '4.9'} • Driver since ${_getJoinedDate()}',
+                        '${(_driverProfile?.customerRatingCount ?? 0) > 0 ? '${_driverProfile!.rating.toStringAsFixed(1)} (${_driverProfile!.customerRatingCount} تقييم)' : 'لا تقييمات بعد'} • Driver since ${_getJoinedDate()}',
                         style: const TextStyle(
                           fontSize: 14,
                           color: AppColors.textSecondary,
