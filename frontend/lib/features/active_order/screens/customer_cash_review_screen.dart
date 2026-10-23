@@ -418,5 +418,8 @@ class _CustomerCashReviewScreenState extends State<CustomerCashReviewScreen> {
           color: Colors.white,
           border: Border.all(color: const Color(0xFFE3E9F1)),
           borderRadius: BorderRadius.circular(20)),
-      child: child);
+      child: Material(
+        color: Colors.transparent,
+        child: child,
+      ));
 }
