@@ -336,7 +336,7 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
       const SparkHomeSimpleArabic(),
       TripsScreen(isActive: selectedIndex == 1),
       const WalletHomeScreen(),
-      const EarningsScreen(),
+      EarningsScreen(isActive: selectedIndex == 3),
       const NotificationsScreen(),
       MoreTab(
         isDashing: appState.driverStatus != DriverStatus.offline,

@@ -1,3 +1,4 @@
+import 'pickup_issue_service.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/active_order_model.dart';
@@ -6,11 +7,12 @@ import '../../../config/environment.dart';
 
 /// Service للتعامل مع API الطلب النشط
 class ActiveOrderService {
+  final PickupIssueService _pickupIssues = PickupIssueService();
   static String get baseUrl => Environment.apiBaseUrl;
 
   Future<Map<String, String>> get _headers async {
     final authToken = await DriverAuthHelper.getCurrentAccessToken();
-    
+
     final headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
@@ -27,10 +29,12 @@ class ActiveOrderService {
   Future<bool> hasActiveOrder() async {
     try {
       final headers = await _headers;
-      final response = await http.get(
+      final response = await http
+          .get(
         Uri.parse('$baseUrl/driver/active-order'),
         headers: headers,
-      ).timeout(
+      )
+          .timeout(
         const Duration(seconds: 10),
         onTimeout: () {
           print('⏱️ hasActiveOrder timeout');
@@ -56,15 +60,16 @@ class ActiveOrderService {
       print('🔍 ActiveOrderService: Fetching active order...');
       final headers = await _headers;
 
-      
       final url = '$baseUrl/driver/active-order';
       print('📡 URL: $url');
-      
+
       // ✅ Add timeout to prevent app crash
-      final response = await http.get(
+      final response = await http
+          .get(
         Uri.parse(url),
         headers: headers,
-      ).timeout(
+      )
+          .timeout(
         const Duration(seconds: 10),
         onTimeout: () {
           print('⏱️ Request timeout - no response from server');
@@ -77,7 +82,7 @@ class ActiveOrderService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        
+
         // تحقق من نوع البيانات
         if (data is! Map<String, dynamic>) {
           print('⚠️ Invalid data format');
@@ -93,7 +98,8 @@ class ActiveOrderService {
       } else if (response.statusCode == 404) {
         print('ℹ️ No active order (404)');
       } else {
-        throw Exception('تعذر جلب الطلب النشط (${response.statusCode})؛ أعد المحاولة');
+        throw Exception(
+            'تعذر جلب الطلب النشط (${response.statusCode})؛ أعد المحاولة');
       }
 
       return null;
@@ -109,10 +115,9 @@ class ActiveOrderService {
       print('🔍 ActiveOrderService: Fetching order by ID: $orderId');
       final headers = await _headers;
 
-      
       final url = '$baseUrl/driver/orders/$orderId';
       print('📡 URL: $url');
-      
+
       final response = await http.get(
         Uri.parse(url),
         headers: headers,
@@ -123,22 +128,22 @@ class ActiveOrderService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        
+
         // تحقق من وجود بيانات الطلب
         if (data == null) {
           throw Exception('البيانات المستلمة فارغة');
         }
-        
+
         // تحقق من نوع البيانات
         if (data is! Map<String, dynamic>) {
           throw Exception('تنسيق البيانات غير صحيح');
         }
-        
+
         // البيانات قد تأتي إما:
         // 1. مباشرة: { orderId: "...", status: "..." }
         // 2. أو بـ wrapper: { order: { orderId: "...", status: "..." } }
         Map<String, dynamic> orderData;
-        
+
         if (data.containsKey('order') && data['order'] != null) {
           // البيانات داخل wrapper
           orderData = data['order'] as Map<String, dynamic>;
@@ -150,14 +155,15 @@ class ActiveOrderService {
         } else {
           throw Exception('الطلب غير موجود - تنسيق غير معروف');
         }
-        
+
         return ActiveOrder.fromJson(orderData);
       } else if (response.statusCode == 404) {
         throw Exception('الطلب غير موجود أو انتهت صلاحيته');
       } else {
         try {
           final errorData = json.decode(response.body);
-          final errorMessage = errorData['message'] ?? 'فشل في جلب بيانات الطلب';
+          final errorMessage =
+              errorData['message'] ?? 'فشل في جلب بيانات الطلب';
           throw Exception(errorMessage);
         } catch (_) {
           throw Exception('فشل في جلب بيانات الطلب');
@@ -177,10 +183,10 @@ class ActiveOrderService {
     try {
       print('🚗 startHeadingToStore: Starting - OrderID: $orderId');
       final headers = await _headers;
-      
+
       final url = '$baseUrl/driver/orders/$orderId/start-heading';
       print('🚗 startHeadingToStore: URL: $url');
-      
+
       final response = await http.post(
         Uri.parse(url),
         headers: headers,
@@ -195,7 +201,8 @@ class ActiveOrderService {
         // البيانات موجودة مباشرة في الاستجابة، ليس داخل مفتاح 'order'
         return ActiveOrder.fromJson(data);
       } else {
-        print('❌ startHeadingToStore: Failed with status ${response.statusCode}');
+        print(
+            '❌ startHeadingToStore: Failed with status ${response.statusCode}');
         final error = json.decode(response.body);
         throw Exception(error['message'] ?? 'فشل في تحديث حالة بدء التوجه');
       }
@@ -211,10 +218,10 @@ class ActiveOrderService {
       print('🏪 arriveAtStore: Starting - OrderID: $orderId');
       final headers = await _headers;
       print('🏪 arriveAtStore: Headers ready');
-      
+
       final url = '$baseUrl/driver/orders/$orderId/arrive-store';
       print('🏪 arriveAtStore: URL: $url');
-      
+
       final response = await http.post(
         Uri.parse(url),
         headers: headers,
@@ -273,7 +280,8 @@ class ActiveOrderService {
         headers: headers,
       );
 
-      print('🚗 startHeadingToCustomer: Response status: ${response.statusCode}');
+      print(
+          '🚗 startHeadingToCustomer: Response status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -319,7 +327,7 @@ class ActiveOrderService {
   }) async {
     try {
       final body = <String, dynamic>{};
-      
+
       // إذا تم تمرير cashCollected (المبلغ)، نرسل:
       // 1. cashCollected: true (تأكيد الاستلام)
       // 2. cashAmount: المبلغ الفعلي
@@ -329,7 +337,7 @@ class ActiveOrderService {
       } else {
         body['cashCollected'] = false;
       }
-      
+
       if (deliveryNotes != null) {
         body['deliveryNotes'] = deliveryNotes;
       }
@@ -363,38 +371,15 @@ class ActiveOrderService {
   }
 
   /// الإبلاغ عن مشكلة في المطعم
-  Future<Map<String, dynamic>> reportStoreIssue(
-    String orderId, {
-    required String issueType,
-    String? notes,
-  }) async {
-    try {
-      final headers = await _headers;
-      final response = await http.post(
-        Uri.parse('$baseUrl/driver/orders/$orderId/issue'),
-        headers: headers,
-        body: json.encode({
-          'issueType': issueType,
-          'issueSource': 'Store',
-          'notes': notes,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      } else {
-        final error = json.decode(response.body);
-        throw Exception(error['message'] ?? 'فشل في إرسال البلاغ');
-      }
-    } catch (e) {
-      print('Error reporting store issue: $e');
-      throw Exception('فشل في الإبلاغ عن المشكلة: $e');
-    }
-  }
+  Future<Map<String, dynamic>> reportStoreIssue(String orderId,
+          {required String issueType,
+          String? notes,
+          Map<String, dynamic>? assignment}) =>
+      _pickupIssues.submit(orderId,
+          issueType: issueType, notes: notes, assignment: assignment);
 
   /// الإبلاغ عن عدم توفر العميل
-  Future<Map<String, dynamic>> reportCustomerUnreachable(
-      String orderId) async {
+  Future<Map<String, dynamic>> reportCustomerUnreachable(String orderId) async {
     try {
       final headers = await _headers;
       final response = await http.post(

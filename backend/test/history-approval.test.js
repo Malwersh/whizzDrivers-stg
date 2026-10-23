@@ -51,7 +51,9 @@ test('history crosses empty scan pages and preserves cursor and IQD amounts', as
   const body = JSON.parse(response.body);
   assert.equal(body.trips.length, 1);
   assert.equal(body.trips[0].tripNumber, 'TRP123');
-  assert.equal(body.trips[0].finalDeliveryFee, 10);
+  assert.equal(body.trips[0].finalDeliveryFee, null);
+  assert.equal(body.trips[0].driverEarnings, null);
+  assert.equal(body.trips[0].deliveryFee, 10);
   assert.equal(body.trips[0].deliveryAddress, 'النجف');
   assert.deepEqual(calls[1].ExclusiveStartKey, cursor);
   assert.equal(calls[0].ExpressionAttributeValues[':driverId'], 'd');
@@ -120,4 +122,13 @@ test('pinned driver acceptance passes token and selectors to durable bridge, kee
 test('driver rejection forwards bearer identity to pinned response handler without body financial claims',async()=>{
  let payload;const api=loadApi(async()=>{throw Error('no database required');},{env:{WAVESYSTEM_HANDLE_DRIVER_REJECT_FUNCTION_NAME:'WaveSystem_HandleDriverReject'},invoke:async c=>{payload=JSON.parse(c.input.Payload);return {Payload:Buffer.from(JSON.stringify({statusCode:200,body:JSON.stringify({success:true})}))};}});
  const r=await api.rejectWaveOffer('d',{orderId:'o',offerId:'OFFER_o_d_W1',driverId:'forged',holdAmount:1},{},'test-token');assert.equal(r.statusCode,200);assert.equal(payload.headers.Authorization,'Bearer test-token');assert.deepEqual(JSON.parse(payload.body),{orderId:'o',offerId:'OFFER_o_d_W1',driverId:'d'});
+});
+
+test('authenticated history detail routes to the owned terminal order only',async()=>{
+ const order={PK:'ORDER#order1',SK:'META',orderId:'order1',status:'delivered',driverId:'driver1',driverEarnings:2750,createdAt:'2026-10-22T10:00:00Z'};
+ const api=loadApi(async c=>({Item:order}));
+ for(const subject of ['driver1','other']){
+  const r=await api.handler({httpMethod:'GET',path:'/driver/trips/order1',requestContext:{authorizer:{claims:{sub:subject}}}});
+  assert.equal(r.statusCode,subject==='driver1'?200:404, r.body);
+ }
 });

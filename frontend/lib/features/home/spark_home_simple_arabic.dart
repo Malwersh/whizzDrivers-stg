@@ -1,3 +1,5 @@
+import '../demand/demand_card.dart';
+import '../../services/driver_location_mode.dart';
 import '../../services/financial_offer_reference.dart';
 import '../../services/driver_offer_audio.dart';
 import '../../services/notification_sound_policy.dart';
@@ -178,8 +180,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   final List<BitmapDescriptor> _driverBreathingIcons = [];
   StreamSubscription<Position>? _displayLocationSubscription;
 
-  LatLng get _driverMapPoint => _displayDriverLocation ??
-      const LatLng(_testLatitude, _testLongitude);
+  LatLng get _driverMapPoint => _displayDriverLocation ?? const LatLng(0, 0);
 
   void _setDisplayDriverLocation(Position position) {
     if (!mounted) return;
@@ -187,9 +188,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       _displayDriverLocation = LatLng(position.latitude, position.longitude);
       final icon = _driverLocationIcon;
       if (icon != null) {
-        _markers.removeWhere((m) => m.markerId == const MarkerId('driver_location'));
-        _markers.add(Marker(markerId: const MarkerId('driver_location'),
-          position: _driverMapPoint, icon: icon, anchor: const Offset(.5,.5), zIndex:1000));
+        _markers.removeWhere(
+            (m) => m.markerId == const MarkerId('driver_location'));
+        _markers.add(Marker(
+            markerId: const MarkerId('driver_location'),
+            position: _driverMapPoint,
+            icon: icon,
+            anchor: const Offset(.5, .5),
+            zIndex: 1000));
       }
     });
   }
@@ -198,7 +204,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     if (_driverBreathingIcons.isEmpty) {
       for (var i = 0; i < 16; i++) {
         final breath = (1 - math.cos(2 * math.pi * i / 16)) / 2;
-        _driverBreathingIcons.add(await _createDriverLocationMarker(breath: breath));
+        _driverBreathingIcons
+            .add(await _createDriverLocationMarker(breath: breath));
         if (!mounted) return;
       }
     }
@@ -206,40 +213,56 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     if (!mounted) return;
     setState(() {
       _driverLocationIcon = icon;
-      _markers.removeWhere((m) => m.markerId == const MarkerId('driver_location'));
-      _markers.add(Marker(markerId: const MarkerId('driver_location'),
-        position:_driverMapPoint,icon:icon,anchor:const Offset(.5,.5),zIndex:1000));
+      _markers
+          .removeWhere((m) => m.markerId == const MarkerId('driver_location'));
+      _markers.add(Marker(
+          markerId: const MarkerId('driver_location'),
+          position: _driverMapPoint,
+          icon: icon,
+          anchor: const Offset(.5, .5),
+          zIndex: 1000));
     });
   }
 
   void _startLocationWaves() {
     _locationWaveTimer?.cancel();
     _locationWaveTimer = Timer.periodic(const Duration(milliseconds: 120), (_) {
-      if (!mounted || WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+      if (!mounted ||
+          WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed)
+        return;
       _locationWavePhase.value = (_locationWavePhase.value + .05) % 1;
     });
   }
 
   Set<Circle> _locationWaves(double phase) {
-    final metersPerPixel = 156543.03392 * math.cos(_driverMapPoint.latitude * math.pi / 180) /
+    final metersPerPixel = 156543.03392 *
+        math.cos(_driverMapPoint.latitude * math.pi / 180) /
         math.pow(2, _locationWaveZoom);
     final breath = (1 - math.cos(2 * math.pi * phase)) / 2;
     final wave = Curves.easeOut.transform(phase);
     final fade = math.sin(math.pi * phase);
     return {
-      Circle(circleId: const CircleId('driver_location_halo'),
-        center:_driverMapPoint,radius:(12 + breath * 2)*metersPerPixel,
-        strokeWidth:0,strokeColor:Colors.transparent,
-        fillColor:AppColors.primary.withValues(alpha:.1 + breath*.04),
-        zIndex:1,consumeTapEvents:false),
-      Circle(circleId: const CircleId('driver_location_wave'),
-        center:_driverMapPoint,radius:(12 + wave*24)*metersPerPixel,
-        strokeWidth:1,
-        strokeColor:AppColors.primary.withValues(alpha:.28*fade),
-        fillColor:AppColors.primary.withValues(alpha:.025*fade),
-        zIndex:2,consumeTapEvents:false),
+      Circle(
+          circleId: const CircleId('driver_location_halo'),
+          center: _driverMapPoint,
+          radius: (12 + breath * 2) * metersPerPixel,
+          strokeWidth: 0,
+          strokeColor: Colors.transparent,
+          fillColor: AppColors.primary.withValues(alpha: .1 + breath * .04),
+          zIndex: 1,
+          consumeTapEvents: false),
+      Circle(
+          circleId: const CircleId('driver_location_wave'),
+          center: _driverMapPoint,
+          radius: (12 + wave * 24) * metersPerPixel,
+          strokeWidth: 1,
+          strokeColor: AppColors.primary.withValues(alpha: .28 * fade),
+          fillColor: AppColors.primary.withValues(alpha: .025 * fade),
+          zIndex: 2,
+          consumeTapEvents: false),
     };
   }
+
   MapDataResponse? _mapData;
   bool _isLoadingMapData = false;
 
@@ -251,12 +274,18 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   // ✅ Active Order Check
   bool _hasCheckedActiveOrder = false;
 
-  // 🧪 إحداثيات ثابتة للاختبار (مركز المناذرة - Al-Manathirah Center - Level 3)
-  // Coordinates: 31.895748, 44.377563 - ضمن مركز المناذرة (Rmhvcpnn3iy5f1)
-  // ✅ Wave System: نفس منطقة السائق - يجب أن يسمح بالعمل
-  // TODO: بعد الاختبار، احذف هذه وارجع لاستخدام _currentPosition من GPS
-  static const double _testLatitude = 31.913292;
-  static const double _testLongitude = 44.476014;
+  double get _dispatchLat =>
+      (_currentPosition ?? (throw StateError('موقع السائق غير متاح'))).latitude;
+  double get _dispatchLng =>
+      (_currentPosition ?? (throw StateError('موقع السائق غير متاح')))
+          .longitude;
+  Future<void> _requireDispatchPosition() async {
+    final position = await DriverSearchApiService.getCurrentPosition();
+    if (position == null) throw StateError('تعذر تحديد موقع السائق؛ فعّل GPS');
+    if (!mounted) return;
+    setState(() => _currentPosition = position);
+    _setDisplayDriverLocation(position);
+  }
 
   // Stream listener for notification taps
   StreamSubscription<RemoteMessage>? _notificationTapSubscription;
@@ -268,11 +297,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       if (event.eventName == 'SIGNED_OUT' || event.eventName == 'SIGNED_IN') {
         _offerAuthEpoch++;
         _offerClosureScope.bind(null);
-        if (mounted) setState(() { _currentWaveOffers.clear(); _currentWaveOffer = null; });
+        if (mounted)
+          setState(() {
+            _currentWaveOffers.clear();
+            _currentWaveOffer = null;
+          });
       }
     });
     _startLocationWaves();
-    _searchPositionTimer = Timer.periodic(const Duration(seconds: 30), (_) => _refreshSearchPosition());
+    _searchPositionTimer = Timer.periodic(
+        const Duration(seconds: 30), (_) => _refreshSearchPosition());
     try {
       print('🚀 Initializing SparkHomeSimpleArabic...');
 
@@ -355,7 +389,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if(state==AppLifecycleState.resumed){_startLocationWaves();_displayLocationSubscription?.resume();}else{_locationWaveTimer?.cancel();_displayLocationSubscription?.pause();}
+    if (state == AppLifecycleState.resumed) {
+      _startLocationWaves();
+      _displayLocationSubscription?.resume();
+    } else {
+      _locationWaveTimer?.cancel();
+      _displayLocationSubscription?.pause();
+    }
 
     print('📱 App lifecycle changed: $state');
 
@@ -425,12 +465,14 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     if (!mounted || !_isSearchingForOffers || _searchPositionBusy) return;
     _searchPositionBusy = true;
     try {
-      // Preserve the home screen's existing test coordinates.
+      await _requireDispatchPosition();
       await DriverSearchApiService.refreshSearchPosition(
-        latitude: _testLatitude, longitude: _testLongitude);
+          latitude: _dispatchLat, longitude: _dispatchLng);
     } catch (_) {
       // Retry on the next foreground tick after a transient session/network failure.
-    } finally { _searchPositionBusy = false; }
+    } finally {
+      _searchPositionBusy = false;
+    }
   }
 
   void _refreshLocationIfStale() {
@@ -500,7 +542,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       final driverId = prefs.getString('driver_id') ??
           '74b83488-f041-70a4-52d7-d2370b7eec06';
       final authToken = await CognitoTokenService.getIdToken();
-      if(authToken==null)throw const DriverSearchStartException('تعذر تجديد جلسة الدخول. أعد تسجيل الدخول.',code:'AUTH_REQUIRED');
+      if (authToken == null)
+        throw const DriverSearchStartException(
+            'تعذر تجديد جلسة الدخول. أعد تسجيل الدخول.',
+            code: 'AUTH_REQUIRED');
 
       // إعادة تهيئة WebSocket
       await _webSocketService.initialize(
@@ -543,8 +588,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       if (!mounted) return;
 
       print('🔄 Starting delayed initialization...');
-      print(
-          '🧪 TEST MODE: Using fixed coordinates: Najaf ($_testLatitude, $_testLongitude)');
 
       // إعداد WebSocket callbacks أولاً مع تأخير
       await Future.delayed(const Duration(milliseconds: 100));
@@ -615,7 +658,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       final offerId = (data['offerId'] ?? '').toString().trim();
       final orderId = (data['orderId'] ?? '').toString().trim();
-      if (offerId.isEmpty || orderId.isEmpty || OfferClosureInbox.isClosure(data)) return;
+      if (offerId.isEmpty ||
+          orderId.isEmpty ||
+          OfferClosureInbox.isClosure(data)) return;
       final owner = await _bindOfferOwner();
       if (owner == null || data['driverId'] != owner) return;
 
@@ -636,7 +681,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         final hydrated = await FinancialOfferReference.hydrate(data, owner);
         if (!mounted || await _bindOfferOwner() != owner) return;
         final offer = WaveOffer.fromJson(hydrated);
-        if (!await _offerStillVisible(offer) || !mounted || _currentWaveOffers.any((o) => o.offerId == offer.offerId)) return;
+        if (!await _offerStillVisible(offer) ||
+            !mounted ||
+            _currentWaveOffers.any((o) => o.offerId == offer.offerId)) return;
         setState(() => _currentWaveOffers.add(offer));
         await PushNotificationsService.clearStashedFinancialOffer(data);
         return;
@@ -682,7 +729,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         _pickFirstNonEmpty([data['orderTotal'], data['orderValue']]),
         fallback: 0.0,
       );
-      final holdRequiredAmount = _parseDouble(data['holdRequiredAmount'], fallback: 0.0);
+      final holdRequiredAmount =
+          _parseDouble(data['holdRequiredAmount'], fallback: 0.0);
       final estimatedEarnings = _parseDouble(data['estimatedEarnings'],
           fallback: (deliveryFee + bonusAmount));
 
@@ -704,7 +752,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         offerId: offerId,
         orderId: orderId,
         jobId: 'JOB_$orderId',
-        dispatchCycleId: (data['cycleId'] ?? '').toString().isEmpty ? null : data['cycleId'].toString(),
+        dispatchCycleId: (data['cycleId'] ?? '').toString().isEmpty
+            ? null
+            : data['cycleId'].toString(),
         waveNumber: waveNumber,
         isEmergencyWave: isEmergencyWave,
         rank: 1,
@@ -740,9 +790,18 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         // Validate the original push values; a missing field must not become zero.
         placeholder = WaveOffer.fromJson({
           ...placeholder.toJson(),
-          for (final field in ['legacySourceVersion', 'moneyUnit', 'currency',
-            'orderTotal', 'deliveryFee', 'bonusAmount', 'tip',
-            'estimatedEarnings', 'holdRequiredAmount']) field: data[field],
+          for (final field in [
+            'legacySourceVersion',
+            'moneyUnit',
+            'currency',
+            'orderTotal',
+            'deliveryFee',
+            'bonusAmount',
+            'tip',
+            'estimatedEarnings',
+            'holdRequiredAmount'
+          ])
+            field: data[field],
         });
       }
       if (!await _offerStillVisible(placeholder) || !mounted) return;
@@ -831,12 +890,17 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         },
       );
 
-      _offerTakenSubscription = OfferClosureInbox.events.listen((closure) async {
+      _offerTakenSubscription =
+          OfferClosureInbox.events.listen((closure) async {
         final epoch = _offerAuthEpoch;
         final owner = await _bindOfferOwner();
-        if (!mounted || epoch != _offerAuthEpoch || owner != closure.driverId) return;
-        _handleWaveOfferTaken(closure.offerId, orderId: closure.orderId, cycleId: closure.cycleId);
-      }, onError: (_) { _refreshOfferClosures(); });
+        if (!mounted || epoch != _offerAuthEpoch || owner != closure.driverId)
+          return;
+        _handleWaveOfferTaken(closure.offerId,
+            orderId: closure.orderId, cycleId: closure.cycleId);
+      }, onError: (_) {
+        _refreshOfferClosures();
+      });
 
       print('✅ WebSocket callbacks configured successfully (Wave System only)');
     } catch (e) {
@@ -880,8 +944,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           }
           // Reconcile an existing unexpired online session after a completed/returned order.
           // The endpoint rechecks approval and preserves any newly assigned order.
+          await _requireDispatchPosition();
           await DriverSearchApiService.startSearching(
-            latitude: _testLatitude, longitude: _testLongitude);
+              latitude: _dispatchLat, longitude: _dispatchLng);
         } else {
           // الوقت انتهى، إيقاف البحث
           _clearSearchState();
@@ -953,163 +1018,25 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   // تشغيل صوت الإشعار عند وصول طلب جديد مع حماية كاملة من الانغلاق
 
-
   /// تهيئة خدمة الموقع مع حماية كاملة من الانغلاق
   void _initializeLocation() async {
     try {
-      if (!mounted) {
-        print('⚠️ Widget not mounted, skipping location initialization');
-        return;
-      }
-
-      print('🌍 Initializing location service safely...');
-
-      // استخدام موقع افتراضي أولاً لتجنب الانغلاق
-      _setFallbackLocation();
-
-      // محاولة الحصول على الموقع الحقيقي في المرحلة التالية
-      _attemptRealLocationAccess();
-    } catch (e, stackTrace) {
-      print('CRITICAL: Error in location initialization: $e');
-      print('Stack trace: $stackTrace');
-      _setFallbackLocation();
-    }
-  }
-
-  /// تعيين موقع افتراضي آمن
-  void _setFallbackLocation() {
-    try {
-      if (mounted) {
-        setState(() {
-          _currentPosition = Position(
-            latitude: _testLatitude, // النجف - العراق (للاختبار)
-            longitude: _testLongitude,
-            timestamp: DateTime.now(),
-            accuracy: 100.0,
-            altitude: 0.0,
-            heading: 0.0,
-            speed: 0.0,
-            speedAccuracy: 0.0,
-            altitudeAccuracy: 0.0,
-            headingAccuracy: 0.0,
-          );
-        });
-        print('🏠 Fallback location set: Najaf, Iraq (Test Mode)');
-      }
-    } catch (e) {
-      print('🚨 Error setting fallback location: $e');
-    }
-  }
-
-  /// محاولة الحصول على الموقع الحقيقي بشكل آمن
-  void _attemptRealLocationAccess() async {
-    try {
-      await Future.delayed(
-          const Duration(milliseconds: 1000)); // تأخير لضمان الاستقرار
-
-      if (!mounted) return;
-
-      // التحقق من الأذونات مع timeout
-      LocationPermission permission;
-      try {
-        permission = await Geolocator.checkPermission()
-            .timeout(const Duration(seconds: 5));
-        print('🔒 Current permission status: $permission');
-      } catch (permissionError) {
-        print('❌ Permission check failed: $permissionError');
-        return;
-      }
-
-      if (permission == LocationPermission.denied) {
-        try {
-          print('🔒 Requesting location permission...');
-          permission = await Geolocator.requestPermission()
-              .timeout(const Duration(seconds: 10));
-          print('🔒 Permission after request: $permission');
-        } catch (requestError) {
-          print('❌ Permission request failed: $requestError');
-          return;
-        }
-      }
-
-      if (permission == LocationPermission.whileInUse ||
-          permission == LocationPermission.always) {
-        _getRealPosition();
-      } else {
-        print('⚠️ Location permission not granted: $permission');
-      }
-    } catch (e, stackTrace) {
-      print('🚨 Error in real location access: $e');
-      print('Stack trace: $stackTrace');
-    }
-  }
-
-  /// الحصول على الموقع الحقيقي مع حماية كاملة
-  void _getRealPosition() async {
-    try {
-      if (!mounted) return;
-
-      print('🌍 Getting real position...');
-
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 8),
-      ).timeout(
-        const Duration(seconds: 12),
-        onTimeout: () {
-          print('⏰ Real location timeout - keeping fallback');
-          throw TimeoutException(
-              'Location timeout', const Duration(seconds: 12));
-        },
-      );
-
-      if (mounted) {
-        // Display GPS on the map only; keep staging dispatch test coordinates unchanged.
+      await _requireDispatchPosition();
+      if (!mounted || await DriverLocationMode.usesFixedTestPosition()) return;
+      _displayLocationSubscription ??= Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high, distanceFilter: 5),
+      ).listen((position) {
+        if (!mounted) return;
+        setState(() => _currentPosition = position);
         _setDisplayDriverLocation(position);
-        _displayLocationSubscription ??= Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(accuracy:LocationAccuracy.high,distanceFilter:5),
-        ).listen(_setDisplayDriverLocation,onError:(Object _) {});
-        // 🧪 للاختبار: استخدام الإحداثيات الثابتة بدلاً من GPS الفعلي
-        // TODO: بعد الاختبار، أعد تفعيل GPS بإلغاء التعليق على السطر التالي وحذف الكود الثابت
-        // _currentPosition = position;
-
+      }, onError: (Object _) {});
+    } catch (_) {
+      if (mounted)
         setState(() {
-          _currentPosition = Position(
-            latitude: _testLatitude,
-            longitude: _testLongitude,
-            timestamp: DateTime.now(),
-            accuracy: 0,
-            altitude: 0,
-            altitudeAccuracy: 0,
-            heading: 0,
-            headingAccuracy: 0,
-            speed: 0,
-            speedAccuracy: 0,
-          );
+          _currentPosition = null;
+          _displayDriverLocation = null;
         });
-        print('✅ Test location set (not GPS): $_testLatitude, $_testLongitude');
-        print(
-            '⚠️ GPS location ignored for testing: ${position.latitude}, ${position.longitude}');
-      }
-    } catch (e) {
-      print('⚠️ Real location failed, using test location: $e');
-      // استخدام الإحداثيات الثابتة للاختبار
-      if (mounted) {
-        setState(() {
-          _currentPosition = Position(
-            latitude: _testLatitude,
-            longitude: _testLongitude,
-            timestamp: DateTime.now(),
-            accuracy: 0,
-            altitude: 0,
-            altitudeAccuracy: 0,
-            heading: 0,
-            headingAccuracy: 0,
-            speed: 0,
-            speedAccuracy: 0,
-          );
-        });
-      }
     }
   }
 
@@ -1131,7 +1058,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       print('🚨 خطأ في بدء البحث: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e is DriverSearchStartException ? e.message : 'تعذر التحقق من حالة حسابك. حاول مرة أخرى.'),
+          content: Text(e is DriverSearchStartException
+              ? e.message
+              : 'تعذر التحقق من حالة حسابك. حاول مرة أخرى.'),
         ));
       }
 
@@ -1344,7 +1273,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         _searchEndTime = endTime;
         _onlineSheetOpacity = 1;
       });
-      if (!wasSearching && soundReady &&
+      if (!wasSearching &&
+          soundReady &&
           WidgetsBinding.instance.lifecycleState != AppLifecycleState.paused) {
         unawaited(_audioPlayer.resume().catchError((Object _) {}));
       }
@@ -1355,7 +1285,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       if (mounted) {
         setState(() => _onlineSheetOpacity = 1);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(error is DriverSearchStartException?error.message:'تعذر بدء استقبال الطلبات. أعد المحاولة.'),
+          content: Text(error is DriverSearchStartException
+              ? error.message
+              : 'تعذر بدء استقبال الطلبات. أعد المحاولة.'),
         ));
       }
     } finally {
@@ -1539,8 +1471,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   /// استدعاء REST API /driver/start-searching لكتابة البيانات الكاملة
   Future<void> _callStartSearchingAPI() async {
-    final result=await DriverSearchApiService.startSearching(latitude:_testLatitude,longitude:_testLongitude);
-    if(result['success']!=true)throw DriverSearchStartException(result['message']?.toString()??'تعذر بدء استقبال الطلبات.',code:result['code']?.toString());
+    await _requireDispatchPosition();
+    final result = await DriverSearchApiService.startSearching(
+        latitude: _dispatchLat, longitude: _dispatchLng);
+    if (result['success'] != true)
+      throw DriverSearchStartException(
+          result['message']?.toString() ?? 'تعذر بدء استقبال الطلبات.',
+          code: result['code']?.toString());
   }
 
   // بدء محاكاة وصول طلبات جديدة
@@ -1719,38 +1656,53 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   Widget _buildMapView() {
-    return ValueListenableBuilder<double>(valueListenable:_locationWavePhase, builder:(context,phase,_)=>GoogleMap(
-      circles: _locationWaves(MediaQuery.of(context).disableAnimations ? .2 : phase),
-      onCameraMove:(position){_locationWaveZoom=position.zoom;},
-      initialCameraPosition: const CameraPosition(
-        target: LatLng(
-          _testLatitude,
-          _testLongitude,
-        ),
-        zoom: 14,
-      ),
-      markers: _markers.map((marker) {
-        if (marker.markerId != const MarkerId('driver_location') || _driverBreathingIcons.isEmpty) return marker;
-        final motionOff = MediaQuery.of(context).disableAnimations;
-        final index = motionOff ? 0 : (phase * _driverBreathingIcons.length).floor() % _driverBreathingIcons.length;
-        return marker.copyWith(iconParam:_driverBreathingIcons[index]);
-      }).toSet(),
-      myLocationEnabled: false,
-      myLocationButtonEnabled: false,
-      zoomControlsEnabled: false,
-      mapType: MapType.normal, // خريطة شوارع عادية
-      compassEnabled: true,
-      rotateGesturesEnabled: true,
-      scrollGesturesEnabled: true,
-      tiltGesturesEnabled: true,
-      zoomGesturesEnabled: true,
-      mapToolbarEnabled: false,
-      onMapCreated: (controller) {
-        _mapController = controller;
-        unawaited(_ensureDriverMapMarker());
-        _loadMapData();
-      },
-    ));
+    if (_displayDriverLocation == null)
+      return Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.location_searching, color: Color(0xFF00509D)),
+        const SizedBox(height: 12),
+        const Text('بانتظار موقع السائق من GPS'),
+        TextButton(
+            onPressed: _initializeLocation, child: const Text('تحديث الموقع')),
+      ]));
+    return ValueListenableBuilder<double>(
+        valueListenable: _locationWavePhase,
+        builder: (context, phase, _) => GoogleMap(
+              circles: _locationWaves(
+                  MediaQuery.of(context).disableAnimations ? .2 : phase),
+              onCameraMove: (position) {
+                _locationWaveZoom = position.zoom;
+              },
+              initialCameraPosition: CameraPosition(
+                target: _driverMapPoint,
+                zoom: 14,
+              ),
+              markers: _markers.map((marker) {
+                if (marker.markerId != const MarkerId('driver_location') ||
+                    _driverBreathingIcons.isEmpty) return marker;
+                final motionOff = MediaQuery.of(context).disableAnimations;
+                final index = motionOff
+                    ? 0
+                    : (phase * _driverBreathingIcons.length).floor() %
+                        _driverBreathingIcons.length;
+                return marker.copyWith(iconParam: _driverBreathingIcons[index]);
+              }).toSet(),
+              myLocationEnabled: false,
+              myLocationButtonEnabled: false,
+              zoomControlsEnabled: false,
+              mapType: MapType.normal, // خريطة شوارع عادية
+              compassEnabled: true,
+              rotateGesturesEnabled: true,
+              scrollGesturesEnabled: true,
+              tiltGesturesEnabled: true,
+              zoomGesturesEnabled: true,
+              mapToolbarEnabled: false,
+              onMapCreated: (controller) {
+                _mapController = controller;
+                unawaited(_ensureDriverMapMarker());
+                _loadMapData();
+              },
+            ));
   }
 
   /// Load map data from backend API
@@ -1767,9 +1719,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       if (!mounted) return;
 
+      await _requireDispatchPosition();
       final data = await MapDataService.fetchMapData(
-        lat: _testLatitude, // إحداثيات ثابتة بدلاً من GPS
-        lng: _testLongitude,
+        lat:
+            _dispatchLat, // Fresh GPS, or the explicitly scoped staging test override.
+        lng: _dispatchLng,
       );
 
       if (!mounted) return;
@@ -1796,9 +1750,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         if (!mounted) return;
 
         try {
+          await _requireDispatchPosition();
           final data = await MapDataService.fetchMapData(
-            lat: _testLatitude,
-            lng: _testLongitude,
+            lat: _dispatchLat,
+            lng: _dispatchLng,
           );
 
           if (!mounted) return;
@@ -2004,7 +1959,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   /// 📍 Create driver location marker (blue circle)
-  Future<BitmapDescriptor> _createDriverLocationMarker({double breath = 1}) async {
+  Future<BitmapDescriptor> _createDriverLocationMarker(
+      {double breath = 1}) async {
     try {
       const double size = 32.0;
       final double circleSize = 15.0 + breath;
@@ -2201,7 +2157,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
     // 📍 إضافة marker لموقع السائق الحالي
     try {
-      final driverIcon = _driverLocationIcon ?? await _createDriverLocationMarker();
+      final driverIcon =
+          _driverLocationIcon ?? await _createDriverLocationMarker();
       _driverLocationIcon = driverIcon;
       _markers.add(
         Marker(
@@ -2261,8 +2218,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   /// 🗺️ Open maps application with navigation from driver location to store
   Future<void> _openMapsNavigation(NearbyStore store) async {
     // استخدام الإحداثيات الثابتة للاختبار أو الموقع الفعلي
-    final driverLat = _currentPosition?.latitude ?? _testLatitude;
-    final driverLng = _currentPosition?.longitude ?? _testLongitude;
+    final driverLat = _currentPosition?.latitude ?? _dispatchLat;
+    final driverLng = _currentPosition?.longitude ?? _dispatchLng;
     final storeLat = store.lat;
     final storeLng = store.lng;
 
@@ -2842,7 +2799,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                       duration: const Duration(milliseconds: 180),
                       curve: Curves.easeInOut,
                       child: _isStartingOnline && !_isSearchingForOffers
-                          ? const Center(child: Padding(
+                          ? const Center(
+                              child: Padding(
                               padding: EdgeInsets.all(24),
                               child: CircularProgressIndicator(),
                             ))
@@ -3121,110 +3079,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         ),
 
         // Popular offer times section
-        _buildPopularOfferTimes(),
+        const DemandCard(),
       ],
     );
-  }
-
-  Widget _buildPopularOfferTimes() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Flexible(
-              child: Text(
-                'أوقات الطلبات الشائعة: اليوم',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-            Flexible(
-              child: Text(
-                'استكشف أيام إضافية للقيادة هذا الأسبوع.',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                ),
-                textAlign: TextAlign.end,
-              ),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 16),
-
-        // Time bars chart (simplified version like Spark)
-        _buildOfferTimesBars(),
-      ],
-    );
-  }
-
-  Widget _buildOfferTimesBars() {
-    final timeSlots = ['6a', '9a', '12p', '3p', '6p', '9p'];
-    final values = [0.3, 0.4, 0.8, 0.9, 0.7, 0.6]; // Sample data
-    final currentHour = DateTime.now().hour;
-
-    return Container(
-      height: 120,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: List.generate(timeSlots.length, (index) {
-          final isCurrentTime =
-              _isCurrentTimeSlot(timeSlots[index], currentHour);
-          final barHeight = 80 * values[index];
-
-          return Column(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Container(
-                width: 32,
-                height: barHeight,
-                decoration: BoxDecoration(
-                  color: isCurrentTime ? AppColors.primary : Colors.grey[300],
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                timeSlots[index],
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                  fontWeight:
-                      isCurrentTime ? FontWeight.w600 : FontWeight.normal,
-                ),
-              ),
-            ],
-          );
-        }),
-      ),
-    );
-  }
-
-  bool _isCurrentTimeSlot(String timeSlot, int currentHour) {
-    switch (timeSlot) {
-      case '6a':
-        return currentHour >= 6 && currentHour < 9;
-      case '9a':
-        return currentHour >= 9 && currentHour < 12;
-      case '12p':
-        return currentHour >= 12 && currentHour < 15;
-      case '3p':
-        return currentHour >= 15 && currentHour < 18;
-      case '6p':
-        return currentHour >= 18 && currentHour < 21;
-      case '9p':
-        return currentHour >= 21 || currentHour < 6;
-      default:
-        return false;
-    }
   }
 
   @override
@@ -3588,12 +3445,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
                   width: double.infinity,
                   height: 56,
                   child: ElevatedButton(
-                    onPressed:
-                        (_selectedEndTime != null && !_isCheckingWalletBalance && !_isStartingOnline)
-                            ? () {
-                                _confirmSparkNow(_selectedEndTime!);
-                              }
-                            : null,
+                    onPressed: (_selectedEndTime != null &&
+                            !_isCheckingWalletBalance &&
+                            !_isStartingOnline)
+                        ? () {
+                            _confirmSparkNow(_selectedEndTime!);
+                          }
+                        : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.black87,
@@ -3682,9 +3540,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
 
       // إعادة تحميل بيانات الخريطة (سيجلب الحالة الجديدة من Backend)
+      await _requireDispatchPosition();
       final data = await MapDataService.fetchMapData(
-        lat: _testLatitude,
-        lng: _testLongitude,
+        lat: _dispatchLat,
+        lng: _dispatchLng,
       );
 
       if (!mounted) return;
@@ -3775,15 +3634,22 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     try {
       final user = await Amplify.Auth.getCurrentUser();
       if (!mounted || epoch != _offerAuthEpoch) return null;
-      if (_offerClosureScope.owner != null && _offerClosureScope.owner != user.userId) {
-        setState(() { _currentWaveOffers.clear(); _currentWaveOffer = null; });
+      if (_offerClosureScope.owner != null &&
+          _offerClosureScope.owner != user.userId) {
+        setState(() {
+          _currentWaveOffers.clear();
+          _currentWaveOffer = null;
+        });
       }
       _offerClosureScope.bind(user.userId);
       return user.userId;
     } catch (_) {
       if (mounted && epoch == _offerAuthEpoch) {
         _offerClosureScope.bind(null);
-        setState(() { _currentWaveOffers.clear(); _currentWaveOffer = null; });
+        setState(() {
+          _currentWaveOffers.clear();
+          _currentWaveOffer = null;
+        });
       }
       return null;
     }
@@ -3797,36 +3663,54 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       final owner = await _bindOfferOwner();
       if (owner == null) return;
       final closures = await OfferClosureInbox.read(owner);
-      if (!mounted || epoch != _offerAuthEpoch || _offerClosureScope.owner != owner) return;
+      if (!mounted ||
+          epoch != _offerAuthEpoch ||
+          _offerClosureScope.owner != owner) return;
       for (final closure in closures) {
-        _handleWaveOfferTaken(closure.offerId, orderId:closure.orderId, cycleId:closure.cycleId);
+        _handleWaveOfferTaken(closure.offerId,
+            orderId: closure.orderId, cycleId: closure.cycleId);
       }
     } catch (_) {
       if (mounted && epoch == _offerAuthEpoch) {
-        setState(() { _currentWaveOffers.clear(); _currentWaveOffer = null; });
+        setState(() {
+          _currentWaveOffers.clear();
+          _currentWaveOffer = null;
+        });
       }
-    } finally { _closureRefreshInFlight = false; }
+    } finally {
+      _closureRefreshInFlight = false;
+    }
   }
 
   Future<bool> _offerStillVisible(WaveOffer offer) async {
-    try { return await _offerClosureScope.allows(offerId:offer.offerId, orderId:offer.orderId,
-      cycleId:offer.dispatchCycleId, expiresAt:offer.expiresAt); } catch (_) { return false; }
+    try {
+      return await _offerClosureScope.allows(
+          offerId: offer.offerId,
+          orderId: offer.orderId,
+          cycleId: offer.dispatchCycleId,
+          expiresAt: offer.expiresAt);
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Both live offers and cached push offers consult the same closure scope.
   void _handleWaveOffer(WaveOffer waveOffer) async {
     try {
       final owner = await _bindOfferOwner();
-      if (owner == null || _webSocketService.driverId != owner ||
-          !await _offerStillVisible(waveOffer) || !mounted) return;
-      final existing = _currentWaveOffers.any((o) => o.offerId == waveOffer.offerId);
+      if (owner == null ||
+          _webSocketService.driverId != owner ||
+          !await _offerStillVisible(waveOffer) ||
+          !mounted) return;
+      final existing =
+          _currentWaveOffers.any((o) => o.offerId == waveOffer.offerId);
       setState(() {
         _currentWaveOffers.removeWhere((o) => o.offerId == waveOffer.offerId);
         _currentWaveOffers.add(waveOffer);
         _currentWaveOffer = waveOffer;
       });
       if (!existing) await DriverOfferAudio.play(waveOffer.offerId);
-    } catch (_) { /* A failed scope check cannot display a stale offer. */ }
+    } catch (_) {/* A failed scope check cannot display a stale offer. */}
   }
 
   /// معالج انتهاء صلاحية wave offer
@@ -3865,11 +3749,15 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   /// معالج قبول wave offer من سائق آخر
-  void _handleWaveOfferTaken(String offerId, {String? orderId, String? cycleId}) {
+  void _handleWaveOfferTaken(String offerId,
+      {String? orderId, String? cycleId}) {
     if (!mounted) return;
-    bool matches(WaveOffer o) => o.offerId == offerId &&
+    bool matches(WaveOffer o) =>
+        o.offerId == offerId &&
         (orderId == null || o.orderId == orderId) &&
-        (cycleId == null || o.dispatchCycleId == null || o.dispatchCycleId == cycleId);
+        (cycleId == null ||
+            o.dispatchCycleId == null ||
+            o.dispatchCycleId == cycleId);
     final existed = _currentWaveOffers.any(matches);
     if (!existed) return; // Push + WebSocket + resume produce one UI removal.
     if (_currentRejectConfirmationOfferId == offerId) {
@@ -3878,10 +3766,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     }
     setState(() {
       _currentWaveOffers.removeWhere(matches);
-      if (_currentWaveOffer != null && matches(_currentWaveOffer!)) _currentWaveOffer = null;
+      if (_currentWaveOffer != null && matches(_currentWaveOffer!))
+        _currentWaveOffer = null;
     });
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content:Text('لم يعد هذا العرض متاحًا'),duration:Duration(seconds:2)));
+        content: Text('لم يعد هذا العرض متاحًا'),
+        duration: Duration(seconds: 2)));
   }
 
   /// عرض dialog لـ wave offer
@@ -3915,7 +3805,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     try {
       final epoch = _offerAuthEpoch;
       final owner = await _bindOfferOwner();
-      if (owner == null || !await _offerStillVisible(waveOffer) || !mounted || !_currentWaveOffers.any((o) => o.offerId == waveOffer.offerId)) return;
+      if (owner == null ||
+          !await _offerStillVisible(waveOffer) ||
+          !mounted ||
+          !_currentWaveOffers.any((o) => o.offerId == waveOffer.offerId))
+        return;
       print('✅ Accepting wave offer: ${waveOffer.offerId}');
 
       // Show loading
@@ -3955,11 +3849,15 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       final result = await DriverSearchApiService.acceptWaveOffer(
         offerId: waveOffer.offerId,
         driverId: driverId,
-        financialOrderId: waveOffer.financialTerms != null ? waveOffer.orderId : null,
-        financialWaveNumber: waveOffer.financialTerms != null ? waveOffer.waveNumber : null,
+        financialOrderId:
+            waveOffer.financialTerms != null ? waveOffer.orderId : null,
+        financialWaveNumber:
+            waveOffer.financialTerms != null ? waveOffer.waveNumber : null,
       );
 
-      if (!mounted || epoch != _offerAuthEpoch || _offerClosureScope.owner != owner) return;
+      if (!mounted ||
+          epoch != _offerAuthEpoch ||
+          _offerClosureScope.owner != owner) return;
       print('📡 acceptWaveOffer API response:');
       print('   - success: ${result['success']}');
       print('   - message: ${result['message']}');
@@ -4478,7 +4376,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   Future<void> _rejectWaveOffer(WaveOffer waveOffer) async {
     final epoch = _offerAuthEpoch;
     final owner = await _bindOfferOwner();
-    if (owner == null || !await _offerStillVisible(waveOffer) || !mounted || !_currentWaveOffers.any((o) => o.offerId == waveOffer.offerId)) return;
+    if (owner == null ||
+        !await _offerStillVisible(waveOffer) ||
+        !mounted ||
+        !_currentWaveOffers.any((o) => o.offerId == waveOffer.offerId)) return;
     print('🚀🚀🚀 REJECT BUTTON PRESSED! 🚀🚀🚀');
     print('📋 WaveOffer details:');
     print('   - offerId: ${waveOffer.offerId}');
@@ -4512,11 +4413,15 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         final result = await DriverSearchApiService.rejectWaveOffer(
           offerId: waveOffer.offerId,
           driverId: driverId,
-          financialOrderId: waveOffer.financialTerms != null ? waveOffer.orderId : null,
-          financialWaveNumber: waveOffer.financialTerms != null ? waveOffer.waveNumber : null,
+          financialOrderId:
+              waveOffer.financialTerms != null ? waveOffer.orderId : null,
+          financialWaveNumber:
+              waveOffer.financialTerms != null ? waveOffer.waveNumber : null,
           reason: 'driver_declined',
         );
-        if (!mounted || epoch != _offerAuthEpoch || _offerClosureScope.owner != owner) return;
+        if (!mounted ||
+            epoch != _offerAuthEpoch ||
+            _offerClosureScope.owner != owner) return;
 
         print('✅ [4/5] API response received: $result');
 
@@ -4563,7 +4468,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   /// التحقق من كفاية رصيد المحفظة لقبول العرض
   bool _canAcceptWaveOfferFromDetails(WaveOffer offer) {
-    if (!_currentWaveOffers.any((o) => o.offerId == offer.offerId) || !offer.expiresAt.isAfter(DateTime.now())) return false;
+    if (!_currentWaveOffers.any((o) => o.offerId == offer.offerId) ||
+        !offer.expiresAt.isAfter(DateTime.now())) return false;
     final walletState = ref.read(walletBalanceProvider);
     return walletState.maybeWhen(
       data: (wallet) {

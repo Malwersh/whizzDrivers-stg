@@ -69,6 +69,10 @@ void main() {
     await t.pumpAndSettle();
     await t.scrollUntilVisible(find.text('تأكيد استلام الرد كاملًا'), 200,
         scrollable: find.byType(Scrollable).first);
+    await Scrollable.ensureVisible(
+        t.element(find.text('تأكيد استلام الرد كاملًا')),
+        alignment: .5);
+    await t.pumpAndSettle();
     await t.tap(find.text('تأكيد استلام الرد كاملًا'));
     await t.pumpAndSettle();
     expect(
@@ -159,9 +163,13 @@ void main() {
             matching: find
                 .text('تم إرسال إفادة الدفع بنجاح. بانتظار مراجعة الإدارة.')),
         findsOneWidget);
+    await t.drag(find.byType(ListView), const Offset(0, 1600));
+    await t.pumpAndSettle();
     expect(find.text('آخر إفادة مرسلة: 9000 د.ع'), findsOneWidget);
     expect(find.text('آخر إفادة مرسلة: 8250 د.ع'), findsNothing);
     await t.tap(find.byTooltip('تحديث الحالة'));
+    await t.pumpAndSettle();
+    await t.drag(find.byType(ListView), const Offset(0, 1600));
     await t.pumpAndSettle();
     expect(find.text('آخر إفادة مرسلة: 9000 د.ع'), findsOneWidget);
   });

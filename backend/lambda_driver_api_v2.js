@@ -18,7 +18,7 @@ const { isDriverApproved } = require('./driver_eligibility');
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, ScanCommand, QueryCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const h3 = require('h3-js');
 const axios = require('axios');
 
@@ -1033,6 +1033,13 @@ const handleRequest = async (event) => {
       }
     }
 
+    if ((path === '/driver/demand-forecast' || path.endsWith('/driver/demand-forecast')) && httpMethod === 'GET') {
+      const response = await require('./driver-demand').readDemand({db:dynamodb,GetCommand,driverId:cognitoUsername,
+        tables:{drivers:DRIVERS_TABLE,live:DRIVER_LIVE_STATE_TABLE,regions:REGIONS_TABLE,demand:process.env.DEMAND_TABLE,dataset:process.env.DEMAND_DATASET},
+        simulationDrivers:process.env.DEMAND_DATASET==='TEST' ? (process.env.DEMAND_SIMULATION_DRIVERS||'').split(',').filter(Boolean) : []});
+      return {statusCode:response.statusCode,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(response.result)};
+    }
+
     // 📊 NEW: Get driver performance metrics
     if (path === '/driver/metrics' || path.endsWith('/driver/metrics')) {
       if (httpMethod === 'GET') {
@@ -1042,6 +1049,30 @@ const handleRequest = async (event) => {
 
     // 🚗 ACTIVE ORDER APIs
     
+    const tripDetailPath=path.match(/\/driver\/trips\/([^/]+)$/);
+    if(tripDetailPath&&httpMethod==='GET') {
+      const order=(await dynamodb.send(new GetCommand({TableName:ORDERS_TABLE,Key:{PK:'ORDER#'+tripDetailPath[1],SK:'META'},ConsistentRead:true}))).Item;
+      if(!order||order.driverId!==cognitoUsername||!require('./driver-trip-history').terminal.includes(order.status))return {statusCode:404,headers:corsHeaders,body:JSON.stringify({success:false,message:'Trip unavailable'})};
+      return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:true,trip:require('./driver-trip-history').tripView(order,normalizeOrderPricingToIqd,toNumber)})};
+    }
+
+    const proofPath=path.match(/\/driver\/orders\/([^/]+)\/delivery-proof(?:\/([^/]+))?$/);
+    if(proofPath && (httpMethod==='POST'&&!proofPath[2] || httpMethod==='GET')) {
+      let body;
+      if(httpMethod==='POST') {
+        try {const raw=event.isBase64Encoded?Buffer.from(event.body||'','base64').toString('utf8'):(event.body||'{}');if(raw.length>2100000)throw Error('too large');body=JSON.parse(raw);}
+        catch {return {statusCode:400,headers:corsHeaders,body:JSON.stringify({success:false,code:'INVALID_PHOTO_BODY'})};}
+      }
+      const response=await require('./driver-delivery-proof').deliveryProof({db:dynamodb,s3,GetCommand,UpdateCommand,PutObjectCommand,GetObjectCommand,table:ORDERS_TABLE,bucket:DRIVER_DOCUMENTS_BUCKET,driverId:cognitoUsername,orderId:proofPath[1],body,proofId:httpMethod==='GET'?(proofPath[2]||'list'):undefined,beginUpload:()=>beginDriverUpload(rawDynamodb,cognitoUsername)});
+      return {statusCode:response.statusCode,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(response.result)};
+    }
+
+    const tripRoutePath=path.match(/\/driver\/orders\/([^/]+)\/route$/);
+    if(tripRoutePath&&httpMethod==='GET') {
+      const response=await require('./driver-trip-route').readDriverTripRoute({db:dynamodb,GetCommand,table:ORDERS_TABLE,driverId:cognitoUsername,orderId:tripRoutePath[1]});
+      return {statusCode:response.statusCode,headers:corsHeaders,body:JSON.stringify(response.result)};
+    }
+
     // Get specific order by ID
     if (path.match(/^\/driver\/orders\/[^/]+$/) || path.match(/\/driver\/orders\/[^/]+$/)) {
       const orderId = path.split('/').pop();
@@ -4543,13 +4574,10 @@ async function getOrderById(driverId, orderId, corsHeaders) {
       orderId: order.orderId,
       status: order.status || 'accepted',
       
-      // Restaurant info
-      restaurantId: order.restaurantId || order.businessId,
-      restaurantName: order.restaurantName || order.businessName,
-      restaurantAddress: order.restaurantAddress || order.pickupAddress,
+      // Pickup data supports current store fields and legacy order aliases.
+      ...require('./driver-trip-route').pickupView(order),
       restaurantLat: order.restaurantLat || order.pickupLatitude,
       restaurantLng: order.restaurantLng || order.pickupLongitude,
-      restaurantPhone: order.restaurantPhone || order.businessPhone,
       
       // Customer info
       customerId: order.customerId || order.userId,
@@ -5430,63 +5458,9 @@ async function deliverOrder(driverId, orderId, body, corsHeaders, accessToken) {
  */
 async function reportStoreIssue(driverId, orderId, body, corsHeaders) {
   try {
-    console.log(`⚠️ Driver ${driverId} reporting issue for order ${orderId}:`, body);
-    
-    const now = new Date().toISOString();
-    const { issueType, notes } = body;
-    
-    if (!issueType) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          error: 'Missing issueType',
-          message: 'يجب تحديد نوع المشكلة'
-        })
-      };
-    }
-    
-    // Add issue to order
-    await dynamodb.send(new UpdateCommand({
-      TableName: ORDERS_TABLE,
-      Key: {
-        PK: `ORDER#${orderId}`,
-        SK: 'META'
-      },
-      UpdateExpression: 'SET storeIssue = :issue, storeIssueReportedAt = :reportedAt, updatedAt = :updatedAt',
-      ExpressionAttributeValues: {
-        ':issue': { type: issueType, notes, reportedBy: driverId, reportedAt: now },
-        ':reportedAt': now,
-        ':updatedAt': now,
-        ':driverId': driverId
-      },
-      ConditionExpression: 'driverId = :driverId'
-    }));
-    
-    // TODO: Send notification to support team
-    
-    return {
-      statusCode: 200,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        success: true,
-        message: 'تم الإبلاغ عن المشكلة بنجاح',
-        orderId,
-        issueType
-      })
-    };
-    
-  } catch (error) {
-    console.error('❌ Error reporting store issue:', error);
-    return {
-      statusCode: 500,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        error: 'Failed to report issue',
-        message: 'فشل في الإبلاغ عن المشكلة'
-      })
-    };
-  }
+    const response=await require('./driver-pickup-issues').recordPickupIssue({db:dynamodb,GetCommand,UpdateCommand,table:ORDERS_TABLE,driverId,orderId,body});
+    return {statusCode:response.statusCode,headers:corsHeaders,body:JSON.stringify(response.result)};
+  } catch { return {statusCode:503,headers:corsHeaders,body:JSON.stringify({success:false,code:'PICKUP_ISSUE_UNAVAILABLE',message:'تعذر حفظ بلاغ المشكلة؛ أعد المحاولة'})}; }
 }
 
 /**
@@ -5781,6 +5755,9 @@ async function getDriverTrips(driverId, query, headers) {
       return { statusCode: 400, headers, body: JSON.stringify({ success: false, error: 'Invalid nextToken' }) };
     }
   }
+  let historyFilter;
+  try {historyFilter=require('./driver-trip-history').historyFilter(query,driverId);}
+  catch {return {statusCode:400,headers,body:JSON.stringify({success:false,error:'Invalid history filter'})};}
   // Existing orders table has no driver index. Preserve DynamoDB's cursor,
   // including pages with no matching history rows.
   let result;
@@ -5789,40 +5766,14 @@ async function getDriverTrips(driverId, query, headers) {
   for (let page = 0; page < 20; page++) {
     result = await dynamodb.send(new ScanCommand({
     TableName: ORDERS_TABLE, Limit: Math.max(1, limit - items.length), ExclusiveStartKey: cursor,
-    FilterExpression: 'driverId = :driverId AND SK = :meta AND (#status = :delivered OR #status = :completed OR #status = :cancelled OR #status = :canceled)',
-    ExpressionAttributeNames: { '#status': 'status' },
-    ExpressionAttributeValues: { ':driverId': driverId, ':meta': 'META', ':delivered': 'delivered', ':completed': 'completed', ':cancelled': 'cancelled', ':canceled': 'canceled' }
+    ConsistentRead: true,
+    ...historyFilter
   }));
     items.push(...(result.Items || []));
     cursor = result.LastEvaluatedKey;
     if (!cursor || items.length >= limit) break;
   }
-  const trips = items.map(order => {
-    const pricing = normalizeOrderPricingToIqd(order);
-    const rawTotal = toNumber(order.total ?? order.totalAmount, 0);
-    const pricingTotal = toNumber(order.pricing?.total, 0);
-    const scale = (order.currency === 'IQD' && order.createdBy === 'wizzuser_app') || (rawTotal > 0 && pricingTotal / rawTotal >= 900 && pricingTotal / rawTotal <= 1100) ? 1000 : 1;
-    const fee = order.pricing?.deliveryFee != null ? toNumber(order.pricing.deliveryFee, 0) / scale : pricing.deliveryFee;
-    const bonus = order.pricing?.waveBonus != null ? toNumber(order.pricing.waveBonus, 0) / scale : toNumber(order.waveBonus, 0);
-
-    return {
-      tripId: order.orderId || order.PK.replace('ORDER#', ''),
-      orderId: order.orderId || order.PK.replace('ORDER#', ''),
-      orderNumber: order.orderNumber || '',
-      tripNumber: order.tripNumber || order.trip_number || null,
-      status: ['delivered', 'completed'].includes(order.status) ? 'completed' : 'cancelled',
-      deliveryFee: fee, tip: order.pricing?.tip != null ? toNumber(order.pricing.tip, 0) / scale : pricing.tip, waveBonus: bonus,
-      waveNumber: order.waveNumber, isEmergencyWave: order.pricing?.isEmergencyWave === true,
-      finalDeliveryFee: order.pricing?.finalDeliveryFee != null ? toNumber(order.pricing.finalDeliveryFee, 0) / scale : fee + bonus,
-      pickupLocation: order.pickupLocation || order.restaurantLocation || { lat: order.restaurantLat ?? order.pickupLatitude ?? 0, lng: order.restaurantLng ?? order.pickupLongitude ?? 0 },
-      deliveryLocation: order.deliveryLocation || { lat: order.deliveryAddress?.lat ?? order.customerLat ?? 0, lng: order.deliveryAddress?.lng ?? order.customerLng ?? 0 },
-      pickupAddress: order.pickupAddress || order.restaurantAddress || '',
-      deliveryAddress: typeof order.deliveryAddress === 'string' ? order.deliveryAddress : (order.deliveryAddress?.fullAddress || order.deliveryAddress?.addressLine1 || order.deliveryAddress?.address || ''),
-      restaurantName: order.restaurantName || order.businessName || '', customerName: order.customerName || order.deliveryName || '',
-      createdAt: order.createdAt, completedAt: order.deliveredAt || order.completedAt,
-      deliveryTime: order.deliveredAt, pickupTime: order.pickedUpAt
-    };
-  });
+  const trips = items.map(order => require('./driver-trip-history').tripView(order,normalizeOrderPricingToIqd,toNumber));
   return { statusCode: 200, headers, body: JSON.stringify({ success: true, trips,
     count: trips.length, hasMore: !!result.LastEvaluatedKey,
     nextToken: result.LastEvaluatedKey ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64url') : null

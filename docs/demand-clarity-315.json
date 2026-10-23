@@ -1,0 +1,37 @@
+{
+  "task": 315,
+  "readOnlyRegionVerification": {
+    "driverProfileWorkRegion": {
+      "id": "Rmhveqa2vrrj13",
+      "name": "ناحية الحيرة"
+    },
+    "testMerchantPickupRegion": {
+      "id": "Rmhvcpnn3iy5f1",
+      "name": "مركز المناذرة"
+    },
+    "sharedParentDistrict": {
+      "id": "Rmhvc7snfyul1f",
+      "name": "قضاء المناذرة"
+    },
+    "liveSearching": false,
+    "displayRule": "While not searching show registered work region, not GPS. While searching use server live work region. Pickup demand attributed to merchant region and parent district separately."
+  },
+  "uiChanges": [
+    "Explicit work-region label",
+    "Full available chart width and continuous baseline/background",
+    "Zero score no fabricated visible bar",
+    "Low/medium/high legend on home card",
+    "Height meaning and Iraq timezone captions",
+    "Tap tooltip on hourly bar"
+  ],
+  "meaning": "Relative hourly demand intensity normalized to source-area seven-day maximum, not order count, earnings or personal offer guarantee. Current allowlisted staging view is synthetic simulation.",
+  "checks": {
+    "flutterTestsPassed": 4,
+    "analyzerErrors": 0,
+    "analyzerWarnings": 0,
+    "styleInfo": 4
+  },
+  "buildNumber": 255,
+  "deviceInstall": "Native profile255 installed successfully",
+  "backendChanges": false
+}

@@ -14,6 +14,7 @@ ActiveOrder order(String status, {String id = 'cash-order'}) =>
       'status': status,
       'items': [],
       'totalAmount': 9250,
+      'driverEarnings': 2750,
       'paymentMethod': 'cash'
     });
 
@@ -84,6 +85,12 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('HOME'), findsNothing);
       } else {
+        if (scenario != 'new assignment') {
+          expect(find.text('تم إكمال الطلب'), findsOneWidget);
+          expect(find.text('2,750 د.ع'), findsOneWidget);
+          await tester.tap(find.text('العودة للرئيسية'));
+          await tester.pumpAndSettle();
+        }
         expect(find.text('HOME'), findsOneWidget);
         expect(prefs.getString('active_order'),
             scenario == 'new assignment' ? 'new-order' : null);

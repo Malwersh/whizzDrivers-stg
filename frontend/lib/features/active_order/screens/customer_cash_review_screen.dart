@@ -1,3 +1,4 @@
+import '../widgets/active_trip_summary.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
@@ -201,144 +202,221 @@ class _CustomerCashReviewScreenState extends State<CustomerCashReviewScreen> {
     final latestReport = reports.isEmpty ? null : reports.last;
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('مراجعة النقد ورد المبلغ'),
-          actions: [
-            IconButton(
-              onPressed: busy ? null : load,
-              tooltip: 'تحديث الحالة',
-              icon: const Icon(Icons.refresh),
-            ),
-          ],
+      child: Theme(
+        data: Theme.of(context).copyWith(
+          scaffoldBackgroundColor: TripStyle.background,
+          colorScheme: Theme.of(context).colorScheme.copyWith(
+              primary: TripStyle.blue,
+              secondary: TripStyle.yellow,
+              onPrimary: Colors.white),
+          appBarTheme: const AppBarTheme(
+              backgroundColor: Colors.white,
+              foregroundColor: TripStyle.ink,
+              elevation: 0,
+              centerTitle: true,
+              titleTextStyle: TextStyle(
+                  color: TripStyle.ink,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold)),
+          inputDecorationTheme: InputDecorationTheme(
+              filled: true,
+              fillColor: Colors.white,
+              alignLabelWithHint: true,
+              contentPadding: const EdgeInsets.all(16),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Color(0xFFDDE5EF))),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Color(0xFFDDE5EF)))),
+          filledButtonTheme: FilledButtonThemeData(
+              style: FilledButton.styleFrom(
+                  backgroundColor: TripStyle.blue,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 52),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)))),
         ),
-        body: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            const Text(
-              'سجّل المبلغ الذي دُفع فعلًا. البلاغ لا يحدد المسؤولية أو ينفذ خصمًا تلقائيًا.',
-            ),
-            if (busy) const LinearProgressIndicator(),
-            if (message != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(message!),
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text('مراجعة النقد ورد المبلغ'),
+            actions: [
+              IconButton(
+                onPressed: busy ? null : load,
+                tooltip: 'تحديث الحالة',
+                icon: const Icon(Icons.refresh),
               ),
-            if (data != null) ...[
-              if (latestReport != null)
-                Card(
-                  key: const ValueKey('latest-payment-report'),
-                  child: ListTile(
-                    leading: const Icon(Icons.task_alt),
-                    title: Text(
-                        'آخر إفادة مرسلة: ${money(latestReport['reportedPaidIqd'])}'),
-                    subtitle: Text(data!['status'] == 'CLOSED'
-                        ? 'أُغلقت مراجعة التحصيل.'
-                        : 'إفادتك محفوظة. المطابقة واعتماد المعالجة لدى الإدارة.'),
-                  ),
-                ),
-              Text('المبلغ المطلوب للطلب: ${money(data!['expectedIqd'])}'),
-              if (data!['collectionVerification'] is Map)
-                Text(
-                  'المبلغ المطابق: ${money(data!['collectionVerification']['collectedIqd'])}',
-                ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: paid,
-                enabled: !busy,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'إجمالي ما دفعه الزبون فعليًا بالدينار',
-                ),
-              ),
-              TextField(
-                controller: reason,
-                enabled: !busy,
-                minLines: 2,
-                maxLines: 4,
-                maxLength: 1000,
-                decoration: const InputDecoration(
-                  labelText: 'تفاصيل الدفع أو الفرق',
-                ),
-              ),
-              CheckboxListTile(
-                value: confirmedPayment,
-                onChanged: busy
-                    ? null
-                    : (v) => setState(() => confirmedPayment = v == true),
-                title: Text(
-                  widget.driver
-                      ? 'أؤكد أنني استلمت المبلغ المدون فعليًا من الزبون.'
-                      : 'أؤكد أنني دفعت المبلغ المدون فعليًا.',
-                ),
-              ),
-              FilledButton(
-                onPressed: busy || !confirmedPayment
-                    ? null
-                    : () {
-                        final n = int.tryParse(paid.text.trim());
-                        if (n == null ||
-                            n < 0 ||
-                            reason.text.trim().length < 5) {
-                          setState(
-                            () => message =
-                                'أدخل مبلغًا صحيحًا وتفاصيل لا تقل عن خمسة أحرف.',
-                          );
-                          return;
-                        }
-                        act(
-                            'REPORT_CASH_PAYMENT',
-                            {
-                              'reportedPaidIqd': n,
-                              'confirmActualPayment': true,
-                            },
-                            reason.text.trim());
-                      },
-                child: const Text('إرسال إفادة الدفع للمراجعة'),
-              ),
-              const SizedBox(height: 24),
+            ],
+          ),
+          body: ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
               const Text(
-                'طلبات رد المبلغ',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                'أدخل المبلغ الذي استلمته فعليًا من الزبون، وأضف تفاصيل الفرق لمراجعته.',
               ),
-              if (refunds.isEmpty)
-                const Text('لا يوجد رد مبلغ معتمد لهذا الطلب.'),
-              for (final r in refunds)
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          money(r['amountIqd']),
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(statuses[r['status']] ?? 'تحتاج مراجعة'),
-                        SelectableText('السند: ${r['voucherNumber']}'),
-                        if (widget.driver &&
-                                r['status'] == 'APPROVED' &&
-                                r['source']?['kind'] == 'DRIVER_UNSETTLED' ||
-                            !widget.driver && r['status'] == 'EXECUTED')
-                          OutlinedButton(
-                            onPressed: busy ? null : () => refundDialog(r),
-                            child: Text(
-                              widget.driver
-                                  ? 'إثبات تسليم الرد للزبون'
-                                  : 'تأكيد استلام الرد كاملًا',
-                            ),
-                          ),
-                      ],
+              if (busy) const LinearProgressIndicator(),
+              if (message != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(message!),
+                ),
+              if (data != null) ...[
+                if (latestReport != null)
+                  Card(
+                    key: const ValueKey('latest-payment-report'),
+                    child: ListTile(
+                      leading: const Icon(Icons.task_alt),
+                      title: Text(
+                          'آخر إفادة مرسلة: ${money(latestReport['reportedPaidIqd'])}'),
+                      subtitle: Text(data!['status'] == 'CLOSED'
+                          ? 'أُغلقت مراجعة التحصيل.'
+                          : 'إفادتك محفوظة. المطابقة واعتماد المعالجة لدى الإدارة.'),
                     ),
                   ),
+                _panel(Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text('المبلغ المطلوب للطلب',
+                          style: TextStyle(color: TripStyle.muted)),
+                      const SizedBox(height: 8),
+                      Text(money(data!['expectedIqd']),
+                          style: const TextStyle(
+                              color: TripStyle.ink,
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold))
+                    ])),
+                if (data!['collectionVerification'] is Map)
+                  Text(
+                    'المبلغ المطابق: ${money(data!['collectionVerification']['collectedIqd'])}',
+                  ),
+                const SizedBox(height: 16),
+                _panel(Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text('المبلغ المستلم فعليًا',
+                          style: TextStyle(
+                              color: TripStyle.ink,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: paid,
+                        enabled: !busy,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'إجمالي ما دفعه الزبون فعليًا بالدينار',
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: reason,
+                        enabled: !busy,
+                        minLines: 2,
+                        maxLines: 4,
+                        maxLength: 1000,
+                        decoration: const InputDecoration(
+                          labelText: 'تفاصيل الدفع أو الفرق',
+                        ),
+                      ),
+                      CheckboxListTile(
+                        value: confirmedPayment,
+                        onChanged: busy
+                            ? null
+                            : (v) =>
+                                setState(() => confirmedPayment = v == true),
+                        title: Text(
+                          widget.driver
+                              ? 'أؤكد أنني استلمت المبلغ المدون فعليًا من الزبون.'
+                              : 'أؤكد أنني دفعت المبلغ المدون فعليًا.',
+                        ),
+                      ),
+                      FilledButton(
+                        onPressed: busy || !confirmedPayment
+                            ? null
+                            : () {
+                                final n = int.tryParse(paid.text.trim());
+                                if (n == null ||
+                                    n < 0 ||
+                                    reason.text.trim().length < 5) {
+                                  setState(
+                                    () => message =
+                                        'أدخل مبلغًا صحيحًا وتفاصيل لا تقل عن خمسة أحرف.',
+                                  );
+                                  return;
+                                }
+                                act(
+                                    'REPORT_CASH_PAYMENT',
+                                    {
+                                      'reportedPaidIqd': n,
+                                      'confirmActualPayment': true,
+                                    },
+                                    reason.text.trim());
+                              },
+                        child: const Text('إرسال إفادة الدفع للمراجعة'),
+                      ),
+                    ])),
+                const SizedBox(height: 24),
+                const Text(
+                  'طلبات رد المبلغ',
+                  style: TextStyle(
+                      color: TripStyle.ink,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold),
                 ),
+                if (refunds.isEmpty)
+                  _panel(const Row(children: [
+                    Icon(Icons.receipt_long_outlined, color: TripStyle.blue),
+                    SizedBox(width: 12),
+                    Expanded(
+                        child: Text('لا يوجد رد مبلغ معتمد لهذا الطلب.',
+                            style: TextStyle(color: TripStyle.muted)))
+                  ])),
+                for (final r in refunds)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            money(r['amountIqd']),
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(statuses[r['status']] ?? 'تحتاج مراجعة'),
+                          SelectableText('السند: ${r['voucherNumber']}'),
+                          if (widget.driver &&
+                                  r['status'] == 'APPROVED' &&
+                                  r['source']?['kind'] == 'DRIVER_UNSETTLED' ||
+                              !widget.driver && r['status'] == 'EXECUTED')
+                            OutlinedButton(
+                              onPressed: busy ? null : () => refundDialog(r),
+                              child: Text(
+                                widget.driver
+                                    ? 'إثبات تسليم الرد للزبون'
+                                    : 'تأكيد استلام الرد كاملًا',
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
   }
+
+  Widget _panel(Widget child) => Container(
+      padding: const EdgeInsets.all(18),
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xFFE3E9F1)),
+          borderRadius: BorderRadius.circular(20)),
+      child: child);
 }
