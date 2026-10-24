@@ -203,11 +203,18 @@ class Worker:
             self.table.put_item(Item=item, ConditionExpression='attribute_not_exists(generatedAt) OR generatedAt <= :now',
                                 ExpressionAttributeValues={':now': now})
         # Synthetic history is isolated from captured TEST/LIVE events and never enabled in LIVE.
-        simulation_region = self.c.get('simulationRegion') if self.c['dataset'] == 'TEST' else None
-        if simulation_region and any(r['regionId'] == simulation_region for r in regions):
+        configured = self.c.get('simulationRegions') or [self.c.get('simulationRegion')]
+        simulation_regions = list(dict.fromkeys(r for r in configured if r)) if self.c['dataset'] == 'TEST' else []
+        simulated = False
+        for simulation_region in simulation_regions:
+            if not any(r['regionId'] == simulation_region and int(r.get('level', -1)) == 3 for r in regions):
+                continue
             history = []
             today = self.now.astimezone(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
             shape = [0,0,0,0,0,0,1,2,2,2,3,5,7,6,4,3,3,4,6,8,9,7,4,1]
+            if simulation_region != self.c.get('simulationRegion'):
+                seed = int(hashlib.sha256(simulation_region.encode()).hexdigest()[:8], 16)
+                shape = [value + ((seed >> (hour % 16)) & 1) if value else 0 for hour, value in enumerate(shape)]
             for age in range(1,57):
                 day = today - timedelta(days=age)
                 for hour, base in enumerate(shape):
@@ -216,6 +223,8 @@ class Worker:
             self.table.put_item(Item={'pk':'FORECAST#SIMULATION#'+simulation_region,'sk':'LATEST',
                 'schemaVersion':VERSION,'dataset':'SIMULATION','generatedAt':now,'timezone':'Asia/Baghdad',
                 'days':forecast(history,(today-timedelta(days=57)).isoformat(),self.now)})
+            simulated = True
+        if simulated:
             self.table.put_item(Item={'pk':'HEALTH#SIMULATION','sk':'LATEST','completedAt':now,'schemaVersion':VERSION})
         self.table.put_item(Item={'pk': 'HEALTH#'+self.c['dataset'], 'sk': 'LATEST', 'completedAt': now,
                                   'schemaVersion': VERSION})
@@ -227,6 +236,9 @@ def handler(event, context):
               'orders': 'ORDERS_TABLE', 'businesses': 'BUSINESSES_TABLE', 'hours': 'WORKING_HOURS_TABLE', 'regions': 'REGIONS_TABLE',
               'dataset': 'DEMAND_DATASET', 'coverageStart': 'COVERAGE_START'}.items()}
     config['simulationRegion'] = os.environ.get('SIMULATION_REGION')
+    config['simulationRegions'] = [r.strip() for r in os.environ.get('SIMULATION_REGIONS', '').split(',') if r.strip()]
+    if config['simulationRegion'] and config['simulationRegion'] not in config['simulationRegions']:
+        config['simulationRegions'].append(config['simulationRegion'])
     if config['dataset'] not in ('TEST', 'LIVE'):
         raise ValueError('INVALID_DATASET')
     worker = Worker(boto3.resource('dynamodb'), config)

@@ -55,6 +55,33 @@ class DemandTests(unittest.TestCase):
         self.assertTrue(may_open({},day,3))
         book['Friday']={'isClosed':True}
         self.assertFalse(may_open(book,day,12))
+    def test_simulation_regions_and_live_isolation(self):
+        for dataset, regions_config, expected in (
+            ('TEST', {'simulationRegions':['a','b','a','district','missing'], 'simulationRegion':'a'}, {'a','b'}),
+            ('TEST', {'simulationRegion':'a'}, {'a'}),
+            ('LIVE', {'simulationRegions':['a','b'], 'simulationRegion':'a'}, set()),
+        ):
+            with self.subTest(dataset=dataset, config=regions_config):
+                db=MagicMock(); table=db.Table.return_value; table.get_item.return_value={}
+                now=datetime(2026,10,23,10,tzinfo=timezone.utc)
+                config={'table':'analytics','dataset':dataset,'jobs':'jobs','regions':'regions',
+                        'businesses':'branches','hours':'hours','coverageStart':now.isoformat(),**regions_config}
+                w=Worker(db,config,now)
+                w.all_rows=lambda name,**kwargs: ([{'regionId':'a','level':3},{'regionId':'b','level':3},
+                    {'regionId':'district','level':2}] if name=='regions' else [])
+                w.rebuild()
+                items=[call.kwargs['Item'] for call in table.put_item.call_args_list]
+                simulated=[x for x in items if x['pk'].startswith('FORECAST#SIMULATION#')]
+                self.assertEqual({x['pk'].split('#')[-1] for x in simulated},expected)
+                for item in simulated:
+                    self.assertEqual(len(item['days']),7)
+                    self.assertTrue(all(len(day['slots'])==24 for day in item['days']))
+                    self.assertEqual(item['generatedAt'],now.isoformat())
+                self.assertEqual(sum(x['pk']=='HEALTH#SIMULATION' for x in items),bool(expected))
+                self.assertTrue(all(day['confidence']=='INSUFFICIENT' for x in items
+                    if x['pk'].startswith('FORECAST#'+dataset+'#') for day in x['days']))
+                self.assertEqual({call.args[0] for call in db.Table.call_args_list},{'analytics'})
+
     def test_page_error_cannot_return_partial_data(self):
         db=MagicMock();db.Table.return_value.scan.side_effect=[{'Items':[1],'LastEvaluatedKey':{'pk':'next'}},RuntimeError('down')]
         with self.assertRaises(RuntimeError):Worker(db,{'table':'a'}).all_rows('a')

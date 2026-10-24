@@ -1,0 +1,39 @@
+{
+  "status": "PASS",
+  "readOnlyVerification": true,
+  "area": {
+    "id": "Rmhvcpnn3iy5f1",
+    "name": "مركز المناذرة"
+  },
+  "days": 7,
+  "slotsPerDay": 24,
+  "simulationLabel": true,
+  "capturedTestDataStillInsufficient": true,
+  "queryCannotOverrideScopeOrDataset": true,
+  "unknownDriverDenied": true,
+  "streamEnabled": true,
+  "hourlyScheduleEnabled": true,
+  "writerRestrictedToAnalytics": true,
+  "ordersOrFinancialRecordsMutated": false,
+  "build": 260,
+  "physicalDeviceInstalledAndLaunched": true,
+  "simulatorsInstalledAndLaunched": [
+    "09DA4C20-FD4B-446E-8C2F-9D04E5CFC206",
+    "E2B409D5-6821-4BDC-BDAC-D415977B971E"
+  ],
+  "simulatorMapVisuallyVerified": true,
+  "fixedTrialLocation": {
+    "latitude": 31.913292,
+    "longitude": 44.476014
+  },
+  "locationOverride": "explicit staging build, scoped to configured test driver",
+  "tests": {
+    "worker": 8,
+    "demandApi": 6,
+    "flutterLocationAndDemand": 5
+  },
+  "cause": [
+    "Build 259 omitted explicit trial location defines",
+    "Current search area was not included in synthetic forecast regions"
+  ]
+}
