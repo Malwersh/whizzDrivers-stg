@@ -1,3 +1,4 @@
+import '../widgets/active_assignment_guard.dart';
 import '../services/store_navigation.dart';
 import '../widgets/trip_arrival_slider.dart';
 import 'dart:ui' as ui;
@@ -253,7 +254,10 @@ class _HeadingToRestaurantScreenState
   }
 
   @override
-  Widget build(BuildContext context) => Directionality(
+  Widget build(BuildContext context) => ActiveAssignmentGuard(
+      order: _order, enabled: !_arriving, child: _buildScreen(context));
+
+  Widget _buildScreen(BuildContext context) => Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: TripStyle.background,

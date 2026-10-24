@@ -1,0 +1,11 @@
+{
+  "orderStatus": "cancelled",
+  "driverLive": {
+    "currentOrderId": null,
+    "activeOrdersCount": "0",
+    "isActive": true,
+    "isSearching": true,
+    "status": "available"
+  },
+  "readOnly": true
+}

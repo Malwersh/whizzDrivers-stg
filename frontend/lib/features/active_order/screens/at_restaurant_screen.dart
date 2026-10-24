@@ -1,3 +1,4 @@
+import '../widgets/active_assignment_guard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -231,7 +232,10 @@ class _AtRestaurantScreenState extends ConsumerState<AtRestaurantScreen> {
                     fontWeight: FontWeight.bold)))
       ]);
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ActiveAssignmentGuard(
+      order: _order, enabled: !_busy, child: _buildScreen(context));
+
+  Widget _buildScreen(BuildContext context) {
     final quantity =
         _order.items.fold<int>(0, (sum, item) => sum + item.quantity);
     final number = _order.orderNumber ?? _order.shortOrderId;

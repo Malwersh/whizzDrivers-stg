@@ -92,17 +92,15 @@ class ActiveOrderService {
         if (data['hasActiveOrder'] == true && data['order'] != null) {
           print('✅ Active order found');
           return ActiveOrder.fromJson(data['order'] as Map<String, dynamic>);
+        } else if (data['hasActiveOrder'] == false && data['order'] == null) {
+          return null;
         } else {
-          print('ℹ️ No active order found');
+          throw Exception('تعذر تأكيد حالة الإسناد؛ أعد المحاولة');
         }
-      } else if (response.statusCode == 404) {
-        print('ℹ️ No active order (404)');
       } else {
         throw Exception(
             'تعذر جلب الطلب النشط (${response.statusCode})؛ أعد المحاولة');
       }
-
-      return null;
     } catch (e) {
       print('❌ Error fetching active order: $e');
       rethrow;
