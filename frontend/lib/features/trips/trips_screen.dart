@@ -352,11 +352,11 @@ class _TripsScreenState extends State<TripsScreen> {
                           child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                            const Text('استحقاقك',
-                                style: TextStyle(
+                            Text(tripEarningTitle(trip),
+                                style: const TextStyle(
                                     color: TripStyle.muted, fontSize: 12)),
                             const SizedBox(height: 4),
-                            Text(tripMoney(trip.driverEarnings),
+                            Text(tripEarningAmount(trip),
                                 style: TextStyle(
                                     color: TripStyle.ink,
                                     fontSize:

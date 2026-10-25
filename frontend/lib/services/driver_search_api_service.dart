@@ -436,6 +436,51 @@ class DriverSearchApiService {
     }
   }
 
+  static Future<bool> acknowledgeDisplayedOffer(
+      String orderId, String offerId) async {
+    try {
+      final token = await DriverAuthHelper.getCurrentAccessToken();
+      if (token == null) return false;
+      final response = await http
+          .post(Uri.parse('$_baseUrl/driver/offers/displayed'),
+              headers: {
+                'Authorization': 'Bearer $token',
+                'Content-Type': 'application/json'
+              },
+              body: jsonEncode({'orderId': orderId, 'offerId': offerId}))
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode != 200) return false;
+      return jsonDecode(response.body)['acknowledged'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> getDriverPerformance() async {
+    try {
+      final token = await DriverAuthHelper.getCurrentAccessToken();
+      if (token == null) return null;
+      final response = await http
+          .get(Uri.parse('$_baseUrl/driver/performance?rules=4'), headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json'
+      }).timeout(const Duration(seconds: 25));
+      if (response.statusCode != 200) return null;
+      final body = jsonDecode(response.body);
+      return body is Map<String, dynamic> &&
+              [
+                'OBSERVED_DRIVER_PERFORMANCE_V1',
+                'OBSERVED_DRIVER_PERFORMANCE_V2',
+                'OBSERVED_DRIVER_PERFORMANCE_V3',
+                'OBSERVED_DRIVER_PERFORMANCE_V4'
+              ].contains(body['rulesVersion'])
+          ? body
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 📊 Get driver performance metrics
   /// Returns acceptance rate, response rate, and other stats
   static Future<Map<String, dynamic>?> getDriverMetrics() async {

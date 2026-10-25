@@ -17,7 +17,7 @@ const { registrationOptions, validateRegistration } = require('./registration-re
 const { isDriverApproved } = require('./driver_eligibility');
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, ScanCommand, QueryCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, ScanCommand, QueryCommand, DeleteCommand, TransactWriteCommand } = require('@aws-sdk/lib-dynamodb');
 const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const h3 = require('h3-js');
 const axios = require('axios');
@@ -1040,6 +1040,34 @@ const handleRequest = async (event) => {
       return {statusCode:response.statusCode,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(response.result)};
     }
 
+    if ((path === '/driver/offers/displayed' || path.endsWith('/driver/offers/displayed')) && httpMethod === 'POST') {
+      try {
+        const result=await require('./driver-offer-display-receipt').acknowledgeDisplayedOffer({db:dynamodb,GetCommand,QueryCommand,TransactWriteCommand,driverId:cognitoUsername,value:JSON.parse(event.body||'{}')});
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(error) {
+        const status=error instanceof SyntaxError||error.code==='INVALID_OFFER_RECEIPT'?400:error.code==='OFFER_RECEIPT_FORBIDDEN'?403:error.code==='OFFER_RECEIPT_UNAVAILABLE'?503:null;
+        if(!status)throw error;
+        return {statusCode:status,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:false,code:error.code||'INVALID_OFFER_RECEIPT'})};
+      }
+    }
+
+    if ((path === '/driver/quality-incidents' || path.endsWith('/driver/quality-incidents')) && httpMethod === 'GET') {
+      const result=await require('./driver-quality-incidents-290').readIncidents({db:dynamodb,GetCommand,QueryCommand,driverId:cognitoUsername});
+      return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+    }
+    if ((path === '/driver/quality-incidents/appeal' || path.endsWith('/driver/quality-incidents/appeal')) && httpMethod === 'POST') {
+      try {const result=await require('./financial-accept-client').invokeFinancialOperation(JSON.parse(event.body||'{}'),bearerToken,'driver_quality_case');
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(error) {const codes=['UNAUTHORIZED','INVALID_DRIVER_QUALITY_REVIEW','DRIVER_QUALITY_REVIEW_CONFLICT','DRIVER_QUALITY_CASE_UNAVAILABLE','DRIVER_QUALITY_APPEAL_CONFLICT','DRIVER_QUALITY_REVIEW_LIMIT'];const code=codes.includes(error.code||error.message)?error.code||error.message:'QUALITY_APPEAL_UNAVAILABLE';
+        return {statusCode:code==='UNAUTHORIZED'?403:409,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:false,code})};}
+    }
+
+    if ((path === '/driver/performance' || path.endsWith('/driver/performance')) && httpMethod === 'GET') {
+      const result = await require('./driver-performance').readPerformance({db:dynamodb,GetCommand,QueryCommand,driverId:cognitoUsername,
+        tables:{offers:'WaveOffers_staging',orders:ORDERS_TABLE,holds:process.env.WALLET_HOLDS_TABLE,drivers:DRIVERS_TABLE,ratings:'whizz-order-ratings-staging',ratingIndex:'DriverRatingChronology281'},rulesVersion:event.queryStringParameters?.rules==='4'?4:event.queryStringParameters?.rules==='3'?3:event.queryStringParameters?.rules==='2'?2:1});
+      return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+    }
+
     // 📊 NEW: Get driver performance metrics
     if (path === '/driver/metrics' || path.endsWith('/driver/metrics')) {
       if (httpMethod === 'GET') {
@@ -1053,7 +1081,7 @@ const handleRequest = async (event) => {
     if(tripDetailPath&&httpMethod==='GET') {
       const order=(await dynamodb.send(new GetCommand({TableName:ORDERS_TABLE,Key:{PK:'ORDER#'+tripDetailPath[1],SK:'META'},ConsistentRead:true}))).Item;
       if(!order||order.driverId!==cognitoUsername||!require('./driver-trip-history').terminal.includes(order.status))return {statusCode:404,headers:corsHeaders,body:JSON.stringify({success:false,message:'Trip unavailable'})};
-      return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:true,trip:require('./driver-trip-history').tripView(order,normalizeOrderPricingToIqd,toNumber)})};
+      return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:true,trip:await require('./driver-trip-history').tripWithSettlement(order,normalizeOrderPricingToIqd,toNumber,readTripSettlement)})};
     }
 
     const proofPath=path.match(/\/driver\/orders\/([^/]+)\/delivery-proof(?:\/([^/]+))?$/);
@@ -4967,7 +4995,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
       });
     }
     
-    await dynamodb.send(new UpdateCommand({
+    await dynamodb.send(new UpdateCommand(await require('./driver-performance-progress').bindPerformanceProgress({db:dynamodb,GetCommand,driverId,orderId,eventField:'arrivedAtStoreAt',operation:{
       TableName: ORDERS_TABLE,
       Key: {
         PK: `ORDER#${orderId}`,
@@ -4979,7 +5007,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
       },
       ExpressionAttributeValues: expressionValues,
       ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
-    }));
+    }})));
     
     // Get updated order
     return await getOrderById(driverId, orderId, corsHeaders);
@@ -5033,7 +5061,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
       });
     }
     
-    await dynamodb.send(new UpdateCommand({
+    await dynamodb.send(new UpdateCommand(await require('./driver-performance-progress').bindPerformanceProgress({db:dynamodb,GetCommand,driverId,orderId,eventField:'pickedUpAt',operation:{
       TableName: ORDERS_TABLE,
       Key: {
         PK: `ORDER#${orderId}`,
@@ -5045,7 +5073,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
       },
       ExpressionAttributeValues: expressionValues,
       ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
-    }));
+    }})));
     
     // Get updated order
     return await getOrderById(driverId, orderId, corsHeaders);
@@ -5168,7 +5196,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
       });
     }
     
-    await dynamodb.send(new UpdateCommand({
+    await dynamodb.send(new UpdateCommand(await require('./driver-performance-progress').bindPerformanceProgress({db:dynamodb,GetCommand,driverId,orderId,eventField:'arrivedAtCustomerAt',operation:{
       TableName: ORDERS_TABLE,
       Key: {
         PK: `ORDER#${orderId}`,
@@ -5180,7 +5208,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
       },
       ExpressionAttributeValues: expressionValues,
       ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
-    }));
+    }})));
     
     // Get updated order
     return await getOrderById(driverId, orderId, corsHeaders);
@@ -5744,6 +5772,11 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
 
 
 
+async function readTripSettlement(orderId,sk){
+ if(!process.env.WALLET_HOLDS_TABLE)throw Error('SETTLEMENT_READER_UNAVAILABLE');
+ return (await dynamodb.send(new GetCommand({TableName:process.env.WALLET_HOLDS_TABLE,Key:{orderId,sk},ConsistentRead:true}))).Item;
+}
+
 async function getDriverTrips(driverId, query, headers) {
   const limit = Math.min(100, Math.max(1, Number.parseInt(query.limit, 10) || 20));
   let startKey;
@@ -5773,7 +5806,8 @@ async function getDriverTrips(driverId, query, headers) {
     cursor = result.LastEvaluatedKey;
     if (!cursor || items.length >= limit) break;
   }
-  const trips = items.map(order => require('./driver-trip-history').tripView(order,normalizeOrderPricingToIqd,toNumber));
+  const trips=[];
+  for(let offset=0;offset<items.length;offset+=4)trips.push(...await Promise.all(items.slice(offset,offset+4).map(order=>require('./driver-trip-history').tripWithSettlement(order,normalizeOrderPricingToIqd,toNumber,readTripSettlement))));
   return { statusCode: 200, headers, body: JSON.stringify({ success: true, trips,
     count: trips.length, hasMore: !!result.LastEvaluatedKey,
     nextToken: result.LastEvaluatedKey ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64url') : null

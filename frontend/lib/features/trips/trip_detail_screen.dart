@@ -203,23 +203,18 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                                         color: Colors.white, fontSize: 13)))
                           ]),
                           const SizedBox(height: 24),
-                          const Text('استحقاقك من الرحلة',
+                          Text(tripEarningTitle(trip),
                               style: TextStyle(
                                   color: Colors.white70, fontSize: 14)),
                           const SizedBox(height: 8),
-                          Text(tripMoney(trip.driverEarnings),
+                          Text(tripEarningAmount(trip),
                               style: TextStyle(
                                   color: Colors.white,
                                   fontSize:
                                       trip.driverEarnings == null ? 22 : 34,
                                   fontWeight: FontWeight.bold)),
                           const SizedBox(height: 10),
-                          Text(
-                              trip.earningsState == 'CONFIRMED'
-                                  ? 'استحقاق مؤكد'
-                                  : trip.earningsState == 'RECORDED'
-                                      ? 'استحقاق مسجل'
-                                      : 'لا يتوفر مبلغ استحقاق مؤكد لهذه الرحلة',
+                          Text(tripEarningDescription(trip),
                               style: const TextStyle(
                                   color: Colors.white70, fontSize: 12)),
                           const SizedBox(height: 20),
@@ -248,7 +243,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                             'أجرة التوصيل', tripMoney(trip.driverBaseEarnings)),
                         valueRow('الإكرامية', tripMoney(trip.tip)),
                         const Divider(),
-                        valueRow('الإجمالي', tripMoney(trip.driverEarnings))
+                        valueRow('الإجمالي', tripEarningAmount(trip))
                       ])),
                   const SizedBox(height: 14)
                 ],

@@ -14,7 +14,7 @@ void main(){
  });
  test('financial completion labels capture and does not hide the real deduction',(){
   final t=WalletTransaction.fromJson(row('LOCKED','COD_COMPLETED',-7500));expect(t.isHoldCaptured,isTrue);expect(t.isInternalMirror,isFalse);
-  expect(t.statusLabel,'خُصم عند التسليم');expect(t.amountSign,'-');expect(t.relatedOrderId,'order1');
+  expect(t.statusLabel,'سُوّي عند التسليم');expect(t.amountSign,'-');expect(t.relatedOrderId,'order1');
  });
  test('ordinary locked credits are not hidden as hold mirrors',(){
   final t=WalletTransaction.fromJson(row('LOCKED','TRANSFER',7500));expect(t.isInternalMirror,isFalse);

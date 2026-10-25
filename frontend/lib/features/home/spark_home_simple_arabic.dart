@@ -1,3 +1,4 @@
+import '../../widgets/location_permission_notice.dart';
 import '../demand/demand_card.dart';
 import '../../services/driver_location_mode.dart';
 import '../../services/financial_offer_reference.dart';
@@ -267,9 +268,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   bool _isLoadingMapData = false;
 
   // 📊 Driver Performance Metrics
-  double? _currentAcceptanceRate;
-  int? _totalAccepted;
-  int? _totalRejected;
 
   // ✅ Active Order Check
   bool _hasCheckedActiveOrder = false;
@@ -1123,85 +1121,22 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           });
         }
 
-        final requiredMinimumBalance = wallet.minRequiredBalance;
-        final hasMinimumBalance =
-            wallet.availableBalance >= requiredMinimumBalance;
-        print('💵 رصيد المحفظة: ${wallet.availableBalance} د.ع');
-        print('🎯 الحد الأدنى مطلوب: ${requiredMinimumBalance.toString()} د.ع');
-        print(hasMinimumBalance ? '✅ الرصيد كافٍ' : '❌ الرصيد غير كافٍ');
-
-        if (!hasMinimumBalance) {
-          // Show error dialog
+        // Availability is not a fixed balance target. The backend checks the
+        // immutable offer's actual collateral atomically when accepting it.
+        if (!wallet.isActive) {
           if (mounted) {
-            showDialog(
-              context: context,
-              builder: (context) => AlertDialog(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                title: const Row(
-                  children: [
-                    Icon(Icons.warning_amber_rounded,
-                        color: Colors.red, size: 28),
-                    SizedBox(width: 12),
-                    Text('رصيد غير كافٍ'),
-                  ],
-                ),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'رصيدك الحالي غير كافٍ للبدء في استقبال الطلبات.',
-                      style: TextStyle(fontSize: 16),
-                    ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.blue.shade200),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.info_outline,
-                              color: Colors.blue.shade700, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'الحد الأدنى المطلوب: ${requiredMinimumBalance.toString()} د.ع',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.blue.shade900,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('حسناً'),
-                  ),
-                  ElevatedButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      // TODO: Navigate to wallet recharge
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.black87,
-                    ),
-                    child: const Text('تعبئة المحفظة'),
-                  ),
-                ],
-              ),
-            );
+            await showDialog<void>(
+                context: context,
+                builder: (context) => AlertDialog(
+                      title: const Text('المحفظة غير نشطة'),
+                      content: const Text(
+                          'لا يمكن بدء استقبال الطلبات بهذه الحالة. راجع حالة المحفظة أو تواصل مع الدعم.'),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('حسنًا'))
+                      ],
+                    ));
           }
           return;
         }
@@ -1535,6 +1470,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             _showRejectConfirmationSheet(offer), // ✅ عرض Bottom Sheet للتأكيد
         onTimeout: () => _handleTimeout(offer), // ✅ معالج منفصل لانتهاء الوقت
         onTap: () => _showWaveOrderDetails(offer),
+        onDisplayed: offer.financialTerms == null
+            ? null
+            : () => DriverSearchApiService.acknowledgeDisplayedOffer(
+                offer.orderId, offer.offerId),
       ),
     );
   }
@@ -3022,61 +2961,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   Widget _buildCommonContent() {
     return Column(
       children: [
-        // Getting more offers section (exactly like Spark)
-        Container(
-          padding: const EdgeInsets.all(16),
-          margin: const EdgeInsets.only(bottom: 20),
-          decoration: BoxDecoration(
-            color: Colors.grey[50],
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey[200]!),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.settings,
-                  color: AppColors.primary,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'الحصول على طلبات أكثر',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'تعيين وصول الموقع إلى المشاركة دائماً يساعد في الحصول على طلبات أكثر.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(
-                Icons.arrow_forward_ios,
-                color: Colors.grey[400],
-                size: 16,
-              ),
-            ],
-          ),
-        ),
+        const LocationPermissionNotice(),
 
         // Popular offer times section
         const DemandCard(),
@@ -4015,92 +3900,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   /// 📊 جلب metrics السائق من الـ API
-  Future<void> _fetchDriverMetrics() async {
-    try {
-      print('📡 Fetching driver metrics from API...');
-      final metrics = await DriverSearchApiService.getDriverMetrics();
-      print('📥 API Response: $metrics');
-
-      if (metrics != null && mounted) {
-        setState(() {
-          _currentAcceptanceRate =
-              (metrics['acceptanceRate'] ?? 0.0).toDouble();
-          _totalAccepted = (metrics['totalAccepted'] ?? 0);
-          _totalRejected = (metrics['totalRejected'] ?? 0);
-        });
-        print('✅ Metrics loaded from API:');
-        print('   acceptanceRate = $_currentAcceptanceRate');
-        print('   totalAccepted = $_totalAccepted');
-        print('   totalRejected = $_totalRejected');
-      } else {
-        // قيم افتراضية في حال فشل جلب البيانات
-        if (mounted) {
-          setState(() {
-            _currentAcceptanceRate = 0.75; // 75%
-            _totalAccepted = 30;
-            _totalRejected = 10;
-          });
-        }
-        print('⚠️ Using default metrics values (API returned null)');
-      }
-    } catch (e) {
-      print('❌ Error fetching driver metrics: $e');
-      // استخدام قيم افتراضية عند الخطأ
-      if (mounted) {
-        setState(() {
-          _currentAcceptanceRate = 0.75;
-          _totalAccepted = 30;
-          _totalRejected = 10;
-        });
-      }
-    }
-  }
-
-  /// 📊 حساب معدل القبول المتوقع بعد الرفض
-  double _calculateExpectedAcceptanceRate() {
-    if (_totalAccepted == null || _totalRejected == null) {
-      return 0.0;
-    }
-
-    final newTotalAccepted = _totalAccepted!;
-    final newTotalRejected = _totalRejected! + 1; // بعد إضافة رفض واحد
-    final newTotal = newTotalAccepted + newTotalRejected;
-
-    if (newTotal == 0) return 0.0;
-
-    return newTotalAccepted / newTotal;
-  }
-
   /// 🚫 عرض Bottom Sheet لتأكيد الرفض
   Future<void> _showRejectConfirmationSheet(WaveOffer waveOffer) async {
     print('📄 Opening reject confirmation for offer: ${waveOffer.offerId}');
 
     // تسجيل العرض الذي نعرض له نافذة التأكيد
     _currentRejectConfirmationOfferId = waveOffer.offerId;
-
-    // عرض loading أولاً
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      ),
-    );
-
-    // جلب metrics
-    await _fetchDriverMetrics();
-
-    if (!mounted) return;
-
-    // إغلاق loading
-    Navigator.pop(context);
-
-    final currentRate = _currentAcceptanceRate ?? 0.0;
-    final expectedRate = _calculateExpectedAcceptanceRate();
-    final rateChange = expectedRate - currentRate;
-
-    print(
-        '📊 Showing reject sheet with: current=$currentRate, expected=$expectedRate, change=$rateChange');
 
     showModalBottomSheet(
       context: context,
@@ -4177,125 +3982,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
                 const SizedBox(height: 24),
 
-                // Acceptance Rate Impact
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFAFAFA), // أوف وايت
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.grey[200]!),
-                  ),
-                  child: Column(
-                    children: [
-                      const Text(
-                        'تأثير على معدل القبول',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF00296B),
-                        ),
-                      ),
-
-                      const SizedBox(height: 16),
-
-                      // Current → Expected
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          // Current Rate
-                          Column(
-                            children: [
-                              const Text(
-                                'الحالي',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '${(currentRate * 100).toStringAsFixed(0)}%',
-                                style: const TextStyle(
-                                  fontSize: 32,
-                                  fontWeight: FontWeight.bold,
-                                  color:
-                                      Color(0xFF00296B), // اللون الثانوي الأزرق
-                                ),
-                              ),
-                            ],
-                          ),
-
-                          // Arrow
-                          const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 20),
-                            child: Icon(
-                              Icons.arrow_forward, // السهم من اليمين إلى اليسار
-                              size: 24,
-                              color: Color(0xFF00296B), // اللون الثانوي الأزرق
-                            ),
-                          ),
-
-                          // Expected Rate
-                          Column(
-                            children: [
-                              const Text(
-                                'المتوقع',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '${(expectedRate * 100).toStringAsFixed(0)}%',
-                                style: const TextStyle(
-                                  fontSize: 32,
-                                  fontWeight: FontWeight.bold,
-                                  color:
-                                      Colors.red, // اللون الأحمر للمعدل المتوقع
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      // Change indicator
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: const Color(
-                              0xFF00296B), // اللون الثانوي الأزرق للخلفية
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.arrow_downward, // سهم الانخفاض
-                              size: 14,
-                              color: Color(0xFFFDC500), // اللون الأساسي الأصفر
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              '${(rateChange * 100).abs().toStringAsFixed(1)}%',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color:
-                                    Color(0xFFFDC500), // اللون الأساسي الأصفر
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+                const Text(
+                  'يمكن أن يؤثر الرفض في معدل القبول وفق سياسة توزيع الطلبات. لا يتوفر حاليًا تقدير موثوق للنسبة بعد هذا الرفض.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0xFF00296B), height: 1.6),
                 ),
-
                 const SizedBox(height: 24),
 
                 // Buttons
