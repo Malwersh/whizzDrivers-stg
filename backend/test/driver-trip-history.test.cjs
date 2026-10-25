@@ -9,3 +9,13 @@ test('malformed/missing financial evidence never falls back to customer tariff',
 test('returned and cancelled orders do not inherit delivery quote as compensation',()=>{for(const status of ['returned','cancelled']){const r=view({...order(),status});assert.equal(r.driverEarnings,null);assert.equal(r.status,status)}});
 test('legacy explicit driver amount is marked recorded, missing amount stays unknown',()=>{const base={orderId:'old',status:'delivered',createdAt:'2026-10-22T11:00:00Z'};assert.equal(view({...base,driverEarnings:2000}).earningsState,'RECORDED');assert.equal(view(base).driverEarnings,null)});
 test('query validates period/status and retains driver fence',()=>{const r=historyFilter({status:'returned',from:'2026-10-01',to:'2026-10-22'},'driver1');assert.equal(r.ExpressionAttributeValues[':driverId'],'driver1');assert.match(r.FilterExpression,/BETWEEN/);assert.equal(r.ExpressionAttributeValues[':s0'],'returned');for(const q of [{status:'invented'},{from:'invalid',to:'today'},{from:'2027-01-01',to:'2026-01-01'}])assert.throws(()=>historyFilter(q,'driver1'))});
+test('cancelled trip reads posted compensation, zero decision, pending review and rejects foreign evidence',async()=>{
+ const o={...order(),status:'cancelled',orderId:'order1',driverId:'driver1'};const api=require('../driver-trip-history');
+ const journal={orderId:'order1',driverId:'driver1',kind:'ORDER_EXCEPTION_ENTITLEMENTS_JOURNAL',state:'POSTED',settlementModel:'EXCEPTION_ACCRUAL_GL_V1',driverFareIqd:500,operationId:'op',walletLines:[{walletId:'WALLET#DRIVER#driver1',delta:500,unit:'IQD_WHOLE',balanceType:'AVAILABLE'}]};const review={settlementStatus:'RESOLVED',entitlementsPosted:{operationId:'op',driverFareIqd:500}};
+ const run=(j=journal,r=review)=>api.tripWithSettlement(o,()=>({deliveryFee:1500}),Number,async(_,sk)=>sk==='EXCEPTION_ENTITLEMENTS'?j:r);
+ const paid=await run();assert.equal(paid.driverEarnings,500);assert.equal(paid.earningsState,'COMPENSATION_PAID');
+ const zero=await run({...journal,driverFareIqd:0,walletLines:[]},{entitlementsPosted:{operationId:'op',driverFareIqd:0}});assert.equal(zero.driverEarnings,0);assert.equal(zero.earningsState,'NO_COMPENSATION');
+ assert.equal((await run({...journal,driverId:'other'})).driverEarnings,null);
+ const pending=await run(null,{state:'CANCELLED',settlementStatus:'REVIEW'});assert.equal(pending.driverEarnings,null);assert.equal(pending.earningsState,'COMPENSATION_REVIEW');assert.equal((await run(null,null)).earningsState,'COMPENSATION_CHECK_UNAVAILABLE');
+ const unavailable=await api.tripWithSettlement(o,()=>({deliveryFee:1500}),Number,async()=>{throw Error('timeout')});assert.equal(unavailable.earningsState,'COMPENSATION_CHECK_UNAVAILABLE');
+});

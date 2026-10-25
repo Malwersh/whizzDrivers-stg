@@ -1,3 +1,4 @@
+import '../screens/monthly_statement_screen.dart';
 import '../screens/topup_screen.dart';
 import 'package:flutter/material.dart';
 import '../../../design_system/app_colors.dart';
@@ -10,11 +11,13 @@ import '../../../models/wallet_balance.dart';
 class BalanceCard extends StatelessWidget {
   final WalletBalance balance;
   final VoidCallback? onTransfer;
+  final VoidCallback? onFundingReturn;
 
   const BalanceCard({
     super.key,
     required this.balance,
     this.onTransfer,
+    this.onFundingReturn,
   });
 
   @override
@@ -135,10 +138,11 @@ class BalanceCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            onPressed: () {
-              Navigator.of(context).push(
+            onPressed: () async {
+              await Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const TopupScreen()),
               );
+              if (context.mounted) onFundingReturn?.call();
             },
           ),
         ),
@@ -166,12 +170,8 @@ class BalanceCard extends StatelessWidget {
               ),
             ),
             onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('الكشف الشهري - قريباً'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const MonthlyStatementScreen()));
             },
           ),
         ),
@@ -217,7 +217,13 @@ class BalanceCard extends StatelessWidget {
     final isActive = balance.isActive;
     final color = isActive ? AppColors.secondary : AppColors.warning;
     final icon = isActive ? Icons.check_circle : Icons.warning;
-    final text = isActive ? 'المحفظة نشطة' : 'المحفظة معلقة';
+    final text = {
+          'ACTIVE': 'المحفظة نشطة',
+          'SUSPENDED': 'المحفظة معلقة',
+          'CLOSED': 'المحفظة مغلقة',
+          'CLOSING': 'المحفظة قيد الإغلاق'
+        }[balance.status] ??
+        'راجع حالة المحفظة مع الدعم';
 
     return Container(
       alignment: Alignment.center,

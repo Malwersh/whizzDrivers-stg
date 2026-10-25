@@ -52,3 +52,21 @@ function historyFilter(query,driverId){
  return {FilterExpression:filter,ExpressionAttributeNames:names,ExpressionAttributeValues:values};
 }
 module.exports={tripView,historyFilter,terminal};
+
+// Cancellation awards are distinct from a delivery quote: use posted journal evidence.
+async function tripWithSettlement(order,normalize,toNumber,read){
+ const trip=tripView(order,normalize,toNumber);
+ if(!['cancelled','returned'].includes(trip.status))return trip;
+ trip.earningsState='COMPENSATION_CHECK_UNAVAILABLE';
+ try{
+  const [journal,review]=await Promise.all([read(trip.orderId,'EXCEPTION_ENTITLEMENTS'),read(trip.orderId,'CUSTOMER_CANCELLATION')]);
+  if(review?.state==='CANCELLED'&&review.settlementStatus==='REVIEW')trip.earningsState='COMPENSATION_REVIEW';
+  const amount=journal?.driverFareIqd;
+  const lines=(journal?.walletLines||[]).filter(l=>l.walletId===`WALLET#DRIVER#${order.driverId}`);
+  if(journal?.orderId===trip.orderId&&journal.driverId===order.driverId&&journal.kind==='ORDER_EXCEPTION_ENTITLEMENTS_JOURNAL'&&journal.state==='POSTED'&&journal.settlementModel==='EXCEPTION_ACCRUAL_GL_V1'&&Number.isSafeInteger(amount)&&amount>=0&&review?.entitlementsPosted?.operationId===journal.operationId&&review.entitlementsPosted.driverFareIqd===amount&&lines.every(l=>l.balanceType==='AVAILABLE'&&l.unit==='IQD_WHOLE'&&Number.isSafeInteger(l.delta))&&lines.reduce((n,l)=>n+l.delta,0)===amount){
+   trip.driverEarnings=amount;trip.driverBaseEarnings=amount;trip.driverWalletCredit=amount;trip.earningsState=amount?'COMPENSATION_PAID':'NO_COMPENSATION';
+  }
+ }catch{trip.earningsState='COMPENSATION_CHECK_UNAVAILABLE';}
+ return trip;
+}
+module.exports.tripWithSettlement=tripWithSettlement;

@@ -2,17 +2,18 @@ import 'package:flutter/material.dart';
 import '../design_system/app_colors.dart';
 
 /// Wallet Transaction Model
-/// 
+///
 /// Represents a single ledger entry (transaction) in the wallet.
 /// Each transaction has a direction (CREDIT/DEBIT) and a type.
 class WalletTransaction {
   final String entryId;
   final String walletId;
-  final String direction;        // CREDIT or DEBIT
-  final int amount;              // بالدينار العراقي
-  final String type;             // TOPUP, HOLD, RELEASE_HOLD, SETTLE_GROSS, SETTLE_EARNINGS, etc.
-  final String status;           // POSTED, REVERSED
-  final String? balanceType;     // Explicit AVAILABLE/LOCKED ledger bucket.
+  final String direction; // CREDIT or DEBIT
+  final int amount; // بالدينار العراقي
+  final String
+      type; // TOPUP, HOLD, RELEASE_HOLD, SETTLE_GROSS, SETTLE_EARNINGS, etc.
+  final String status; // POSTED, REVERSED
+  final String? balanceType; // Explicit AVAILABLE/LOCKED ledger bucket.
   final String? description;
   final String? relatedOrderId;
   final String? relatedHoldId;
@@ -93,7 +94,7 @@ class WalletTransaction {
     if (isReversed) return 'ملغاة';
     if (isHoldCreated) return 'محجوز مؤقتاً';
     if (isHoldReleased) return 'أُعيد إلى رصيدك';
-    if (isHoldCaptured) return 'خُصم عند التسليم';
+    if (isHoldCaptured) return 'سُوّي عند التسليم';
     if (type == 'TOPUP') return 'شحن رصيد';
     if (type == 'SETTLE_EARNINGS' ||
         type == 'SETTLEMENT_RECEIVED' ||
@@ -115,7 +116,7 @@ class WalletTransaction {
       case 'RELEASE_HOLD':
         return '🔓 إرجاع مبلغ محجوز$order';
       case 'HOLD_CAPTURED':
-        return '✅ رسوم توصيل الطلب$order';
+        return '✅ تسوية ضمان الطلب$order';
       case 'SETTLEMENT_RECEIVED':
       case 'SETTLE_GROSS':
         return '💰 أرباح توصيل الطلب$order';
@@ -123,6 +124,12 @@ class WalletTransaction {
         return '🎁 أرباحك من الطلب$order';
       case 'TOPUP':
         return '💳 شحن رصيد';
+      case 'FULL_CASH_COMPLETED':
+        return 'تسوية تحصيل الطلب$order';
+      case 'CASH_ADJUDICATION_SETTLED':
+        return 'تسوية مراجعة التحصيل$order';
+      case 'ORDER_EXCEPTION_FINANCIAL':
+        return 'تعويض أو تسوية مراجعة الطلب$order';
       case 'PLATFORM_CREDIT':
         return '⭐ رصيد من المنصة';
       case 'TRANSFER':
@@ -187,33 +194,39 @@ class WalletTransaction {
   String getFormattedAmount({bool includeSign = true}) {
     final sign = includeSign ? (isCredit ? '+' : '-') : '';
     final formattedAmount = amount.toString().replaceAllMapped(
-      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
-      (Match m) => '${m[1]},',
-    );
+          RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+          (Match m) => '${m[1]},',
+        );
     return '$sign$formattedAmount';
   }
 
   /// Factory constructor to create WalletTransaction from JSON
   factory WalletTransaction.fromJson(Map<String, dynamic> json) {
     final metadata = json['metadata'] is Map<String, dynamic>
-      ? json['metadata'] as Map<String, dynamic>
-      : <String, dynamic>{};
+        ? json['metadata'] as Map<String, dynamic>
+        : <String, dynamic>{};
 
     final rawType = (json['type'] ?? '').toString().toUpperCase();
     final rawCategory = (json['category'] ?? '').toString().toUpperCase();
     var normalizedType = rawCategory.isNotEmpty ? rawCategory : rawType;
+    if (normalizedType == 'FULL_CASH_RELEASED')
+      normalizedType = 'HOLD_RELEASED';
+    if (normalizedType == 'FULL_CASH_COMPLETED' &&
+        metadata['balanceType'] == 'LOCKED') normalizedType = 'HOLD_CAPTURED';
 
     final direction = (json['direction'] as String?) ??
-      (rawType == 'DEBIT' || rawType == 'CREDIT'
-        ? rawType
-        : ((json['amount'] as num?) != null && (json['amount'] as num) < 0
-          ? 'DEBIT'
-          : 'CREDIT'));
+        (rawType == 'DEBIT' || rawType == 'CREDIT'
+            ? rawType
+            : ((json['amount'] as num?) != null && (json['amount'] as num) < 0
+                ? 'DEBIT'
+                : 'CREDIT'));
 
     final bucket = metadata['balanceType']?.toString().toUpperCase();
-    if (rawCategory == 'COD_COMPLETED' && metadata['financialSchemaVersion'] == 2 &&
+    if (rawCategory == 'COD_COMPLETED' &&
+        metadata['financialSchemaVersion'] == 2 &&
         (json['walletId']?.toString().startsWith('WALLET#DRIVER#') ?? false) &&
-        bucket == 'LOCKED' && direction == 'DEBIT') {
+        bucket == 'LOCKED' &&
+        direction == 'DEBIT') {
       normalizedType = 'HOLD_CAPTURED';
     }
     final amountNum = (json['amount'] as num?) ?? 0;
@@ -225,10 +238,10 @@ class WalletTransaction {
       // transactionId, which would cause legitimate entries to be dropped by the
       // de-duplication logic in the transaction list.
       entryId: (json['sk'] as String?) ??
-        (json['entryId'] as String?) ??
-        (json['transactionId'] as String?) ??
-        (json['txnId'] as String?) ??
-        '${json['walletId'] ?? 'wallet'}-${json['createdAt'] ?? json['timestamp'] ?? DateTime.now().toIso8601String()}',
+          (json['entryId'] as String?) ??
+          (json['transactionId'] as String?) ??
+          (json['txnId'] as String?) ??
+          '${json['walletId'] ?? 'wallet'}-${json['createdAt'] ?? json['timestamp'] ?? DateTime.now().toIso8601String()}',
       walletId: (json['walletId'] as String?) ?? '',
       direction: direction,
       balanceType: bucket,
@@ -237,26 +250,28 @@ class WalletTransaction {
       status: (json['status'] as String?) ?? 'POSTED',
       description: json['description'] as String?,
       relatedOrderId: (json['relatedOrderId'] as String?) ??
-        (metadata['orderId'] as String?) ??
-        ((json['relatedEntityType']?.toString().toUpperCase() == 'ORDER' ||
-            json['relatedEntityType']?.toString().toUpperCase() == 'HOLD')
-          ? json['relatedEntityId'] as String?
-          : null),
+          (metadata['orderId'] as String?) ??
+          ((json['relatedEntityType']?.toString().toUpperCase() == 'ORDER' ||
+                  json['relatedEntityType']?.toString().toUpperCase() == 'HOLD')
+              ? json['relatedEntityId'] as String?
+              : null),
       relatedHoldId: (json['relatedHoldId'] as String?) ??
-        (metadata['holdId'] as String?) ??
-        (json['relatedEntityType']?.toString().toUpperCase() == 'HOLD'
-          ? json['relatedEntityId'] as String?
-          : null),
+          (metadata['holdId'] as String?) ??
+          (json['relatedEntityType']?.toString().toUpperCase() == 'HOLD'
+              ? json['relatedEntityId'] as String?
+              : null),
       relatedTopupId: (json['relatedTopupId'] as String?) ??
-        (metadata['topupId'] as String?) ??
-        (json['relatedEntityType']?.toString().toUpperCase() == 'TOPUP'
-          ? json['relatedEntityId'] as String?
-          : null),
+          (metadata['topupId'] as String?) ??
+          (json['relatedEntityType']?.toString().toUpperCase() == 'TOPUP'
+              ? json['relatedEntityId'] as String?
+              : null),
       createdAt: DateTime.tryParse(
-        (json['createdAt'] ?? json['timestamp'] ?? DateTime.now().toIso8601String())
-          .toString(),
-        ) ??
-        DateTime.now(),
+            (json['createdAt'] ??
+                    json['timestamp'] ??
+                    DateTime.now().toIso8601String())
+                .toString(),
+          ) ??
+          DateTime.now(),
     );
   }
 

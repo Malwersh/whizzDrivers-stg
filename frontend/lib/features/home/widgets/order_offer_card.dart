@@ -1,3 +1,4 @@
+import '../../../widgets/offer_display_receipt.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
@@ -69,6 +70,7 @@ class OrderOfferCard extends ConsumerStatefulWidget {
   final VoidCallback onReject;
   final VoidCallback onTimeout; // ✅ جديد: معالج منفصل لانتهاء الوقت
   final VoidCallback onTap;
+  final Future<bool> Function()? onDisplayed;
 
   const OrderOfferCard({
     super.key,
@@ -77,6 +79,7 @@ class OrderOfferCard extends ConsumerStatefulWidget {
     required this.onReject,
     required this.onTimeout,
     required this.onTap,
+    this.onDisplayed,
   });
 
   @override
@@ -426,70 +429,76 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                   const SizedBox(height: 16),
 
                   // Accept and Reject buttons
-                  Row(
-                    children: [
-                      // Reject button
-                      Expanded(
-                        child: SizedBox(
-                          height: 48,
-                          child: TextButton(
-                            onPressed: () {
-                              print(
-                                  '🔴🔴🔴 REJECT BUTTON TAPPED IN ORDER_OFFER_CARD! 🔴🔴🔴');
-                              widget.onReject();
-                            },
-                            style: TextButton.styleFrom(
-                              foregroundColor: Colors.grey[700],
-                              backgroundColor: Colors.grey[200],
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(24),
+                  OfferDisplayReceipt(
+                    expiresAt: widget.offer.expiresAt,
+                    acknowledge:
+                        _isBalanceSufficient() ? widget.onDisplayed : null,
+                    child: Row(
+                      children: [
+                        // Reject button
+                        Expanded(
+                          child: SizedBox(
+                            height: 48,
+                            child: TextButton(
+                              onPressed: () {
+                                print(
+                                    '🔴🔴🔴 REJECT BUTTON TAPPED IN ORDER_OFFER_CARD! 🔴🔴🔴');
+                                widget.onReject();
+                              },
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.grey[700],
+                                backgroundColor: Colors.grey[200],
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                ),
                               ),
-                            ),
-                            child: const Text(
-                              'رفض',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 12),
-
-                      // Accept button
-                      Expanded(
-                        child: SizedBox(
-                          height: 48,
-                          child: ElevatedButton(
-                            onPressed:
-                                _isBalanceSufficient() ? widget.onAccept : null,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _isBalanceSufficient()
-                                  ? AppColors.primary
-                                  : Colors.grey[400],
-                              foregroundColor: _isBalanceSufficient()
-                                  ? Colors.black87
-                                  : Colors.white,
-                              disabledBackgroundColor: Colors.grey[400],
-                              disabledForegroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(24),
-                              ),
-                              elevation: 0,
-                            ),
-                            child: const Text(
-                              'قبول',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
+                              child: const Text(
+                                'رفض',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+
+                        const SizedBox(width: 12),
+
+                        // Accept button
+                        Expanded(
+                          child: SizedBox(
+                            height: 48,
+                            child: ElevatedButton(
+                              onPressed: _isBalanceSufficient()
+                                  ? widget.onAccept
+                                  : null,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _isBalanceSufficient()
+                                    ? AppColors.primary
+                                    : Colors.grey[400],
+                                foregroundColor: _isBalanceSufficient()
+                                    ? Colors.black87
+                                    : Colors.white,
+                                disabledBackgroundColor: Colors.grey[400],
+                                disabledForegroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                ),
+                                elevation: 0,
+                              ),
+                              child: const Text(
+                                'قبول',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),

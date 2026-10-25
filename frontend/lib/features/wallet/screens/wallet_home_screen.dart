@@ -1,3 +1,7 @@
+import '../../../services/wallet_transfer_service.dart';
+import '../../../widgets/wallet_transfer_gate.dart';
+import 'dart:async';
+import '../../../services/push_notifications_service.dart';
 import 'wallet_transfer_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,7 +30,30 @@ class WalletHomeScreen extends ConsumerStatefulWidget {
   ConsumerState<WalletHomeScreen> createState() => _WalletHomeScreenState();
 }
 
-class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
+class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen>
+    with WidgetsBindingObserver {
+  StreamSubscription<dynamic>? _fundingEvents;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _fundingEvents = PushNotificationsService.walletEvents.listen((_) {
+      if (mounted) _refresh();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) _refresh();
+  }
+
+  @override
+  void dispose() {
+    _fundingEvents?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
   Future<void> _refresh() async {
     ref.read(walletRefreshProvider.notifier).state++;
     try {
@@ -103,13 +130,21 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
   ) {
     return ListView(
       children: [
-        BalanceCard(
-            balance: balance,
-            onTransfer: () async {
-              await Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => const WalletTransferScreen()));
-              if (mounted) await _refresh();
-            }),
+        WalletTransferGate(
+            check: () async =>
+                (await WalletTransferService()
+                    .call('context'))['canTransfer'] ==
+                true,
+            builder: (enabled) => BalanceCard(
+                onFundingReturn: _refresh,
+                balance: balance,
+                onTransfer: enabled
+                    ? () async {
+                        await Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const WalletTransferScreen()));
+                        if (mounted) await _refresh();
+                      }
+                    : null)),
         const SizedBox(height: 16),
         MinimumBalanceIndicator(balance: balance),
 

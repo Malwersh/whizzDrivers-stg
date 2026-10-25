@@ -1,17 +1,15 @@
+import 'zaincash_payment_screen.dart';
 import 'sandbox_payment_screen.dart';
 import 'dart:async';
 import '../../../services/push_notifications_service.dart';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:http/http.dart' as http;
-import 'package:uuid/uuid.dart';
-import '../../../services/wallet_api_service.dart';
-import '../../../services/driver_auth_helper.dart';
+import '../../../services/wallet_funding_service.dart';
 
 class TopupScreen extends StatefulWidget {
-  const TopupScreen({super.key});
+  const TopupScreen({super.key, this.service});
+  final WalletFundingService? service;
   @override
   State<TopupScreen> createState() => _TopupScreenState();
 }
@@ -21,30 +19,30 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
   bool _loading = false;
   final _amount = TextEditingController();
   final _reference = TextEditingController();
-  final _api = WalletApiService();
+  late final _funding = widget.service ?? WalletFundingService();
+  bool _sessionChanged = false;
   Map<String, dynamic>? _config;
   Map<String, dynamic>? _sandbox;
   List<Map<String, dynamic>> _requests = [];
   String? _error, _receipt;
-  String _requestKey = const Uuid().v4();
   bool _busy = false;
   Future<Map<String, dynamic>> _call(String path,
-      {Map<String, dynamic>? body}) async {
-    final token = await DriverAuthHelper.getCurrentAccessToken();
-    if (token == null) throw Exception('يرجى تسجيل الدخول');
-    final uri = Uri.parse('${WalletApiService.baseUrl}$path');
-    final headers = {
-      'Authorization': 'Bearer $token',
-      'Content-Type': 'application/json'
-    };
-    final response = body == null
-        ? await http.get(uri, headers: headers)
-        : await http.post(uri, headers: headers, body: jsonEncode(body));
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    if (response.statusCode >= 300) {
-      throw Exception(data['message'] ?? 'تعذر إكمال العملية');
-    }
-    return (data['data'] ?? data) as Map<String, dynamic>;
+          {Map<String, dynamic>? body}) =>
+      _funding.call(path, body: body);
+  void _failure(Object e) {
+    if (!mounted) return;
+    setState(() {
+      _error = e.toString();
+      if (e is FundingSessionChanged) {
+        _sessionChanged = true;
+        _config = null;
+        _sandbox = null;
+        _requests = [];
+        _receipt = null;
+        _amount.clear();
+        _reference.clear();
+      }
+    });
   }
 
   @override
@@ -65,100 +63,131 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _load({bool silent = false}) async {
-    if (_loading) return;
+    if (_loading || _sessionChanged) return;
     _loading = true;
     if (!silent) setState(() => _busy = true);
     try {
+      await _funding.initialize();
+      final wasPending = _funding.hasPending;
       final config = await _call('/wallet/funding/config');
-      final requests = await _api.getTopupRequests();
+      final requests = await _funding.history();
       Map<String, dynamic>? sandbox;
       try {
         sandbox = await _call('/wallet/funding/sandbox/config');
+      } on FundingSessionChanged {
+        rethrow;
       } catch (_) {/* Optional test features stay hidden when unavailable. */}
       if (mounted) {
         setState(() {
           _config = config;
           _sandbox = sandbox;
           _requests = requests;
+          if (wasPending && !_funding.hasPending) {
+            _amount.clear();
+            _reference.clear();
+            _receipt = null;
+          }
           _error = null;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      _failure(e);
     } finally {
       _loading = false;
       if (mounted && !silent) setState(() => _busy = false);
     }
   }
 
+  Future<void> _moreRequests() async {
+    if (_busy || _sessionChanged) return;
+    setState(() => _busy = true);
+    try {
+      final rows = await _funding.history(more: true);
+      if (mounted)
+        setState(() {
+          _requests.addAll(rows);
+        });
+    } catch (e) {
+      _failure(e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _pick() async {
     final image = await ImagePicker().pickImage(
         source: ImageSource.gallery, imageQuality: 85, maxWidth: 1800);
-    if (image == null || !mounted) return;
+    if (image == null || !mounted || _sessionChanged || _funding.hasPending)
+      return;
     setState(() => _busy = true);
     try {
       final bytes = await image.readAsBytes();
+      if (bytes.length > 4 * 1024 * 1024)
+        throw Exception('اختر صورة لا تتجاوز ٤ ميجابايت');
       final png = bytes.length > 7 && bytes[0] == 137 && bytes[1] == 80;
       final jpg = bytes.length > 3 && bytes[0] == 255 && bytes[1] == 216;
       if (!png && !jpg) throw Exception('اختر صورة JPG أو PNG');
       final contentType = png ? 'image/png' : 'image/jpeg';
       final signed = await _call('/wallet/funding/receipt',
           body: {'contentType': contentType, 'size': bytes.length});
-      final result = await http.put(Uri.parse(signed['uploadUrl']),
-          headers: {
-            'Content-Type': contentType,
-            'x-amz-server-side-encryption': 'AES256',
-            'If-None-Match': '*'
-          },
-          body: bytes);
-      if (result.statusCode >= 300) throw Exception('تعذر رفع الوصل');
+      await _funding.upload(signed['uploadUrl'], bytes, contentType);
       if (mounted) {
         setState(() {
           _receipt = signed['key'];
-          _requestKey = const Uuid().v4();
           _error = null;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      _failure(e);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _submit() async {
+    if (_busy || _sessionChanged) return;
+    if (_funding.hasPending) {
+      await _sendPending();
+      return;
+    }
     final normalized = _amount.text.replaceAllMapped(
         RegExp('[٠-٩]'), (m) => '${m[0]!.codeUnitAt(0) - 0x660}');
     final amount = int.tryParse(normalized);
     if (amount == null ||
         amount < 25000 ||
         _receipt == null ||
-        _reference.text.trim().isEmpty) {
+        _reference.text.trim().isEmpty ||
+        _config == null ||
+        _config?['manual']?['enabled'] != true) {
       setState(() =>
           _error = 'الحد الأدنى 25,000 د.ع. أدخل مرجع التحويل وارفع الوصل');
       return;
     }
+    await _sendPending(payload: {
+      'amount': amount,
+      'method': 'MANUAL_VERIFICATION',
+      'evidenceRef': _receipt,
+      'transferReference': _reference.text.trim().replaceAllMapped(
+          RegExp('[٠-٩]'), (m) => '${m[0]!.codeUnitAt(0) - 0x660}'),
+      'configVersion': _config!['version'],
+    });
+  }
+
+  Future<void> _sendPending({Map<String, dynamic>? payload}) async {
+    if (_busy || _sessionChanged) return;
     setState(() => _busy = true);
     try {
-      await _api.requestTopup(
-          amount: amount,
-          method: 'MANUAL_VERIFICATION',
-          evidenceRef: _receipt,
-          idempotencyKey: _requestKey,
-          transferReference: _reference.text.trim().replaceAllMapped(
-              RegExp('[٠-٩]'), (m) => '${m[0]!.codeUnitAt(0) - 0x660}'),
-          configVersion: _config!['version']);
+      await _funding.submit(payload: payload);
       if (!mounted) return;
       _amount.clear();
       _reference.clear();
       _receipt = null;
-      _requestKey = const Uuid().v4();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content:
-              Text('أُرسل الطلب للمراجعة. يضاف الرصيد بعد موافقة المدير')));
-      await _load();
+          content: Text(
+              'تم تأكيد تسجيل الطلب. يضاف الرصيد بعد المراجعة والموافقة.')));
+      await _load(silent: true);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      _failure(e);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -167,6 +196,7 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     _pushEvents?.cancel();
+    if (widget.service == null) _funding.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _amount.dispose();
     _reference.dispose();
@@ -194,10 +224,36 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
                     leading: Icon(Icons.phone_android),
                     title: Text('تحويل زين كاش ورفع الوصل'),
                     subtitle: Text('يُضاف الرصيد بعد مراجعة المدير')),
-                if (!enabled)
+                if (!enabled && !_funding.hasPending && !_sessionChanged)
                   const Text(
                       'التحويل غير متاح حالياً. لم تُفعّل بيانات المستلم بعد.'),
-                if (enabled) ...[
+                if (_funding.hasPending && !_sessionChanged) ...[
+                  Card(
+                      color: const Color(0xFFF1F5FA),
+                      child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                const Text(
+                                    'محاولة شحن محفوظة — نحتاج تأكيد نتيجتها',
+                                    style: TextStyle(
+                                        color: Color(0xFF082C63),
+                                        fontWeight: FontWeight.bold)),
+                                Text(
+                                    'المبلغ: ${_funding.pending!["amount"]} د.ع\nمرجع التحويل: ${_funding.pending!["transferReference"]}'),
+                                const Text(
+                                    'لا تحوّل مبلغًا جديدًا ولا ترفع وصلًا آخر لهذه المحاولة. حدّث القائمة أو أعد إرسال الطلب نفسه. إذا بقيت النتيجة غير مؤكدة فتواصل مع الدعم.'),
+                                OutlinedButton(
+                                    onPressed: _busy ? null : _load,
+                                    child: const Text('تحديث طلبات الشحن')),
+                                FilledButton(
+                                    onPressed: _busy ? null : _sendPending,
+                                    child:
+                                        const Text('إعادة إرسال الطلب نفسه')),
+                              ]))),
+                ],
+                if (enabled && !_funding.hasPending && !_sessionChanged) ...[
                   Text('المستلم: ${manual['name']}'),
                   ListTile(
                       title: Text('${manual['phone']}',
@@ -209,18 +265,18 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
                   const Text(
                       'حوّل مبلغاً لا يقل عن 25,000 دينار إلى الرقم الموضح، ثم ارفع الوصل وأرسل الطلب. صورة الوصل لا تضيف الرصيد قبل المراجعة.'),
                   TextField(
-                      controller: _amount,
-                      keyboardType: TextInputType.number,
-                      enabled: !_busy,
-                      decoration: const InputDecoration(
-                          labelText: 'المبلغ بالدينار العراقي'),
-                      onChanged: (_) => _requestKey = const Uuid().v4()),
+                    controller: _amount,
+                    keyboardType: TextInputType.number,
+                    enabled: !_busy,
+                    decoration: const InputDecoration(
+                        labelText: 'المبلغ بالدينار العراقي'),
+                  ),
                   TextField(
-                      controller: _reference,
-                      enabled: !_busy,
-                      decoration: const InputDecoration(
-                          labelText: 'رقم عملية التحويل في زين كاش'),
-                      onChanged: (_) => _requestKey = const Uuid().v4()),
+                    controller: _reference,
+                    enabled: !_busy,
+                    decoration: const InputDecoration(
+                        labelText: 'رقم عملية التحويل في زين كاش'),
+                  ),
                   OutlinedButton.icon(
                       onPressed: _busy ? null : _pick,
                       icon: const Icon(Icons.receipt),
@@ -231,10 +287,11 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
                       onPressed: _busy ? null : _submit,
                       child: const Text('إرسال طلب الشحن')),
                 ],
-                if (_sandbox?['eligible'] == true) ...[
+                if (_sandbox?['eligible'] == true &&
+                    _sandbox?['qi'] == true) ...[
                   const Divider(),
-                  const Text('اختبار بوابات الدفع — رصيد منفصل'),
-                  for (final provider in ['zaincash', 'qi'])
+                  const Text('اختبار البطاقة البنكية — رصيد منفصل'),
+                  for (final provider in ['qi'])
                     if (_sandbox?[provider] == true)
                       ListTile(
                         leading: const Icon(Icons.science_outlined),
@@ -250,12 +307,17 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
                       ),
                 ],
                 const Divider(),
-                const ListTile(
-                    enabled: false,
-                    leading: Icon(Icons.payment),
-                    title: Text('الدفع المباشر بزين كاش'),
-                    subtitle:
-                        Text('غير متاح حالياً — بانتظار تفعيل بوابة الدفع')),
+                ListTile(
+                    enabled: !_sessionChanged && !_funding.hasPending && !_busy,
+                    leading: const Icon(Icons.payment),
+                    title: const Text('الدفع المباشر بزين كاش'),
+                    subtitle: const Text('الدفع الآمن ومتابعة عمليات البوابة'),
+                    trailing: const Icon(Icons.chevron_left),
+                    onTap: () async {
+                      await Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const ZaincashPaymentScreen()));
+                      if (mounted) _load();
+                    }),
                 const ListTile(
                     enabled: false,
                     leading: Icon(Icons.credit_card),
@@ -263,10 +325,15 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
                     subtitle:
                         Text('غير متاحة حالياً — بانتظار اعتماد البوابة')),
                 const Divider(),
-                const Text('طلبات الشحن',
+                const Text('أحدث طلبات الشحن',
                     style:
                         TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                if (_requests.isEmpty) const Text('لا توجد طلبات شحن'),
+                if (_requests.isEmpty && _error == null && !_busy)
+                  const Text('لا توجد طلبات شحن ضمن النتائج المتاحة'),
+                if (_funding.historyCursor != null)
+                  OutlinedButton(
+                      onPressed: _busy ? null : _moreRequests,
+                      child: const Text('تحميل طلبات شحن أقدم')),
                 ..._requests.map((r) => ListTile(
                     title: Text('${r['amount']} د.ع'),
                     subtitle: Text('${{
