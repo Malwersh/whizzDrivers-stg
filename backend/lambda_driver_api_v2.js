@@ -153,7 +153,7 @@ async function getDriverInfo(driverId) {
       driverName: driver.name || null,
       driverPhone: driver.phoneNumber || driver.phone || null,
       vehicleType: driver.vehicleType || null,
-      vehiclePlate: driver.licenseNumber || driver.vehiclePlate || null
+      vehiclePlate: driver.vehiclePlate || driver.vehicleInfo?.plateNumber || null
     };
   } catch (error) {
     console.error(`❌ Error fetching driver info for ${driverId}:`, error);
@@ -926,6 +926,17 @@ const handleRequest = async (event) => {
       return await getDriverTrips(cognitoUsername, event.queryStringParameters || {}, corsHeaders);
     }
 
+    if (path.endsWith('/driver/vehicles') && ['GET','POST'].includes(httpMethod)) {
+      try {
+        const result = await require('./driver-vehicles-308').operation({db:dynamodb,GetCommand,TransactWriteCommand,
+          driversTable:DRIVERS_TABLE,liveTable:DRIVER_LIVE_STATE_TABLE,bucket:DRIVER_DOCUMENTS_BUCKET},
+          {driverId:cognitoUsername,actorId:cognitoUsername,body:httpMethod==='POST'?JSON.parse(event.body||'{}'):null});
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(error) {
+        return {statusCode:error.statusCode||error.status||500,headers:corsHeaders,body:JSON.stringify({error:error.code||'VEHICLE_OPERATION_FAILED'})};
+      }
+    }
+
     // Route handling
     if (path.endsWith('/driver/registration-options') && httpMethod === 'GET') {
       return {statusCode:200,headers:corsHeaders,body:JSON.stringify(await loadRegistrationOptions())};
@@ -1033,6 +1044,13 @@ const handleRequest = async (event) => {
       }
     }
 
+    if ((path === '/driver/map-activity' || path.endsWith('/driver/map-activity')) && httpMethod === 'POST') {
+      try {
+        const result=await require('./driver-map-activity').readActivity({db:dynamodb,GetCommand,QueryCommand,driverId:cognitoUsername,input:JSON.parse(event.body||'{}'),tables:{drivers:DRIVERS_TABLE,orders:ORDERS_TABLE,businesses:'WhizzMerchants_Businesses'},regionAccess:require('./driver-work-region-311').create({db:dynamodb,GetCommand})});
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(e) {return {statusCode:e.code==='MAP_ACTIVITY_INVALID_REQUEST'?400:e.code==='MAP_ACTIVITY_DRIVER_UNAVAILABLE'?403:503,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:false,code:e.code||'MAP_ACTIVITY_UNAVAILABLE'})};}
+    }
+
     if ((path === '/driver/demand-forecast' || path.endsWith('/driver/demand-forecast')) && httpMethod === 'GET') {
       const response = await require('./driver-demand').readDemand({db:dynamodb,GetCommand,driverId:cognitoUsername,
         tables:{drivers:DRIVERS_TABLE,live:DRIVER_LIVE_STATE_TABLE,regions:REGIONS_TABLE,demand:process.env.DEMAND_TABLE,dataset:process.env.DEMAND_DATASET},
@@ -1051,6 +1069,12 @@ const handleRequest = async (event) => {
       }
     }
 
+    if ((path === '/driver/cash-payouts' || path.endsWith('/driver/cash-payouts')) && httpMethod === 'POST') {
+      try {const result=await require('./financial-accept-client').invokeFinancialOperation(JSON.parse(event.body||'{}'),bearerToken,'driver_cash_payout');
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(error) {return {statusCode:[400,401,403,409,503].includes(error.statusCode)?error.statusCode:503,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:false,code:error.code||'DRIVER_PAYOUT_UNAVAILABLE'})};}
+    }
+
     if ((path === '/driver/quality-incidents' || path.endsWith('/driver/quality-incidents')) && httpMethod === 'GET') {
       const result=await require('./driver-quality-incidents-290').readIncidents({db:dynamodb,GetCommand,QueryCommand,driverId:cognitoUsername});
       return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
@@ -1063,6 +1087,10 @@ const handleRequest = async (event) => {
     }
 
     if ((path === '/driver/performance' || path.endsWith('/driver/performance')) && httpMethod === 'GET') {
+      if(process.env.DRIVER_PERFORMANCE_SNAPSHOT_READS_ENABLED==='true'){
+        const snapshot=await require('./driver-performance-snapshot').readSnapshot({db:dynamodb,GetCommand,driverId:cognitoUsername});
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(require('./driver-performance-snapshot').viewForRules(snapshot,event.queryStringParameters?.rules==='4'?4:event.queryStringParameters?.rules==='3'?3:event.queryStringParameters?.rules==='2'?2:1))};
+      }
       const result = await require('./driver-performance').readPerformance({db:dynamodb,GetCommand,QueryCommand,driverId:cognitoUsername,
         tables:{offers:'WaveOffers_staging',orders:ORDERS_TABLE,holds:process.env.WALLET_HOLDS_TABLE,drivers:DRIVERS_TABLE,ratings:'whizz-order-ratings-staging',ratingIndex:'DriverRatingChronology281'},rulesVersion:event.queryStringParameters?.rules==='4'?4:event.queryStringParameters?.rules==='3'?3:event.queryStringParameters?.rules==='2'?2:1});
       return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
@@ -1294,10 +1322,18 @@ async function getDriverProfile(username, fallbackDriverIds, accessToken, header
       };
     }
 
+    const performance=process.env.DRIVER_PERFORMANCE_SNAPSHOT_READS_ENABLED==='true'?await require('./driver-performance-snapshot').readSnapshot({db:dynamodb,GetCommand,driverId:username,includeDetails:false}):null;
+    const view=performance?{...profile,customerRating:performance.ratingAllTime?.average??null,customerRatingCount:performance.ratingAllTime?.count??0,performanceProjection:performance.projection}:profile;
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ data: { ...profile, isVerified: isDriverApproved(profile) } }),
+      body: JSON.stringify({ data: { ...view,
+        ...(profile.vehicleRegistry?{
+          drivingLicenseStatus:require('./driver-vehicles-308').documentStatus(profile.personalDocumentReview?.drivingLicense,profile.drivingLicenseUrl),
+          nationalIdStatus:require('./driver-vehicles-308').documentStatus(profile.personalDocumentReview?.nationalId,profile.nationalIdUrl),
+          registrationPaperStatus:profile.vehicleRegistry.items?.[profile.vehicleRegistry.activeId]?require('./driver-vehicles-308').vehicleStatus(profile.vehicleRegistry.items[profile.vehicleRegistry.activeId]):'PENDING_REVIEW',
+          vehicleEligibility:require('./driver-vehicles-308').eligibility(profile),
+        }:{}), isVerified: isDriverApproved(profile) } }),
     };
   } catch (error) {
     console.error('Error getting profile:', error);
@@ -1429,6 +1465,21 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
       }
       catch (_) { return {statusCode:400,headers,body:JSON.stringify({message:'اختر نوع مركبة ومحافظة ومنطقة عمل مفتوحة مرتبطة بها'})}; }
     }
+    const vehicleFields=['vehicleType','registrationPaperUrl','vehiclePlate','vehicleInfo','vehicleRegistry','vehicleOperational','personalDocumentReview'];
+    if (existingProfile?.vehicleRegistry && vehicleFields.some(k => body[k] !== undefined)) {
+      return {statusCode:409,headers,body:JSON.stringify({error:'USE_VEHICLE_MANAGEMENT',message:'استخدم صفحة مركباتي لتعديل المركبة ووثائقها.'})};
+    }
+    if (isDriverApproved(existingProfile) && ['vehicleType','registrationPaperUrl','home_region_id','work_region_id','governorate_id'].some(k=>body[k]!==undefined&&body[k]!==existingProfile[k])) {
+      return {statusCode:409,headers,body:JSON.stringify({error:'USE_VEHICLE_MANAGEMENT',message:'تغيير المركبة أو منطقة العمل يتطلب مراجعة الإدارة.'})};
+    }
+    for (const k of ['drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']) {
+      if (body[k] !== undefined && !require('./driver-vehicles-308').owns(body[k],username,DRIVER_DOCUMENTS_BUCKET)) {
+        return {statusCode:400,headers,body:JSON.stringify({error:'DOCUMENT_OWNERSHIP_INVALID'})};
+      }
+    }
+    if (body.vehiclePlate !== undefined && (typeof body.vehiclePlate !== 'string' || !body.vehiclePlate.trim() || body.vehiclePlate.length > 40)) {
+      return {statusCode:400,headers,body:JSON.stringify({error:'INVALID_VEHICLE_PLATE'})};
+    }
     // Build update expression dynamically
     const updates = [];
     const expressionAttributeNames = {};
@@ -1436,7 +1487,7 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     
     // Fields that can be updated
     const updatableFields = [
-      'name', 'city', 'vehicleType', 'licenseNumber', 'nationalId',
+      'name', 'city', 'vehicleType', 'vehiclePlate', 'licenseNumber', 'nationalId',
       'phoneNumber', 'email', 'registrationMethod',
       'drivingLicenseUrl', 'registrationPaperUrl', 'nationalIdUrl',
       'profileSchemaVersion', 'country_id', 'country_code', 'country_name', 'work_region_id', 'work_region_name',
@@ -1549,8 +1600,8 @@ async function getProfileStatus(username, fallbackDriverIds, accessToken, header
 
     const missingFields = [];
     
-    if (profile.profileSchemaVersion === 2) {
-      for (const field of ['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']) {
+    if (profile.profileSchemaVersion === 2 || profile.vehicleRegistry?.schemaVersion === 1) {
+      for (const field of (profile.vehicleRegistry?.schemaVersion===1?['name','work_region_id','drivingLicenseUrl','nationalIdUrl']:['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl'])) {
         if (!profile[field]) missingFields.push(field);
       }
     } else {
@@ -1596,8 +1647,8 @@ async function getProfileStatus(username, fallbackDriverIds, accessToken, header
  * Check if profile has all required fields
  */
 function isProfileComplete(profile) {
-  if (profile.profileSchemaVersion === 2) {
-    return ['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl'].every(field=>typeof profile[field]==='string'&&profile[field].trim().length>0);
+  if (profile.profileSchemaVersion === 2 || profile.vehicleRegistry?.schemaVersion === 1) {
+    return (profile.vehicleRegistry?.schemaVersion===1?['name','work_region_id','drivingLicenseUrl','nationalIdUrl']:['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']).every(field=>typeof profile[field]==='string'&&profile[field].trim().length>0);
   }
   const requiredFields = ['name', 'city', 'vehicleType', 'licenseNumber', 'nationalId', 'drivingLicenseUrl'];
   
@@ -1659,7 +1710,16 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
     const now = new Date().toISOString();
     const safeFileName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
     if (!['driving_license','registration_paper','national_id'].includes(documentType)) throw new Error('Invalid document type');
-    const key = `drivers/${username}/${documentType}/${now}_${safeFileName}`;
+    if (body.vehicleId !== undefined && (documentType !== 'registration_paper' || typeof body.vehicleId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(body.vehicleId))) {
+      return {statusCode:400,headers,body:JSON.stringify({error:'VEHICLE_DATA_INVALID'})};
+    }
+    const ownerProfile = await getDriverProfileItem(username);
+    if (documentType === 'registration_paper' && ownerProfile?.vehicleRegistry && !body.vehicleId) {
+      return {statusCode:409,headers,body:JSON.stringify({error:'USE_VEHICLE_MANAGEMENT'})};
+    }
+    const key = body.vehicleId
+      ? `drivers/${username}/vehicles/${body.vehicleId}/${now}_${safeFileName}`
+      : `drivers/${username}/${documentType}/${now}_${safeFileName}`;
     const buffer = Buffer.from(String(fileData), 'base64');
 
     await s3.send(new PutObjectCommand({
@@ -1678,7 +1738,7 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
         ? 'registrationPaperUrl'
         : documentType === 'national_id' ? 'nationalIdUrl' : null;
 
-    if (urlField) {
+    if (urlField && !body.vehicleId) {
       await dynamodb.send(new UpdateCommand({
         TableName: DRIVERS_TABLE,
         Key: { driverId: username },
@@ -1761,6 +1821,12 @@ async function startSearching(driverId, body, headers) {
 
     const driver = driverResult.Item;
 
+    const vehiclesModule=require('./driver-vehicles-308');
+    if(vehiclesModule.enforce(driver)){
+      const eligibility=vehiclesModule.eligibility(driver);
+      if(!eligibility.eligible)return {statusCode:403,headers,body:JSON.stringify({success:false,code:eligibility.code,
+        message:'تحتاج المركبة أو وثائقك إلى مراجعة. افتح المزيد ← مركباتي للاطلاع على الحالة.'})};
+    }
     // فحص الحالة
     if (!isDriverApproved(driver)) {
       return {
@@ -1784,6 +1850,17 @@ async function startSearching(driverId, body, headers) {
         })
       };
     }
+
+    const guardedSearchWrite = async command => {
+      const name=command.constructor.name;
+      if(!['PutCommand','UpdateCommand'].includes(name)||command.input.TableName!==DRIVER_LIVE_STATE_TABLE)return dynamodb.send(command);
+      const operation={...command.input};delete operation.ReturnValues;
+      return dynamodb.send(new TransactWriteCommand({TransactItems:[
+        require('./driver-vehicles-308').fence(DRIVERS_TABLE,{driverId},driver),
+        ...permission.guards,
+        {[name==='PutCommand'?'Put':'Update']:operation},
+      ]}));
+    };
 
     // ============================================
     // الخطوة 2: تحديد المنطقة الحالية
@@ -1834,17 +1911,7 @@ async function startSearching(driverId, body, headers) {
     console.log(`   - target governorate_id: ${governorate_id}`);
     console.log(`   - driver level: ${driver.level || 'Bronze (default)'}`);
     
-    const permission = await checkDriverRegionPermission(
-      driverId, 
-      driver.home_region_id,
-      driver.home_region_level || 3,
-      region_id,
-      regionInfo.region_level || 3,
-      governorate_id,
-      driver.governorate_id,
-      driver.level
-    );
-
+    const permission = await checkDriverRegionPermission(driver, region_id, {lat,lng});
     console.log(`✅ نتيجة فحص الصلاحيات: allowed=${permission.allowed}`);
 
     if (!permission.allowed) {
@@ -1977,7 +2044,7 @@ async function startSearching(driverId, body, headers) {
     if (existingCurrentOrderId) {
       console.log(`🔄 Using UpdateCommand to preserve active order ${existingCurrentOrderId}`);
       
-      await dynamodb.send(new UpdateCommand({
+      await guardedSearchWrite(new UpdateCommand({
         TableName: DRIVER_LIVE_STATE_TABLE,
         Key: { driverId },
         UpdateExpression: `
@@ -2044,7 +2111,7 @@ async function startSearching(driverId, body, headers) {
       // السائق ليس لديه طلب نشط - يمكن استخدام PutCommand بأمان
       console.log(`✅ No active order - using PutCommand for fresh state`);
       
-      await dynamodb.send(new PutCommand({
+      await guardedSearchWrite(new PutCommand({
         TableName: DRIVER_LIVE_STATE_TABLE,
         Item: {
           driverId: driverId,
@@ -2157,7 +2224,7 @@ async function stopSearching(driverId, body, headers) {
     // ============================================
     const liveStateResult = await dynamodb.send(new GetCommand({
       TableName: DRIVER_LIVE_STATE_TABLE,
-      Key: { driverId }
+      Key: { driverId }, ConsistentRead: true
     }));
 
     if (!liveStateResult.Item) {
@@ -2177,7 +2244,7 @@ async function stopSearching(driverId, body, headers) {
     // ============================================
     // الخطوة 2: التحقق من وجود طلب نشط
     // ============================================
-    if (currentState.currentOrderId) {
+    if (currentState.currentOrderId || (currentState.activeOrdersCount ?? 0) !== 0) {
       console.warn(`⚠️ Driver ${driverId} has active order ${currentState.currentOrderId}`);
       return {
         statusCode: 400,
@@ -2189,6 +2256,14 @@ async function stopSearching(driverId, body, headers) {
         })
       };
     }
+
+    const guardedStopWrite = command => {
+      const guard=require('./driver-vehicles-308').fence(DRIVER_LIVE_STATE_TABLE,{driverId},currentState,
+        ['driverId','status','isActive','isSearching','currentOrderId','activeOrdersCount','currentWaveOfferId']).ConditionCheck;
+      return dynamodb.send(new UpdateCommand({...command.input,ConditionExpression:guard.ConditionExpression,
+        ExpressionAttributeNames:{...command.input.ExpressionAttributeNames,...guard.ExpressionAttributeNames},
+        ExpressionAttributeValues:{...command.input.ExpressionAttributeValues,...guard.ExpressionAttributeValues}}));
+    };
 
     // ============================================
     // الخطوة 3: معالجة العرض المعلق (إن وجد)
@@ -2210,7 +2285,7 @@ async function stopSearching(driverId, body, headers) {
     // ============================================
     const now = new Date().toISOString();
     
-    await dynamodb.send(new UpdateCommand({
+    await guardedStopWrite(new UpdateCommand({
       TableName: DRIVER_LIVE_STATE_TABLE,
       Key: { driverId },
       UpdateExpression: `
@@ -2260,6 +2335,9 @@ async function stopSearching(driverId, body, headers) {
     };
 
   } catch (error) {
+    if (['TransactionCanceledException','ConditionalCheckFailedException'].includes(error.name)) {
+      return {statusCode:409,headers,body:JSON.stringify({success:false,message:'تغيرت حالة الطلب أثناء الإيقاف. حدّث الحالة وحاول مجددًا.'})};
+    }
     console.error('❌ Error in stop-searching:', error);
     return {
       statusCode: 500,
@@ -2282,424 +2360,59 @@ async function stopSearching(driverId, body, headers) {
  * يعيد حساب current_work_region_id إذا انتقل السائق لمنطقة جديدة
  */
 async function updateLocation(driverId, body, headers) {
-  try {
-    const { lat, lng } = body;
-
-    if (!lat || !lng) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: 'الإحداثيات مطلوبة (lat, lng)' 
-        })
-      };
+ try {
+  const {lat,lng}=body||{};
+  if(typeof lat!=='number'||!Number.isFinite(lat)||Math.abs(lat)>90||typeof lng!=='number'||!Number.isFinite(lng)||Math.abs(lng)>180)return {statusCode:400,headers,body:JSON.stringify({success:false,message:'إحداثيات الموقع غير صالحة'})};
+  const [liveResult,profileResult]=await Promise.all([
+   dynamodb.send(new GetCommand({TableName:DRIVER_LIVE_STATE_TABLE,Key:{driverId},ConsistentRead:true})),
+   dynamodb.send(new GetCommand({TableName:DRIVERS_TABLE,Key:{driverId},ConsistentRead:true}))
+  ]);
+  const live=liveResult.Item,driver=profileResult.Item;
+  if(!live||!driver)return {statusCode:404,headers,body:JSON.stringify({success:false,message:'لم تُعثر على حالة السائق'})};
+  const busy=live.currentOrderId!=null||(live.activeOrdersCount??0)!==0||live.status==='busy';
+  const now=new Date().toISOString(),vehicles=require('./driver-vehicles-308');
+  const guard=vehicles.fence(DRIVER_LIVE_STATE_TABLE,{driverId},live,['driverId','status','isActive','isSearching','currentOrderId','activeOrdersCount']).ConditionCheck;
+  const names={...guard.ExpressionAttributeNames,'#lat':'lat','#lng':'lng','#observed':'locationUpdatedAt','#updated':'lastUpdated'},values={...guard.ExpressionAttributeValues,':lat':lat,':lng':lng,':now':now};
+  const sets=['#lat=:lat','#lng=:lng','#observed=:now','#updated=:now'];
+  let region=null,scope=null,stopped=false;
+  if(!busy){
+   region=await determineRegionFromCoordinates(lat,lng,driver);
+   scope=region?await checkDriverRegionPermission(driver,region.region_id,{lat,lng}):{allowed:false,code:'DRIVER_REGION_POSITION_MISMATCH',guards:[]};
+   const allowed=scope.allowed;
+   for(const [key,value]of Object.entries({current_work_region_id:region?.region_id??null,allowed_region_ids:allowed?[region.region_id]:[],allowed_region_ids_priority0:allowed?[region.region_id]:[],allowed_region_ids_priority1:[]})){
+    names['#r'+key]=key;values[':r'+key]=value;sets.push('#r'+key+'=:r'+key);
+   }
+   if(!allowed&&(live.isSearching===true||live.status==='available')){
+    stopped=true;
+    for(const [key,value]of Object.entries({isSearching:false,isActive:false,status:'offline',searchStoppedAt:now,stopReason:scope.code})){
+     names['#stop'+key]=key;values[':stop'+key]=value;sets.push('#stop'+key+'=:stop'+key);
     }
-
-    console.log(`📍 Driver ${driverId} updating location to (${lat}, ${lng})`);
-
-    // ============================================
-    // الخطوة 1: جلب حالة السائق الحالية
-    // ============================================
-    const liveStateResult = await dynamodb.send(new GetCommand({
-      TableName: DRIVER_LIVE_STATE_TABLE,
-      Key: { driverId }
-    }));
-
-    if (!liveStateResult.Item) {
-      return {
-        statusCode: 404,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: 'حالة السائق غير موجودة. قم بتفعيل البحث أولاً' 
-        })
-      };
-    }
-
-    const currentState = liveStateResult.Item;
-
-    // التحقق من أن السائق في حالة بحث
-    if (!currentState.isSearching) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: 'السائق ليس في حالة بحث عن الطلبات' 
-        })
-      };
-    }
-
-    // ============================================
-    // الخطوة 2: جلب بيانات السائق الأساسية
-    // ============================================
-    const driverResult = await dynamodb.send(new GetCommand({
-      TableName: DRIVERS_TABLE,
-      Key: { driverId }
-    }));
-
-    if (!driverResult.Item) {
-      return {
-        statusCode: 404,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: 'السائق غير موجود' 
-        })
-      };
-    }
-
-    const driver = driverResult.Item;
-
-    // ============================================
-    // الخطوة 3: تحديد المنطقة الجديدة من الموقع
-    // ============================================
-    const regionInfo = await determineRegionFromCoordinates(lat, lng, driver);
-
-    if (!regionInfo) {
-      console.warn(`⚠️ Could not determine region for location (${lat}, ${lng})`);
-      // نستمر بتحديث الإحداثيات حتى لو لم نستطع تحديد المنطقة
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: `
-          SET lat = :lat,
-              lng = :lng,
-              locationUpdatedAt = :now,
-              lastUpdated = :now
-        `,
-        ExpressionAttributeValues: {
-          ':lat': lat,
-          ':lng': lng,
-          ':now': new Date().toISOString()
-        }
-      }));
-
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({
-          success: true,
-          location_updated: true,
-          region_changed: false,
-          message: 'تم تحديث الموقع (منطقة غير محددة)'
-        })
-      };
-    }
-
-    const { region_id, region_name, district_id, district_name, governorate_id, governorate_name, is_active } = regionInfo;
-
-    // فحص: هل المنطقة الجديدة نشطة؟
-    if (!is_active) {
-      return {
-        statusCode: 403,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: `خدمة التوصيل غير متوفرة في منطقة ${region_name}` 
-        })
-      };
-    }
-
-    // ============================================
-    // الخطوة 4: مقارنة المنطقة الحالية مع السابقة
-    // ============================================
-    const previousRegionId = currentState.current_work_region_id;
-    const regionChanged = previousRegionId !== region_id;
-
-    console.log(`📊 Region comparison: ${previousRegionId} → ${region_id} (changed: ${regionChanged})`);
-
-    // إذا تغيرت المنطقة، نفحص الصلاحيات
-    if (regionChanged) {
-      const permission = await checkDriverRegionPermission(
-        driverId, 
-        driver.home_region_id, 
-        region_id, 
-        governorate_id,
-        driver.governorate_id,
-        driver.level
-      );
-
-      if (!permission.allowed) {
-        // السائق دخل منطقة غير مسموح له بالعمل فيها
-        console.warn(`⚠️ Driver ${driverId} entered unauthorized region ${region_name}`);
-        
-        // إيقاف البحث تلقائياً
-        await dynamodb.send(new UpdateCommand({
-          TableName: DRIVER_LIVE_STATE_TABLE,
-          Key: { driverId },
-          UpdateExpression: `
-            SET isSearching = :false,
-                #status = :offline,
-                lat = :lat,
-                lng = :lng,
-                locationUpdatedAt = :now,
-                searchStoppedAt = :now,
-                lastUpdated = :now,
-                stopReason = :reason
-          `,
-          ExpressionAttributeNames: {
-            '#status': 'status'
-          },
-          ExpressionAttributeValues: {
-            ':false': false,
-            ':offline': 'offline',
-            ':lat': lat,
-            ':lng': lng,
-            ':now': new Date().toISOString(),
-            ':reason': `دخول منطقة غير مصرح بها: ${region_name}`
-          }
-        }));
-
-        return {
-          statusCode: 403,
-          headers,
-          body: JSON.stringify({ 
-            success: false, 
-            searching_stopped: true,
-            message: `لا يمكنك العمل في ${region_name}. ${permission.suggestion}`,
-            data: {
-              unauthorized_region: region_name,
-              current_level: driver.level || 'Bronze'
-            }
-          })
-        };
-      }
-    }
-
-    // ============================================
-    // الخطوة 5: تحديث WizzDriverLiveState
-    // ============================================
-    const now = new Date().toISOString();
-
-    // 🌊 Wave System: إذا تغيرت المنطقة، نعيد حساب allowed_region_ids
-    if (regionChanged) {
-      console.log('🌊 Wave System: Region changed, recalculating allowed_region_ids...');
-      
-      const allowedRegions = await calculateAllowedRegions(region_id);
-
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: `
-          SET lat = :lat,
-              lng = :lng,
-              current_work_region_id = :regionId,
-              parent_district_id = :districtId,
-              governorate_id = :governorateId,
-              region_mode = :regionMode,
-              allowed_region_ids = :allowedAll,
-              allowed_region_ids_priority0 = :allowedP0,
-              allowed_region_ids_priority1 = :allowedP1,
-              locationUpdatedAt = :now,
-              lastUpdated = :now
-        `,
-        ExpressionAttributeValues: {
-          ':lat': lat,
-          ':lng': lng,
-          ':regionId': region_id,
-          ':districtId': district_id,
-          ':governorateId': governorate_id,
-          ':regionMode': region_id === driver.home_region_id ? 'home' : 'custom',
-          ':allowedAll': allowedRegions.all,
-          ':allowedP0': allowedRegions.priority0,
-          ':allowedP1': allowedRegions.priority1,
-          ':now': now
-        }
-      }));
-
-      console.log(`✅ Driver ${driverId} location & allowed_region_ids updated for ${region_name}`);
-    } else {
-      // 🌊 Wave System: المنطقة لم تتغير، فقط نحدث lat/lng (98% من الحالات)
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: `
-          SET lat = :lat,
-              lng = :lng,
-              current_work_region_id = :regionId,
-              parent_district_id = :districtId,
-              governorate_id = :governorateId,
-              region_mode = :regionMode,
-              locationUpdatedAt = :now,
-              lastUpdated = :now
-        `,
-        ExpressionAttributeValues: {
-          ':lat': lat,
-          ':lng': lng,
-          ':regionId': region_id,
-          ':districtId': district_id,
-          ':governorateId': governorate_id,
-          ':regionMode': region_id === driver.home_region_id ? 'home' : 'custom',
-          ':now': now
-        }
-      }));
-
-      console.log(`✅ Driver ${driverId} location updated (same region: ${region_name})`);
-    }
-
-    // ============================================
-    // الخطوة 6: الرد للتطبيق
-    // ============================================
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        success: true,
-        location_updated: true,
-        region_changed: regionChanged,
-        message: regionChanged 
-          ? `انتقلت إلى منطقة: ${region_name}` 
-          : 'تم تحديث الموقع',
-        data: {
-          current_work_region: {
-            id: region_id,
-            name: region_name,
-            district_name: district_name,
-            governorate_name: governorate_name
-          },
-          previous_region_id: previousRegionId,
-          region_mode: region_id === driver.home_region_id ? 'home' : 'custom'
-        }
-      })
-    };
-
-  } catch (error) {
-    console.error('❌ Error in update-location:', error);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ 
-        success: false, 
-        message: 'حدث خطأ في تحديث الموقع',
-        error: error.message 
-      })
-    };
+   }
   }
+  const transaction=[...(!busy?[vehicles.fence(DRIVERS_TABLE,{driverId},driver),...(scope?.allowed?scope.guards:[])]:[]),
+   {Update:{...guard,UpdateExpression:'SET '+sets.join(','),ExpressionAttributeNames:names,ExpressionAttributeValues:values}}];
+  await dynamodb.send(new TransactWriteCommand({TransactItems:transaction}));
+  return {statusCode:stopped?403:200,headers,body:JSON.stringify({success:!stopped,location_updated:true,region_changed:!busy&&live.current_work_region_id!==region?.region_id,searching_stopped:stopped,
+   ...(stopped?{code:scope.code}:{}),message:busy?'تم تحديث موقع الطلب الجاري':stopped?'أُوقف استقبال الطلبات الجديدة لأن الموقع خارج نطاق العمل المسموح أو المنطقة غير متاحة':'تم تحديث الموقع',
+   data:{current_work_region:region?{id:region.region_id,name:region.region_name}:null}})};
+ } catch(error){
+  const conflict=['TransactionCanceledException','ConditionalCheckFailedException'].includes(error.name);
+  return {statusCode:conflict?409:503,headers,body:JSON.stringify({success:false,message:conflict?'تغيرت حالة السائق أثناء تحديث الموقع. ستُعاد المحاولة.':'تعذر التحقق من نطاق العمل الآن. حاول مجددًا.'})};
+ }
 }
 
 /**
  * 🗺️ تحديد المنطقة من الإحداثيات باستخدام H3 Geospatial Index
  */
 async function determineRegionFromCoordinates(lat, lng, driver) {
-  if (!lat || !lng) {
-    console.error('❌ Missing coordinates');
-    return null;
-  }
-  
-  try {
-    const latitude = parseFloat(lat);
-    const longitude = parseFloat(lng);
-    
-    console.log(`📍 Finding region for coordinates: (${latitude}, ${longitude})`);
-    console.log(`📊 Using tables: RegionIndex=${REGION_INDEX_TABLE}, Regions=${REGIONS_TABLE}`);
-    
-    // توليد H3 cell عند الدقة 9 (نفس دقة تطبيق المستخدم)
-    const h3Cell = h3.latLngToCell(latitude, longitude, H3_RESOLUTION);
-    console.log(`🔷 Generated H3 cell: ${h3Cell} (resolution ${H3_RESOLUTION})`);
-    console.log(`🔷 H3 cell details: lat=${latitude}, lng=${longitude}, resolution=${H3_RESOLUTION}`);
-    
-    // ✅ محاولة مطابقة دقيقة - البحث عن جميع المطابقات واختيار Level 3 أولاً
-    console.log(`🔍 Searching in ${REGION_INDEX_TABLE} for cell: ${h3Cell}`);
-    
-    // Query بدلاً من Get للحصول على جميع المطابقات
-    const allMatches = await dynamodb.send(new QueryCommand({
-      TableName: REGION_INDEX_TABLE,
-      KeyConditionExpression: 'index_cell_id = :cellId',
-      ExpressionAttributeValues: {
-        ':cellId': h3Cell
-      }
-    }));
-    
-    if (allMatches.Items && allMatches.Items.length > 0) {
-      console.log(`✅ Found ${allMatches.Items.length} matches for H3 cell ${h3Cell}`);
-      
-      // ⭐ ترتيب حسب Level: نفضل Level 3 (child) على Level 2 (parent)
-      const sortedMatches = allMatches.Items.sort((a, b) => {
-        const levelA = parseInt(a.level) || 0;
-        const levelB = parseInt(b.level) || 0;
-        return levelB - levelA; // Level 3 أولاً، ثم 2، ثم 1
-      });
-      
-      const bestMatch = sortedMatches[0];
-      console.log(`🎯 BEST MATCH SELECTED!`);
-      console.log(`   Region ID: ${bestMatch.regionId}`);
-      console.log(`   Region Name: ${bestMatch.region_name}`);
-      console.log(`   Level: ${bestMatch.level} ⭐ (highest level from ${allMatches.Items.length} matches)`);
-      console.log(`   Center: (${bestMatch.center_lat}, ${bestMatch.center_lng})`);
-      
-      if (allMatches.Items.length > 1) {
-        console.log(`   ℹ️ Other matches found:`);
-        sortedMatches.slice(1).forEach((item, index) => {
-          console.log(`      [${index + 1}] ${item.region_name} (Level ${item.level}) - IGNORED`);
-        });
-      }
-      
-      // جلب معلومات التسلسل الهرمي الكاملة
-      const hierarchy = await getRegionFullHierarchy(bestMatch.regionId);
-      
-      if (hierarchy) {
-        console.log(`✅ Hierarchy retrieved successfully`);
-        console.log(`   Region: ${hierarchy.region_name} (${hierarchy.region_id})`);
-        console.log(`   District: ${hierarchy.district_name} (${hierarchy.district_id})`);
-        console.log(`   Governorate: ${hierarchy.governorate_name} (${hierarchy.governorate_id})`);
-        return hierarchy;
-      } else {
-        console.log(`⚠️ Failed to get hierarchy for region ${bestMatch.regionId}`);
-      }
-    } else {
-      console.log(`❌ NO EXACT MATCH - cell ${h3Cell} not found in RegionIndex`);
-    }
-    
-    // Fallback: البحث في parent cells (دقة أقل)
-    console.log('⚠️ No exact match, trying parent cells (lower resolution)...');
-    for (let resolution = H3_RESOLUTION - 1; resolution >= 6; resolution--) {
-      const parentCell = h3.cellToParent(h3Cell, resolution);
-      console.log(`   🔍 Trying resolution ${resolution}: cell=${parentCell}`);
-      
-      const parentMatch = await dynamodb.send(new GetCommand({
-        TableName: REGION_INDEX_TABLE,
-        Key: { index_cell_id: parentCell }
-      }));
-      
-      if (parentMatch.Item) {
-        console.log(`✅ PARENT MATCH FOUND at resolution ${resolution}!`);
-        console.log(`   Region ID: ${parentMatch.Item.regionId}`);
-        console.log(`   Region Name: ${parentMatch.Item.region_name}`);
-        console.log(`   Level: ${parentMatch.Item.level}`);
-        
-        // جلب معلومات التسلسل الهرمي الكاملة
-        const hierarchy = await getRegionFullHierarchy(parentMatch.Item.regionId);
-        
-        if (hierarchy) {
-          console.log(`✅ Hierarchy from parent cell:`);
-          console.log(`   Region: ${hierarchy.region_name} (${hierarchy.region_id})`);
-          console.log(`   District: ${hierarchy.district_name} (${hierarchy.district_id})`);
-          console.log(`   Governorate: ${hierarchy.governorate_name} (${hierarchy.governorate_id})`);
-          return hierarchy;
-        }
-      } else {
-        console.log(`   ❌ No match at resolution ${resolution}`);
-      }
-    }
-    
-    console.warn(`⚠️⚠️⚠️ NO H3 MATCH FOUND - trying FALLBACK: nearest region by distance...`);
-    
-    // Fallback: البحث عن أقرب منطقة بالمسافة
-    const nearestRegion = await findNearestRegionByDistance(latitude, longitude);
-    if (nearestRegion) {
-      console.log(`✅ FALLBACK SUCCESS: Using nearest region`);
-      return nearestRegion;
-    }
-    
-    console.warn(`⚠️ No region found for coordinates (${latitude}, ${longitude})`);
-    return null;
-    
-  } catch (error) {
-    console.error('❌ Error in determineRegionFromCoordinates:', error);
-    return null;
-  }
+ if(typeof lat!=='number'||!Number.isFinite(lat)||typeof lng!=='number'||!Number.isFinite(lng))return null;
+ const locate=require('./driver-region-locator-311').createDriverRegionLocator311({db:dynamodb,GetCommand,QueryCommand,
+  tables:{regions:process.env.REGIONS_BASE_TABLE||'WizzCentral_Regions',derived:REGIONS_TABLE,index:REGION_INDEX_TABLE}});
+ const match=await locate({latitude:lat,longitude:lng});
+ if(!match)return null;
+ const hierarchy=await getRegionFullHierarchy(match.regionId);
+ if(!hierarchy||hierarchy.region_level!==3)return null;
+ return {...hierarchy,is_active:true};
 }
 
 /**
@@ -2906,118 +2619,10 @@ async function getRegionHierarchy(districtId) {
 /**
  * 🔐 فحص صلاحية السائق للعمل في المنطقة
  */
-async function checkDriverRegionPermission(driverId, homeRegionId, homeRegionLevel, targetRegionId, targetRegionLevel, targetGovernorateId, homeGovernorateId, driverLevel) {
-  console.log(`🔐 فحص صلاحيات السائق ${driverId}:`);
-  console.log(`   homeRegionId: ${homeRegionId} (Level ${homeRegionLevel})`);
-  console.log(`   targetRegionId: ${targetRegionId} (Level ${targetRegionLevel})`);
-  console.log(`   homeGovernorateId: ${homeGovernorateId}`);
-  console.log(`   targetGovernorateId: ${targetGovernorateId}`);
-  console.log(`   driverLevel: ${driverLevel || 'Bronze (default)'}`);
-  
-  // 1. نفس المنطقة الأساسية → مسموح دائماً
-  if (homeRegionId === targetRegionId) {
-    console.log(`✅ نفس المنطقة الأصلية - مسموح`);
-    return { allowed: true };
-  }
-
-  // ============================================
-  // 🎯 المنطق الجديد: حسب Level
-  // ============================================
-
-  // 2. إذا كانت home_region هي Level 2 (بدون أطفال Level 3)
-  if (homeRegionLevel === 2) {
-    console.log(`⚠️ home_region هي Level 2 - نسمح فقط بنفس المنطقة`);
-    console.log(`❌ غير مسموح - السائق في Level 2 يعمل فقط في منطقته`);
-    return { 
-      allowed: false, 
-      suggestion: 'يمكنك العمل فقط في منطقتك الحالية' 
-    };
-  }
-
-  // 3. إذا كانت home_region هي Level 3 → نتحقق من الجيران Priority 0/1 فقط
-  if (homeRegionLevel === 3) {
-    console.log(`✅ home_region هي Level 3 - نفحص الجيران Priority 0/1 فقط`);
-    
-    try {
-      console.log(`🔍 فحص جدول RegionNeighbors لـ ${homeRegionId}...`);
-      
-      // Query RegionNeighbors للحصول على الجيران
-      const result = await dynamodb.send(new QueryCommand({
-        TableName: REGION_NEIGHBORS_TABLE,
-        IndexName: 'source-region-index',
-        KeyConditionExpression: 'source_region_id = :regionId',
-        ExpressionAttributeValues: {
-          ':regionId': homeRegionId
-        }
-      }));
-
-      const neighbors = result.Items || [];
-      console.log(`   ✅ Found ${neighbors.length} neighbor entries for home_region`);
-
-      // ❌ لا نفحص parent - نفحص فقط Priority 0 & 1
-      const priority0and1 = neighbors.filter(n => n.expansion_priority === 0 || n.expansion_priority === 1);
-      const allowedNeighborIds = priority0and1.map(n => n.target_region_id);
-      
-      console.log(`   📊 المناطق المجاورة المسموحة (Priority 0 & 1 فقط):`);
-      console.log(`      - Priority 0: ${neighbors.filter(n => n.expansion_priority === 0).length} مناطق`);
-      console.log(`      - Priority 1: ${neighbors.filter(n => n.expansion_priority === 1).length} مناطق`);
-      console.log(`      - Priority 2 (مستبعدة): ${neighbors.filter(n => n.expansion_priority === 2).length} مناطق`);
-      console.log(`      - Total allowed neighbors: ${allowedNeighborIds.length} مناطق`);
-      
-      if (allowedNeighborIds.includes(targetRegionId)) {
-        console.log(`✅ المنطقة المستهدفة ضمن المناطق المجاورة (Priority 0 أو 1) - مسموح`);
-        return { allowed: true };
-      }
-      
-      console.log(`⚠️ المنطقة المستهدفة ليست ضمن:`);
-      console.log(`   - home_region (${homeRegionId})`);
-      console.log(`   - neighbors Priority 0/1 (${allowedNeighborIds.length} مناطق)`);
-      
-    } catch (error) {
-      console.error('❌ خطأ في فحص RegionNeighbors:', error);
-      // في حالة الخطأ، نكمل بفحص المحافظات
-    }
-  }
-
-  // 4. فحص مستوى السائق
-  const level = driverLevel || 'Bronze';
-
-  // Gold: أي محافظة
-  if (level === 'Gold') {
-    console.log(`✅ مستوى Gold - مسموح في كل المحافظات`);
-    return { allowed: true };
-  }
-
-  // Silver: نفس المحافظة
-  if (level === 'Silver' && homeGovernorateId === targetGovernorateId) {
-    console.log(`✅ مستوى Silver ونفس المحافظة - مسموح`);
-    return { allowed: true };
-  }
-
-  // Bronze: نفس المحافظة فقط (لأن Bronze يعمل في نفس المحافظة)
-  if (level === 'Bronze' && homeGovernorateId === targetGovernorateId) {
-    console.log(`✅ مستوى Bronze ونفس المحافظة - مسموح`);
-    return { allowed: true };
-  }
-
-  // غير مسموح
-  console.log(`❌ غير مسموح - مستوى ${level} ومحافظة مختلفة`);
-  
-  // رسائل مخصصة حسب السبب
-  let suggestion = 'المنطقة المطلوبة خارج نطاق عملك الحالي';
-  
-  if (homeRegionLevel === 3) {
-    // Level 3: يمكنه العمل في الجيران Priority 0/1
-    suggestion = 'يمكنك العمل فقط في منطقتك والمناطق المجاورة القريبة';
-  } else if (homeRegionLevel === 2) {
-    // Level 2: فقط في نفس المنطقة
-    suggestion = 'يمكنك العمل فقط في منطقتك الحالية';
-  }
-  
-  return { 
-    allowed: false, 
-    suggestion: suggestion
-  };
+async function checkDriverRegionPermission(driver, targetRegionId, point) {
+ const access=require('./driver-work-region-311').create({db:dynamodb,GetCommand});
+ const scope=await access.check(driver,targetRegionId,targetRegionId,1,point);
+ return {...scope,suggestion:'يمكنك العمل في منطقة عملك المعتمدة والمناطق المجاورة المسموحة والمفتوحة فقط'};
 }
 
 /**
@@ -3133,11 +2738,13 @@ async function getMapData(driverId, queryParams, headers) {
     console.log(`   🏪 Found ${stores.length} stores`);
 
     // 6️⃣ Calculate hot scores (simple version - count waiting orders)
-    await enrichStoresWithHotScores(stores);
+    // Live pickup activity is fetched separately through authenticated map-activity.
+    for (const store of stores) {store.is_hot=false;store.hot_score=0;store.waiting_orders_count=null;}
 
     // 7️⃣ Build response
     const response = {
       success: true,
+      map_tools: await require('./driver-map-settings-329').readPolicy(dynamodb,GetCommand).catch(()=>null),
       timestamp: new Date().toISOString(),
       processing_time_ms: Date.now() - startTime,
       current_work_region: {
@@ -3982,7 +3589,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders, accessToken) {
     }
     
     const approval = await getDriverProfileItem(finalDriverId);
-    if (!isDriverApproved(approval)) {
+    if (!isDriverApproved(approval) || (require('./driver-vehicles-308').enforce(approval) && !require('./driver-vehicles-308').eligibility(approval).eligible)) {
       return { statusCode: 403, headers: corsHeaders, body: JSON.stringify({
         success: false, code: 'DRIVER_NOT_VERIFIED',
         message: 'حسابك بانتظار تحقق الإدارة. لا يمكنك قبول الطلبات قبل الموافقة.'
@@ -4482,6 +4089,7 @@ async function rejectWaveOffer(driverId, body, corsHeaders, accessToken) {
  */
 async function getDriverMetrics(driverId, corsHeaders) {
   try {
+    if(process.env.DRIVER_PERFORMANCE_SNAPSHOT_READS_ENABLED==='true'){const p=await require('./driver-performance-snapshot').readSnapshot({db:dynamodb,GetCommand,driverId,includeDetails:false});return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({...p,totalAccepted:p.acceptance?.accepted??0,totalRejected:p.acceptance?.declined??0,totalExpired:p.acceptance?.expiredDelivered??0,responseRate:p.acceptance?.sampleSize?(p.acceptance.accepted+p.acceptance.declined)/p.acceptance.sampleSize:null,totalOffersReceived:p.acceptance?.sampleSize??0,consecutiveRejections:p.rejections?.consecutive??null,rating:p.customerRating,totalTrips:p.completion?p.completion.completed+p.completion.returned:null})};}
     console.log(`📊 Fetching metrics for driver: ${driverId}`);
     
     // جلب metrics من WizzDriverPerformanceMetrics

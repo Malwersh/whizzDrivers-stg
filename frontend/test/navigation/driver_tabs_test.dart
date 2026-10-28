@@ -3,7 +3,7 @@ import 'package:wizz_driver/providers/riverpod/tab_provider.dart';
 
 void main() {
   test(
-      'five visible tabs exclude earnings and map positions to original route IDs',
+      'five content destinations retain stable route IDs independently of bottom bar',
       () {
     expect(DriverTabs.visible, [0, 1, 2, 4, 5]);
     for (var i = 0; i < DriverTabs.visible.length; i++) {

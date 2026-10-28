@@ -1,3 +1,13 @@
+import 'widgets/store_marker_halo.dart';
+import 'widgets/store_photo_marker.dart';
+import 'widgets/map_tools.dart';
+import 'widgets/map_demand_sheet.dart';
+import '../../services/map_activity_service.dart';
+import '../../providers/riverpod/tab_provider.dart';
+import '../more/screens/live_chat_screen.dart';
+import 'widgets/go_online_button.dart';
+import '../../services/offer_performance_prefetch.dart';
+import 'widgets/decline_acceptance_impact.dart';
 import '../../widgets/location_permission_notice.dart';
 import '../demand/demand_card.dart';
 import '../../services/driver_location_mode.dart';
@@ -24,7 +34,6 @@ import 'widgets/order_offer_card.dart';
 import 'widgets/order_details_bottom_sheet.dart';
 import '../../services/websocket_service.dart';
 import '../../services/cognito_token_service.dart';
-import '../../services/global_app_state_manager.dart';
 import '../../models/map_data.dart';
 import '../../services/map_data_service.dart';
 import '../../services/business_status_cache.dart';
@@ -130,6 +139,9 @@ class SparkHomeSimpleArabic extends ConsumerStatefulWidget {
 
 class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     with WidgetsBindingObserver {
+  final _performancePreview = OfferPerformancePrefetch(
+      load: DriverSearchApiService.getDriverPerformance);
+  String? _preparingRejectOfferId;
   bool _isSearchingForOffers = false;
   bool _isStartingOnline = false;
   double _onlineSheetOpacity = 1;
@@ -169,6 +181,17 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       DraggableScrollableController();
 
   // Google Maps
+  String _storeSearchQuery = '';
+  bool _heatEnabled = false,
+      _activityLoading = false,
+      _activityIsTestData = false;
+  String? _activityError;
+  DateTime? _activityExpiresAt;
+  Map<String, int> _readyPickups = {};
+  Timer? _mapActivityTimer;
+  Timer? _pickupHaloExpiryTimer;
+  int _markerBuildVersion = 0;
+  final _storePhotoMarkers = StorePhotoMarkers();
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
   final ValueNotifier<double> _locationWavePhase = ValueNotifier(0);
@@ -249,7 +272,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           radius: (12 + breath * 2) * metersPerPixel,
           strokeWidth: 0,
           strokeColor: Colors.transparent,
-          fillColor: AppColors.primary.withValues(alpha: .1 + breath * .04),
+          fillColor: AppColors.secondary.withValues(alpha: .1 + breath * .04),
           zIndex: 1,
           consumeTapEvents: false),
       Circle(
@@ -257,8 +280,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
           center: _driverMapPoint,
           radius: (12 + wave * 24) * metersPerPixel,
           strokeWidth: 1,
-          strokeColor: AppColors.primary.withValues(alpha: .28 * fade),
-          fillColor: AppColors.primary.withValues(alpha: .025 * fade),
+          strokeColor: AppColors.secondary.withValues(alpha: .28 * fade),
+          fillColor: AppColors.secondary.withValues(alpha: .025 * fade),
           zIndex: 2,
           consumeTapEvents: false),
     };
@@ -291,9 +314,12 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   @override
   void initState() {
     super.initState();
+    DriverSearchApiService.confirmedStopEvents
+        .addListener(_onConfirmedSearchStop);
     _offerAuthSubscription = Amplify.Hub.listen(HubChannel.Auth, (event) {
       if (event.eventName == 'SIGNED_OUT' || event.eventName == 'SIGNED_IN') {
         _offerAuthEpoch++;
+        _performancePreview.clear();
         _offerClosureScope.bind(null);
         if (mounted)
           setState(() {
@@ -396,9 +422,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     }
 
     print('📱 App lifecycle changed: $state');
-
-    // Use Global App State Manager instead of local handling
-    GlobalAppStateManager().notifyAppStateChange(state);
 
     // Keep local handling for specific home screen needs
     print('🔔 didChangeAppLifecycleState called: $state');
@@ -671,7 +694,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       final existing = _currentWaveOffers.any((o) => o.offerId == offerId);
       if (existing) {
-        print('ℹ️ Push-tap wave offer already in list: $offerId');
+        await _handleWaveOffer(
+            _currentWaveOffers.firstWhere((o) => o.offerId == offerId),
+            fromSocket: false);
         return;
       }
 
@@ -682,7 +707,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         if (!await _offerStillVisible(offer) ||
             !mounted ||
             _currentWaveOffers.any((o) => o.offerId == offer.offerId)) return;
-        setState(() => _currentWaveOffers.add(offer));
+        await _handleWaveOffer(offer, fromSocket: false);
         await PushNotificationsService.clearStashedFinancialOffer(data);
         return;
       }
@@ -803,9 +828,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         });
       }
       if (!await _offerStillVisible(placeholder) || !mounted) return;
-      setState(() {
-        _currentWaveOffers.add(placeholder);
-      });
+      await _handleWaveOffer(placeholder, fromSocket: false);
       print('✅ Added push-tap offer with full details: $offerId');
       print(
           '📊 Details: deliveryFee=$deliveryFee IQD, distance=${distance.toStringAsFixed(1)}km, customer=$customerName');
@@ -833,7 +856,11 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     _offerExpiryCleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
 
-      if (_currentWaveOffers.isNotEmpty) unawaited(_refreshOfferClosures());
+      if (_currentWaveOffers.isNotEmpty) {
+        unawaited(_refreshOfferClosures());
+        final owner = _offerClosureScope.owner;
+        if (owner != null) unawaited(_performancePreview.prefetch(owner));
+      }
       final nowUtc = DateTime.now().toUtc();
       int removedCount = 0;
 
@@ -973,6 +1000,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     }
   }
 
+  void _onConfirmedSearchStop() {
+    if (mounted) _clearSearchState();
+  }
+
   // مسح حالة البحث من SharedPreferences
   void _clearSearchState() async {
     try {
@@ -980,6 +1011,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       await prefs.remove('isSearchingForOffers');
       await prefs.remove('searchEndTime');
 
+      if (!mounted) return;
       setState(() {
         _isSearchingForOffers = false;
         _searchEndTime = null;
@@ -1565,7 +1597,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   String _formatTime(DateTime time) {
     final hour = time.hour;
     final minute = time.minute.toString().padLeft(2, '0');
-    final period = hour >= 12 ? 'مساءً' : 'صباحاً';
+    final period = hour >= 12 ? 'م' : 'ص';
     final hour12 = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
 
     // إضافة تفاصيل إضافية للوقت
@@ -1579,6 +1611,264 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     return timeString;
   }
 
+  Future<void> _searchMapStores() async {
+    final picked = await showModalBottomSheet<NearbyStore>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        backgroundColor: Colors.white,
+        builder: (_) => MapStoreSearchSheet(
+            stores: _mapData?.nearbyStores ?? [],
+            initialQuery: _storeSearchQuery));
+    if (!mounted || picked == null) return;
+    setState(() => _storeSearchQuery = picked.name);
+    _updateMapMarkers();
+    await _mapController?.animateCamera(
+        CameraUpdate.newLatLngZoom(LatLng(picked.lat, picked.lng), 17));
+  }
+
+  Future<void> _centerDriverMap() async {
+    if (_displayDriverLocation == null) {
+      _initializeLocation();
+    }
+    if (!mounted || _displayDriverLocation == null) return;
+    await _mapController
+        ?.animateCamera(CameraUpdate.newLatLngZoom(_driverMapPoint, 16));
+  }
+
+  int get _busyReadyMinimum =>
+      (_mapData?.mapTools?['busyMinimumReady'] as int?) ?? 3;
+  int get _activityRefreshSeconds =>
+      (_mapData?.mapTools?['refreshSeconds'] as int?) ?? 40;
+
+  int _pickupMarkerLevel(NearbyStore store) {
+    if (!_heatEnabled ||
+        _activityExpiresAt == null ||
+        !_activityExpiresAt!.isAfter(DateTime.now())) return 0;
+    final count = _readyPickups[store.storeId] ?? 0;
+    return count >= _busyReadyMinimum
+        ? 2
+        : count > 0
+            ? 1
+            : 0;
+  }
+
+  Future<void> _refreshPickupActivity() async {
+    if (!_heatEnabled ||
+        _activityLoading ||
+        !mounted ||
+        ref.read(selectedTabProvider) != DriverTabs.home ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed)
+      return;
+    setState(() {
+      _activityLoading = true;
+      _activityError = null;
+    });
+    try {
+      final d = await MapActivityService.load(
+          (_mapData?.nearbyStores ?? []).map((s) => s.storeId).toList());
+      if (!mounted || !_heatEnabled) return;
+      final items = List<Map>.from(d['items'] ?? []);
+      setState(() {
+        if (d['enabled'] != true) {
+          _heatEnabled = false;
+          _mapActivityTimer?.cancel();
+          _activityError = 'أوقفت الإدارة عرض النشاط حاليًا.';
+        }
+        _activityIsTestData = d['isTestData'] == true;
+        _readyPickups = {
+          for (final item in items)
+            if (item['state'] == 'CURRENT')
+              item['storeId'] as String: item['readyCount'] as int
+        };
+        _activityExpiresAt = DateTime.tryParse(d['expiresAt'] ?? '');
+        _activityError = d['enabled'] != true
+            ? 'أوقفت الإدارة عرض النشاط حاليًا.'
+            : items.any((i) => i['state'] == 'UPDATING')
+                ? 'بعض المتاجر قيد التحديث.'
+                : null;
+      });
+    } catch (_) {
+      if (mounted)
+        setState(() {
+          _readyPickups = {};
+          _activityExpiresAt = null;
+          _activityError = 'تعذر تحديث نشاط الاستلام. أعد المحاولة.';
+        });
+    } finally {
+      if (mounted) {
+        setState(() => _activityLoading = false);
+        _updateMapMarkers();
+        _pickupHaloExpiryTimer?.cancel();
+        final remaining = _activityExpiresAt?.difference(DateTime.now());
+        if (remaining != null && remaining > Duration.zero) {
+          _pickupHaloExpiryTimer = Timer(remaining, () {
+            if (mounted) _updateMapMarkers();
+          });
+        }
+      }
+    }
+  }
+
+  void _showPickupActivity() {
+    final enabledByAdmin = _mapData?.mapTools?['heatEnabled'] == true;
+    showModalBottomSheet(
+        context: context,
+        showDragHandle: true,
+        useSafeArea: true,
+        backgroundColor: Colors.white,
+        isScrollControlled: true,
+        builder: (sheetContext) => StatefulBuilder(
+            builder: (c, update) => Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+                child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(children: [
+                        const Expanded(
+                            child: Text('نشاط الاستلام الحالي',
+                                style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.secondary))),
+                        IconButton(
+                            tooltip: 'إغلاق',
+                            onPressed: () => Navigator.pop(c),
+                            icon: const Icon(Icons.close,
+                                color: AppColors.secondary))
+                      ]),
+                      SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('إظهار النشاط على الخريطة'),
+                          value: _heatEnabled,
+                          activeTrackColor: AppColors.secondary,
+                          onChanged: !enabledByAdmin
+                              ? null
+                              : (enabled) async {
+                                  setState(() {
+                                    _heatEnabled = enabled;
+                                    _readyPickups = {};
+                                    _activityExpiresAt = null;
+                                  });
+                                  update(() {});
+                                  _updateMapMarkers();
+                                  _pickupHaloExpiryTimer?.cancel();
+                                  _mapActivityTimer?.cancel();
+                                  if (enabled) {
+                                    final future = _refreshPickupActivity();
+                                    update(() {});
+                                    await future;
+                                    if (sheetContext.mounted) update(() {});
+                                    if (_heatEnabled)
+                                      _mapActivityTimer = Timer.periodic(
+                                          Duration(
+                                              seconds: _activityRefreshSeconds),
+                                          (_) => _refreshPickupActivity());
+                                  }
+                                }),
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.circle,
+                              color: Color(0xFFE45252)),
+                          title: const Text('نشاط أعلى'),
+                          subtitle: Text(
+                              '$_busyReadyMinimum طلبات جاهزة أو أكثر لم تُسند إلى سائق.')),
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.circle,
+                              color: AppColors.primary),
+                          title: const Text('طلبات جاهزة'),
+                          subtitle: Text(
+                              'من طلب واحد إلى ${_busyReadyMinimum - 1} طلبات جاهزة ولم تُسند إلى سائق.')),
+                      const ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(Icons.circle_outlined,
+                              color: Color(0xFF8592A8)),
+                          title: Text('دون توهج'),
+                          subtitle: Text(
+                              'لا توجد طلبات جاهزة مؤكدة حاليًا، أو لم يكتمل تحديث البيانات.')),
+                      if (!enabledByAdmin)
+                        const Text(
+                            'نشاط الاستلام غير متاح حاليًا وفق إعدادات الإدارة أو تعذر تحميلها.',
+                            style: TextStyle(color: AppColors.secondary)),
+                      if (_activityLoading)
+                        const LinearProgressIndicator(
+                            color: AppColors.secondary),
+                      if (_activityError != null)
+                        Text(_activityError!,
+                            style: const TextStyle(color: AppColors.secondary)),
+                      const SizedBox(height: 8),
+                      const Text(
+                          'تعكس الخريطة آخر تحديث، وقد تُسند الطلبات أو تُلغى بعده. التوهج لا يضمن وصول عرض ولا يتجاوز شروط الأهلية والموجات.',
+                          style: TextStyle(
+                              fontSize: 13,
+                              height: 1.6,
+                              color: Color(0xFF53627B))),
+                    ]))));
+  }
+
+  void _showMapSupport() {
+    final configuredPhone = _mapData?.customerServicePhone ?? '';
+    final phone = RegExp(r'^\+?[0-9 ()-]{7,24}$').hasMatch(configuredPhone)
+        ? configuredPhone.trim()
+        : '';
+    showModalBottomSheet(
+        context: context,
+        showDragHandle: true,
+        useSafeArea: true,
+        backgroundColor: Colors.white,
+        builder: (c) => Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+            child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    const Expanded(
+                        child: Text('خدمة العملاء والإبلاغ',
+                            style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.secondary))),
+                    IconButton(
+                        tooltip: 'إغلاق',
+                        onPressed: () => Navigator.pop(c),
+                        icon:
+                            const Icon(Icons.close, color: AppColors.secondary))
+                  ]),
+                  ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.phone_outlined,
+                          color: AppColors.secondary),
+                      title: const Text('الاتصال بخدمة العملاء'),
+                      subtitle: Text(phone.isEmpty
+                          ? 'رقم خدمة العملاء لم يُضبط بعد؛ يمكنك مراسلة الدعم.'
+                          : phone),
+                      onTap: phone.isEmpty
+                          ? null
+                          : () async {
+                              final opened = await launchUrl(
+                                  Uri(scheme: 'tel', path: phone));
+                              if (!opened && mounted)
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text('تعذر فتح الاتصال.')));
+                            }),
+                  ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.chat_bubble_outline,
+                          color: AppColors.secondary),
+                      title: const Text('الإبلاغ أو مراسلة الدعم'),
+                      subtitle: const Text('تواصل مباشر مع فريق خدمة العملاء'),
+                      onTap: () {
+                        Navigator.pop(c);
+                        Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const LiveChatScreen()));
+                      }),
+                ])));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1589,6 +1879,61 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
           // Bottom draggable sheet that starts minimized
           _buildDraggableBottomSheet(),
+          Positioned(
+              top: MediaQuery.paddingOf(context).top + 12,
+              right: 16,
+              child: DriverMapButton(
+                  icon: Icons.home_outlined,
+                  label: 'المزيد والحساب',
+                  onPressed: () => ref
+                      .read(selectedTabProvider.notifier)
+                      .state = DriverTabs.more)),
+          Positioned(
+              top: MediaQuery.paddingOf(context).top + 12,
+              left: 16,
+              child: DriverMapButton(
+                  icon: Icons.search,
+                  label: 'بحث المطاعم والمتاجر',
+                  onPressed: _searchMapStores)),
+          if (_heatEnabled &&
+              _activityIsTestData &&
+              _activityExpiresAt?.isAfter(DateTime.now()) == true)
+            Positioned(
+                top: MediaQuery.paddingOf(context).top +
+                    (_storeSearchQuery.isEmpty ? 72 : 120),
+                left: 16,
+                right: 16,
+                child: const Center(
+                    child: DecoratedBox(
+                        decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius:
+                                BorderRadius.all(Radius.circular(16))),
+                        child: Padding(
+                            padding: EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            child:
+                                Row(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(Icons.science_outlined,
+                                  size: 16, color: AppColors.secondary),
+                              SizedBox(width: 6),
+                              Text('نشاط تجريبي مؤقت',
+                                  style: TextStyle(
+                                      color: AppColors.secondary, fontSize: 12))
+                            ]))))),
+          if (_storeSearchQuery.isNotEmpty)
+            Positioned(
+                top: MediaQuery.paddingOf(context).top + 70,
+                left: 16,
+                right: 16,
+                child: Center(
+                    child: InputChip(
+                        label: Text(_storeSearchQuery),
+                        backgroundColor: Colors.white,
+                        onDeleted: () {
+                          setState(() => _storeSearchQuery = '');
+                          _updateMapMarkers();
+                        }))),
         ],
       ),
     );
@@ -1725,12 +2070,13 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   /// 🎨 Create custom circular marker icon
-  /// Creates a yellow circular marker with blue category icon
+  /// Creates a light navy gradient marker with a navy category icon
   Future<BitmapDescriptor> _createStoreMarkerIcon({
     required String category,
     required bool isCoreRegion,
     required int hotScore,
     required bool isOpen,
+    required int activityLevel,
   }) async {
     try {
       // Select icon based on category
@@ -1767,17 +2113,19 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       // Size based on priority
       final double baseSize = isCoreRegion ? 44.0 : 40.0;
       final double iconSize = isCoreRegion ? 20.0 : 18.0;
-      final double canvasSize = hotScore >= 5 ? baseSize + 12 : baseSize + 4;
+      final double canvasSize = baseSize + 4 + (activityLevel > 0 ? 24 : 0);
       final double centerOffset = canvasSize / 2;
 
       // Colors
-      const Color backgroundColor = Color(0xFFFFD700); // Yellow/Gold
-      const Color iconColor = AppColors.secondary; // Blue
+      const Color iconColor = AppColors.secondary; // Navy
       final double opacity = isCoreRegion ? 1.0 : 0.7;
 
       // Start drawing
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
+
+      paintStoreMarkerHalo(canvas, Offset(centerOffset, centerOffset),
+          baseSize / 2, activityLevel);
 
       // 🔥 Draw hot glow effect
       if (hotScore >= 5) {
@@ -1797,9 +2145,21 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         );
       }
 
-      // Draw main yellow circle
+      // Light navy tints behind the darker category icons.
       final circlePaint = Paint()
-        ..color = backgroundColor.withOpacity(opacity)
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color.lerp(Colors.white, AppColors.secondary, 0.12)!
+                .withValues(alpha: opacity),
+            Color.lerp(Colors.white, AppColors.secondary, 0.24)!
+                .withValues(alpha: opacity),
+          ],
+        ).createShader(Rect.fromCircle(
+          center: Offset(centerOffset, centerOffset),
+          radius: baseSize / 2,
+        ))
         ..style = PaintingStyle.fill;
 
       canvas.drawCircle(
@@ -1892,7 +2252,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             ? BitmapDescriptor.hueRed
             : hotScore >= 5
                 ? BitmapDescriptor.hueOrange
-                : BitmapDescriptor.hueYellow,
+                : BitmapDescriptor.hueBlue,
       );
     }
   }
@@ -2092,14 +2452,15 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   void _updateMapMarkers() async {
     if (_mapData == null) return;
 
-    _markers.clear();
+    final generation = ++_markerBuildVersion;
+    final nextMarkers = <Marker>{};
 
     // 📍 إضافة marker لموقع السائق الحالي
     try {
       final driverIcon =
           _driverLocationIcon ?? await _createDriverLocationMarker();
       _driverLocationIcon = driverIcon;
-      _markers.add(
+      nextMarkers.add(
         Marker(
           markerId: const MarkerId('driver_location'),
           position: _driverMapPoint,
@@ -2113,7 +2474,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     }
 
     // Add store markers with design based on expansion_priority
-    for (final store in _mapData!.nearbyStores) {
+    for (final store
+        in matchingMapStores(_mapData!.nearbyStores, _storeSearchQuery)) {
       // 🎨 تحديد اللون حسب الأولوية:
       // - priority 0 (Core): أصفر كامل (hueYellow = 60)
       // - priority 1 (Extended): أصفر فاتح (hueOrange = 30)
@@ -2130,16 +2492,21 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
 
       // Create custom circular marker
-      final icon = await _createStoreMarkerIcon(
-        category: store.category,
-        isCoreRegion: store.expansionPriority == 0,
-        hotScore: store.hotScore,
-        isOpen: store.isOpen,
-      );
+      final photoSize = store.expansionPriority == 0 ? 48.0 : 44.0;
+      final icon = _storePhotoMarkers.cached(store.photoUrl, photoSize,
+              activityLevel: _pickupMarkerLevel(store)) ??
+          await _createStoreMarkerIcon(
+            category: store.category,
+            isCoreRegion: store.expansionPriority == 0,
+            hotScore: 0,
+            isOpen: store.isOpen,
+            activityLevel: _pickupMarkerLevel(store),
+          );
 
-      _markers.add(
+      nextMarkers.add(
         Marker(
           markerId: MarkerId(store.storeId),
+          anchor: const Offset(.5, .5),
           position: LatLng(store.lat, store.lng),
           icon: icon,
           infoWindow: InfoWindow(
@@ -2150,7 +2517,43 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       );
     }
 
-    setState(() {});
+    if (!mounted || generation != _markerBuildVersion) return;
+    setState(() {
+      _markers
+        ..clear()
+        ..addAll(nextMarkers);
+    });
+    unawaited(_loadStoreMarkerPhotos(generation));
+  }
+
+  Future<void> _loadStoreMarkerPhotos(int generation) async {
+    final stores =
+        matchingMapStores(_mapData?.nearbyStores ?? [], _storeSearchQuery);
+    for (var i = 0; i < stores.length; i += 4) {
+      if (!mounted || generation != _markerBuildVersion) return;
+      await Future.wait(stores.skip(i).take(4).map((store) async {
+        final size = store.expansionPriority == 0 ? 48.0 : 44.0;
+        final level = _pickupMarkerLevel(store);
+        if (_storePhotoMarkers.cached(store.photoUrl, size,
+                activityLevel: level) !=
+            null) return;
+        final icon = await _storePhotoMarkers.load(store.photoUrl, size,
+            activityLevel: level);
+        if (!mounted || icon == null || generation != _markerBuildVersion)
+          return;
+        final stillCurrent = (_mapData?.nearbyStores ?? []).any(
+            (s) => s.storeId == store.storeId && s.photoUrl == store.photoUrl);
+        if (!stillCurrent) return;
+        final found =
+            _markers.where((m) => m.markerId == MarkerId(store.storeId));
+        if (found.isEmpty) return;
+        final marker = found.first;
+        setState(() {
+          _markers.remove(marker);
+          _markers.add(marker.copyWith(iconParam: icon));
+        });
+      }));
+    }
   }
 
   /// Show store details in bottom sheet when tapped
@@ -2689,70 +3092,131 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   Widget _buildDraggableBottomSheet() {
-    return DraggableScrollableSheet(
-      controller: _sheetController,
-      initialChildSize: 0.25, // Start small at bottom like Spark
-      minChildSize: 0.25, // Minimum size to stay visible
-      maxChildSize: 0.85, // Maximum when fully expanded
-      snap: true,
-      snapSizes: const [0.25, 0.5, 0.85],
-      builder: (context, scrollController) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(16),
-              topRight: Radius.circular(16),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black26,
-                blurRadius: 8,
-                offset: Offset(0, -2),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              // Handle bar for dragging
-              Container(
-                margin: const EdgeInsets.only(top: 8, bottom: 8),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
+    return LayoutBuilder(builder: (context, constraints) {
+      return Stack(children: [
+        DraggableScrollableSheet(
+          controller: _sheetController,
+          initialChildSize: 0.25, // Start small at bottom like Spark
+          minChildSize: 0.25, // Minimum size to stay visible
+          maxChildSize: 0.85, // Maximum when fully expanded
+          snap: true,
+          snapSizes: const [0.25, 0.5, 0.85],
+          builder: (context, scrollController) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
                 ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 8,
+                    offset: Offset(0, -2),
+                  ),
+                ],
               ),
-
-              // Sheet content
-              Expanded(
-                child: SingleChildScrollView(
-                  controller: scrollController,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                  child: IgnorePointer(
-                    ignoring: _isStartingOnline,
-                    child: AnimatedOpacity(
-                      opacity: _onlineSheetOpacity,
-                      duration: const Duration(milliseconds: 180),
-                      curve: Curves.easeInOut,
-                      child: _isStartingOnline && !_isSearchingForOffers
-                          ? const Center(
-                              child: Padding(
-                              padding: EdgeInsets.all(24),
-                              child: CircularProgressIndicator(),
-                            ))
-                          : _buildSheetContent(),
+              child: Column(
+                children: [
+                  // Handle bar for dragging
+                  Container(
+                    margin: const EdgeInsets.only(top: 8, bottom: 8),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[300],
+                      borderRadius: BorderRadius.circular(2),
                     ),
                   ),
-                ),
+
+                  // Sheet content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      controller: scrollController,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 8),
+                      child: IgnorePointer(
+                        ignoring: _isStartingOnline,
+                        child: AnimatedOpacity(
+                          opacity: _onlineSheetOpacity,
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeInOut,
+                          child: _isStartingOnline && !_isSearchingForOffers
+                              ? const Center(
+                                  child: Padding(
+                                  padding: EdgeInsets.all(24),
+                                  child: CircularProgressIndicator(),
+                                ))
+                              : _buildSheetContent(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            );
+          },
+        ),
+        AnimatedBuilder(
+            animation: _sheetController,
+            builder: (context, _) {
+              final extent =
+                  _sheetController.isAttached ? _sheetController.size : .25;
+              if (constraints.maxHeight * (1 - extent) < 310)
+                return const SizedBox.shrink();
+              return Positioned(
+                  right: 16,
+                  bottom: constraints.maxHeight * extent + 12,
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    DriverMapButton(
+                        icon: Icons.local_fire_department_outlined,
+                        label: 'نشاط الاستلام الحالي',
+                        selected: _heatEnabled,
+                        onPressed: _showPickupActivity),
+                    const SizedBox(height: 8),
+                    DriverMapButton(
+                        icon: Icons.bar_chart_rounded,
+                        label: 'إحصائيات أوقات الطلب',
+                        onPressed: () => showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            showDragHandle: true,
+                            backgroundColor: Colors.white,
+                            builder: (_) => const MapDemandSheet())),
+                    const SizedBox(height: 8),
+                    DriverMapButton(
+                        icon: Icons.support_agent_outlined,
+                        label: 'الاتصال والإبلاغ للدعم',
+                        onPressed: _showMapSupport),
+                    const SizedBox(height: 8),
+                    DriverMapButton(
+                        icon: Icons.my_location,
+                        label: 'توسيط الخريطة على موقعي',
+                        onPressed: _centerDriverMap),
+                  ]));
+            }),
+        if (!_isSearchingForOffers)
+          AnimatedBuilder(
+            animation: _sheetController,
+            builder: (context, child) {
+              final extent =
+                  _sheetController.isAttached ? _sheetController.size : 0.25;
+              return Positioned(
+                left: 0,
+                right: 0,
+                bottom: math.min(constraints.maxHeight * extent + 12,
+                    math.max(0, constraints.maxHeight - 92)),
+                child: Center(child: child),
+              );
+            },
+            child: GoOnlineButton(
+              busy: _isStartingOnline || _isCheckingWalletBalance,
+              onPressed: _startSearchingForOffers,
+            ),
           ),
-        );
-      },
-    );
+      ]);
+    });
   }
 
   Widget _buildSheetContent() {
@@ -2766,55 +3230,96 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   Widget _buildSearchingContent() {
     return Column(
       children: [
-        // "Get offers until" section like Spark - clickable
-        GestureDetector(
-          onTap: () =>
-              _showSparkNowTimeSelection(), // إظهار قائمة الأوقات مع خيار الإيقاف
-          child: Container(
-            margin: const EdgeInsets.only(bottom: 20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'الحصول على طلبات حتى',
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.grey[600],
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Row(
+            textDirection: TextDirection.rtl,
+            children: [
+              const Row(
+                textDirection: TextDirection.rtl,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      shape: BoxShape.circle,
+                    ),
+                    child: SizedBox.square(dimension: 8),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: AppColors.secondary.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                        color: AppColors.secondary.withOpacity(0.25)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _formatTime(_searchEndTime ??
-                            DateTime.now().add(const Duration(hours: 1))),
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.secondary,
+                  SizedBox(width: 6),
+                  Text('متصل',
+                      style: TextStyle(
+                        color: AppColors.secondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      )),
+                ],
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 270),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: _showSparkNowTimeSelection,
+                        borderRadius: BorderRadius.circular(18),
+                        child: ConstrainedBox(
+                          // Keep a comfortable touch target around the slim pill.
+                          constraints: const BoxConstraints(minHeight: 48),
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 7,
+                              ),
+                              decoration: BoxDecoration(
+                                color:
+                                    AppColors.secondary.withValues(alpha: .045),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(
+                                  color: AppColors.secondary
+                                      .withValues(alpha: .14),
+                                ),
+                              ),
+                              child: Row(
+                                textDirection: TextDirection.rtl,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Flexible(
+                                    child: Text(
+                                      'الحصول على طلبات حتى',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFF53627B)),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    _formatTime(_searchEndTime ??
+                                        DateTime.now()
+                                            .add(const Duration(hours: 1))),
+                                    style: const TextStyle(
+                                        fontSize: 13,
+                                        color: AppColors.secondary,
+                                        fontWeight: FontWeight.w500),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  const Icon(Icons.edit_outlined,
+                                      size: 13, color: AppColors.secondary),
+                                ],
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 4),
-                      const Icon(
-                        Icons.edit,
-                        size: 16,
-                        color: AppColors.secondary,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
 
@@ -2876,34 +3381,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   Widget _buildInitialContent() {
     return Column(
       children: [
-        // Main Spark Now button (like in the original app)
-        Container(
-          width: double.infinity,
-          height: 56,
-          margin: const EdgeInsets.only(bottom: 24),
-          child: ElevatedButton(
-            onPressed: _startSearchingForOffers,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary, // اللون الأساسي للتطبيق
-              foregroundColor:
-                  Colors.black87, // نص أسود للقراءة الواضحة على الأصفر
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(28),
-              ),
-              elevation: 4,
-              shadowColor: AppColors.primary.withOpacity(0.3),
-            ),
-            child: const Text(
-              'شارك الآن',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
-              ),
-            ),
-          ),
-        ),
-
         // Error message display
         if (_errorMessage != null)
           Container(
@@ -2971,11 +3448,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   @override
   void dispose() {
+    DriverSearchApiService.confirmedStopEvents
+        .removeListener(_onConfirmedSearchStop);
     _searchPositionTimer?.cancel();
+    _mapActivityTimer?.cancel();
+    _pickupHaloExpiryTimer?.cancel();
     _locationWaveTimer?.cancel();
     _locationWavePhase.dispose();
     _displayLocationSubscription?.cancel();
     _offerAuthEpoch++;
+    _performancePreview.clear();
     _offerClosureScope.bind(null);
     _offerAuthSubscription?.cancel();
     try {
@@ -3109,280 +3591,197 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   Widget _buildSparkNowModal(StateSetter setModalState) {
-    // استخدام القائمة المحفوظة بدلاً من إنشاء قائمة جديدة
     final timeOptions = _timeOptions ?? <DateTime>[];
-
+    final busy = _isCheckingWalletBalance || _isStartingOnline;
+    final buttonShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
+    );
     return Container(
-      height: MediaQuery.of(context).size.height * 0.8,
+      height: MediaQuery.sizeOf(context).height * .78,
       decoration: const BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(20),
-          topRight: Radius.circular(20),
-        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      child: Column(
-        children: [
-          // Handle bar
+      child: SafeArea(
+        top: false,
+        child: Column(children: [
           Container(
-            margin: const EdgeInsets.only(top: 12, bottom: 20),
-            width: 40,
+            margin: const EdgeInsets.only(top: 12, bottom: 12),
+            width: 36,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.grey[300],
-              borderRadius: BorderRadius.circular(2),
-            ),
+                color: const Color(0xFFDFE3EB),
+                borderRadius: BorderRadius.circular(2)),
           ),
-
-          // Header with Spark icon and title
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Row(
-              children: [
-                // Spark icon (blue star-like icon)
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: const BoxDecoration(
-                    color: AppColors.primary,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.star,
-                    color: Colors.black87,
-                    size: 24,
-                  ),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.secondary.withValues(alpha: .06),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                const SizedBox(width: 16),
-                Text(
-                  _isSearchingForOffers ? 'تحديث البحث' : 'شارك الآن',
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close, color: Colors.grey),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          // Description text
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(
-              _isSearchingForOffers
-                  ? 'اختر وقت جديد للبحث أو أوقف البحث:'
-                  : 'مع تشغيل شارك الآن، ستتلقى عروض حتى:',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[600],
+                child: const Icon(Icons.schedule_rounded,
+                    color: AppColors.secondary, size: 24),
               ),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: Text(
+                _isSearchingForOffers ? 'تحديث البحث' : 'انطلق',
+                style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.secondary),
+              )),
+              IconButton(
+                tooltip: 'إغلاق',
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close_rounded,
+                    color: Color(0xFF748198), size: 22),
+              ),
+            ]),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text('اختر موعد انتهاء استقبال الطلبات',
+                  style: TextStyle(
+                      fontSize: 14,
+                      color: AppColors.secondary.withValues(alpha: .65))),
             ),
           ),
-
-          const SizedBox(height: 32),
-
-          // Time options list
           Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
               itemCount: timeOptions.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
               itemBuilder: (context, index) {
                 final time = timeOptions[index];
-                final isSelected = _selectedEndTime != null &&
-                    _selectedEndTime!.millisecondsSinceEpoch ==
-                        time.millisecondsSinceEpoch;
-
-                return GestureDetector(
-                  onTap: () {
-                    setModalState(() {
-                      _selectedEndTime = time;
-                    });
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 16, horizontal: 20),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? AppColors.secondary.withOpacity(0.05)
-                          : Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: isSelected
-                            ? AppColors.secondary
-                            : Colors.grey[300]!,
-                        width: isSelected ? 2 : 1,
-                      ),
+                final selected = _selectedEndTime?.millisecondsSinceEpoch ==
+                    time.millisecondsSinceEpoch;
+                return Semantics(
+                  selected: selected,
+                  child: Material(
+                    color: selected
+                        ? AppColors.secondary.withValues(alpha: .065)
+                        : const Color(0xFFF8F9FC),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      side: BorderSide(
+                          color: selected
+                              ? AppColors.secondary
+                              : const Color(0xFFE9ECF2)),
                     ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 20,
-                          height: 20,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: isSelected
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => setModalState(() => _selectedEndTime = time),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 13),
+                        child: Row(children: [
+                          Icon(
+                              selected
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_unchecked,
+                              size: 21,
+                              color: selected
                                   ? AppColors.secondary
-                                  : Colors.grey[400]!,
-                              width: 2,
-                            ),
-                            color: Colors.white,
-                          ),
-                          child: isSelected
-                              ? Container(
-                                  margin: const EdgeInsets.all(3),
-                                  decoration: const BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: AppColors.secondary,
-                                  ),
-                                )
-                              : null,
-                        ),
-                        const SizedBox(width: 16),
-                        Text(
-                          _formatTime(time),
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight:
-                                isSelected ? FontWeight.bold : FontWeight.w500,
-                            color: isSelected
-                                ? AppColors.secondary
-                                : Colors.black87,
-                          ),
-                        ),
-                      ],
+                                  : const Color(0xFFA2ADBD)),
+                          const SizedBox(width: 12),
+                          Text(_formatTime(time),
+                              style: TextStyle(
+                                  fontSize: 16,
+                                  color: AppColors.secondary,
+                                  fontWeight: selected
+                                      ? FontWeight.w600
+                                      : FontWeight.normal)),
+                          const Spacer(),
+                          const Icon(Icons.access_time_rounded,
+                              size: 17, color: Color(0xFF8A97AA)),
+                        ]),
+                      ),
                     ),
                   ),
                 );
               },
             ),
           ),
-
-          // Bottom buttons
-          Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              children: [
-                // إذا كان في وضع البحث، إظهار زر "إيقاف البحث" أولاً
-                if (_isSearchingForOffers) ...[
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _stopSearching();
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red[600],
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 0,
-                      ),
-                      child: const Text(
-                        'إيقاف البحث',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 1,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-
-                // زر إلغاء
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Color(0xFFEEF0F5))),
+            ),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (_isSearchingForOffers) ...[
                 SizedBox(
                   width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: busy
+                        ? null
+                        : () {
+                            Navigator.pop(context);
+                            _stopSearching();
+                          },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: AppColors.secondary,
+                      elevation: 0,
+                      shape: buttonShape,
+                    ),
+                    icon: const Icon(Icons.pause_rounded, size: 20),
+                    label: const Text('إيقاف البحث',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+              Row(children: [
+                Expanded(
+                    child: SizedBox(
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: _selectedEndTime != null && !busy
+                        ? () => _confirmSparkNow(_selectedEndTime!)
+                        : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.secondary,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: const Color(0xFFE9EDF4),
+                      disabledForegroundColor: const Color(0xFF8793A6),
+                      elevation: 0,
+                      shape: buttonShape,
+                    ),
+                    child: busy
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : Text(_isSearchingForOffers ? 'تحديث الوقت' : 'انطلق',
+                            style: const TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.w600)),
+                  ),
+                )),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 88,
                   height: 48,
                   child: TextButton(
                     onPressed: () => Navigator.pop(context),
                     style: TextButton.styleFrom(
-                      foregroundColor: Colors.grey[600],
+                      foregroundColor: AppColors.secondary,
+                      shape: buttonShape,
                     ),
-                    child: Text(
-                      _isSearchingForOffers ? 'إلغاء' : 'إيقاف',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1,
-                      ),
-                    ),
+                    child: const Text('إلغاء', style: TextStyle(fontSize: 14)),
                   ),
                 ),
-
-                const SizedBox(height: 8),
-
-                // زر تشغيل/تحديث البحث
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: (_selectedEndTime != null &&
-                            !_isCheckingWalletBalance &&
-                            !_isStartingOnline)
-                        ? () {
-                            _confirmSparkNow(_selectedEndTime!);
-                          }
-                        : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.black87,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: _isCheckingWalletBalance
-                        ? const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.black87),
-                                ),
-                              ),
-                              SizedBox(width: 12),
-                              Text(
-                                'جاري الفحص...',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 1,
-                                ),
-                              ),
-                            ],
-                          )
-                        : Text(
-                            _isSearchingForOffers ? 'تحديث الوقت' : 'تشغيل',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 1,
-                            ),
-                          ),
-                  ),
-                ),
-              ],
-            ),
+              ]),
+            ]),
           ),
-        ],
+        ]),
       ),
     );
   }
@@ -3433,37 +3832,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       if (!mounted) return;
 
-      // التحقق من وجود تغييرات في حالة المطاعم
-      bool hasStatusChanges = false;
-      if (_mapData != null) {
-        for (int i = 0; i < data.nearbyStores.length; i++) {
-          final newStore = data.nearbyStores[i];
-          final oldStore = _mapData!.nearbyStores.firstWhere(
-            (s) => s.storeId == newStore.storeId,
-            orElse: () => newStore,
-          );
-
-          // مقارنة الحالات
-          if (oldStore.isOpen != newStore.isOpen ||
-              oldStore.acceptingOrders != newStore.acceptingOrders) {
-            hasStatusChanges = true;
-            print('🔄 Driver: تغيرت حالة المطعم ${newStore.name}: '
-                'isOpen: ${oldStore.isOpen} -> ${newStore.isOpen}, '
-                'acceptingOrders: ${oldStore.acceptingOrders} -> ${newStore.acceptingOrders}');
-          }
-        }
-      }
-
-      // تحديث الـ UI فقط إذا كان هناك تغييرات
-      if (hasStatusChanges || _mapData == null) {
-        setState(() {
-          _mapData = data;
-          _updateMapMarkers();
-        });
-        print('✅ Driver: تم تحديث حالة المطاعم بنجاح');
-      } else {
-        print('ℹ️ Driver: لا توجد تغييرات في حالة المطاعم');
-      }
+      setState(() => _mapData = data);
+      _updateMapMarkers();
+      if (_heatEnabled) unawaited(_refreshPickupActivity());
     } catch (e) {
       print('❌ Driver: خطأ في تحديث حالة المطاعم: $e');
     }
@@ -3580,21 +3951,21 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   }
 
   /// Both live offers and cached push offers consult the same closure scope.
-  void _handleWaveOffer(WaveOffer waveOffer) async {
+  Future<void> _handleWaveOffer(WaveOffer waveOffer,
+      {bool fromSocket = true}) async {
     try {
       final owner = await _bindOfferOwner();
       if (owner == null ||
-          _webSocketService.driverId != owner ||
+          (fromSocket && _webSocketService.driverId != owner) ||
           !await _offerStillVisible(waveOffer) ||
           !mounted) return;
-      final existing =
-          _currentWaveOffers.any((o) => o.offerId == waveOffer.offerId);
       setState(() {
         _currentWaveOffers.removeWhere((o) => o.offerId == waveOffer.offerId);
         _currentWaveOffers.add(waveOffer);
         _currentWaveOffer = waveOffer;
       });
-      if (!existing) await DriverOfferAudio.play(waveOffer.offerId);
+      unawaited(_performancePreview.prefetch(owner));
+      await DriverOfferAudio.play(waveOffer.offerId);
     } catch (_) {/* A failed scope check cannot display a stale offer. */}
   }
 
@@ -3754,6 +4125,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
 
       if (result['success'] == true) {
+        _performancePreview.clear();
         // Success
         print('✅ Wave offer accepted successfully');
         print('📝 Order ID: ${waveOffer.orderId}');
@@ -3902,6 +4274,26 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   /// 📊 جلب metrics السائق من الـ API
   /// 🚫 عرض Bottom Sheet لتأكيد الرفض
   Future<void> _showRejectConfirmationSheet(WaveOffer waveOffer) async {
+    if (!mounted ||
+        _preparingRejectOfferId != null ||
+        _currentRejectConfirmationOfferId != null) return;
+    final epoch = _offerAuthEpoch;
+    _preparingRejectOfferId = waveOffer.offerId;
+    Map<String, dynamic>? performance;
+    try {
+      final owner = await _bindOfferOwner();
+      if (owner == null || !mounted || epoch != _offerAuthEpoch) return;
+      performance = await _performancePreview.read(owner);
+      if (!mounted ||
+          epoch != _offerAuthEpoch ||
+          _offerClosureScope.owner != owner ||
+          !_currentWaveOffers.any((o) => o.offerId == waveOffer.offerId) ||
+          !await _offerStillVisible(waveOffer) ||
+          !mounted ||
+          epoch != _offerAuthEpoch) return;
+    } finally {
+      _preparingRejectOfferId = null;
+    }
     print('📄 Opening reject confirmation for offer: ${waveOffer.offerId}');
 
     // تسجيل العرض الذي نعرض له نافذة التأكيد
@@ -3971,7 +4363,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
                 // Motivational message
                 Text(
-                  'لا بأس! هناك دائماً فرص أفضل في الطريق 🌟',
+                  'راجع أثر الرفض على معدل قبولك قبل التأكيد.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 15,
@@ -3982,11 +4374,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
                 const SizedBox(height: 24),
 
-                const Text(
-                  'يمكن أن يؤثر الرفض في معدل القبول وفق سياسة توزيع الطلبات. لا يتوفر حاليًا تقدير موثوق للنسبة بعد هذا الرفض.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Color(0xFF00296B), height: 1.6),
-                ),
+                DeclineAcceptanceImpact(
+                    offerId: waveOffer.offerId,
+                    sentAt: waveOffer.sentAt,
+                    snapshot: performance),
                 const SizedBox(height: 24),
 
                 // Buttons
@@ -4114,6 +4505,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             epoch != _offerAuthEpoch ||
             _offerClosureScope.owner != owner) return;
 
+        _performancePreview.clear();
         print('✅ [4/5] API response received: $result');
 
         // Only remove from UI after successful API call
@@ -4182,7 +4574,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         offer: offer,
         canAccept: _canAcceptWaveOfferFromDetails(offer),
         onAccept: () => _acceptWaveOffer(offer),
-        onReject: () => _rejectWaveOffer(offer),
+        onReject: () => _showRejectConfirmationSheet(offer),
       ),
     );
   }

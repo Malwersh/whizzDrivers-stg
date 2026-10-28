@@ -7,10 +7,24 @@ class DriverProfile {
   final String vehicleType;
   final String licenseNumber;
   final String nationalId;
+  final int? profileSchemaVersion;
+  final String? countryName;
+  final String? governorateName;
+  final String? workRegionName;
+  final String? workRegionId;
+  final String? landmark;
+
   static int _verifiedCustomerCount(Map<String, dynamic> json) {
     final count = json['customerRatingCount'];
     final average = json['customerRating'];
-    return count is int && count > 0 && average is num && average.isFinite && average >= 1 && average <= 5 ? count : 0;
+    return count is int &&
+            count > 0 &&
+            average is num &&
+            average.isFinite &&
+            average >= 1 &&
+            average <= 5
+        ? count
+        : 0;
   }
 
   final double rating;
@@ -23,7 +37,7 @@ class DriverProfile {
   final String preferredLanguage;
   final EmergencyContact? emergencyContact;
   final String? profilePhoto;
-  
+
   // Enhanced DynamoDB schema fields
   final String? firstName;
   final String? lastName;
@@ -34,11 +48,11 @@ class DriverProfile {
   final String? address;
   final String? district;
   final String? postalCode;
-  
+
   // License details
   final String? licenseExpiry;
   final String? licenseIssueDate;
-  
+
   // Document references
   final String? drivingLicenseUrl;
   final String? drivingLicenseFileId;
@@ -52,30 +66,30 @@ class DriverProfile {
   final String? nationalIdFileId;
   final String? nationalIdDocId;
   final String? nationalIdStatus;
-  
+
   // Profile status flags
   final bool? profileComplete;
   final bool? documentsVerified;
   final bool? onboardingCompleted;
   final bool? termsAccepted;
   final bool? privacyPolicyAccepted;
-  
+
   // Availability
   final String? availabilityStatus;
   final bool? isOnline;
   final bool? canReceiveOrders;
-  
+
   // Statistics
   final int? totalTrips;
   final double? totalEarnings;
   final double? completionRate;
-  
+
   // Timestamps
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? profileCompletedAt;
   final DateTime? documentsVerifiedAt;
-  
+
   // Metadata
   final String? registrationSource;
 
@@ -88,6 +102,12 @@ class DriverProfile {
     required this.vehicleType,
     required this.licenseNumber,
     required this.nationalId,
+    this.profileSchemaVersion,
+    this.countryName,
+    this.governorateName,
+    this.workRegionName,
+    this.workRegionId,
+    this.landmark,
     required this.rating,
     this.customerRatingCount = 0,
     required this.totalDeliveries,
@@ -146,18 +166,23 @@ class DriverProfile {
       phone: json['phone'] ?? json['phoneNumber'] ?? '',
       email: json['email'] ?? '',
       city: json['city'] ?? '',
-      vehicleType:
-          json['vehicle_type'] ??
+      vehicleType: json['vehicle_type'] ??
           json['vehicleType'] ??
           (json['vehicleInfo'] != null
               ? json['vehicleInfo']['type'] ?? ''
               : ''),
       licenseNumber: json['license_number'] ?? json['licenseNumber'] ?? '',
       nationalId: json['national_id'] ?? json['nationalId'] ?? '',
+      profileSchemaVersion: json['profileSchemaVersion'],
+      countryName: json['country_name'],
+      governorateName: json['governorate_name'],
+      workRegionName: json['work_region_name'],
+      workRegionId: json['work_region_id'],
+      landmark: json['home_address_text'],
+
       rating: (json['customerRating'] ?? json['rating'] ?? 0.0).toDouble(),
       customerRatingCount: _verifiedCustomerCount(json),
-      totalDeliveries:
-          json['total_deliveries'] ??
+      totalDeliveries: json['total_deliveries'] ??
           json['totalDeliveries'] ??
           json['totalTrips'] ??
           0,
@@ -166,8 +191,7 @@ class DriverProfile {
       ),
       status: json['status'] ?? 'active',
       vehicle: _parseVehicleInfo(json),
-      isVerified:
-          json['isVerified'] ??
+      isVerified: json['isVerified'] ??
           json['is_verified'] ??
           json['documentsVerified'] ??
           false,
@@ -192,10 +216,12 @@ class DriverProfile {
       drivingLicenseFileId: json['drivingLicenseFileId'],
       drivingLicenseDocId: json['drivingLicenseDocId'],
       drivingLicenseStatus: json['drivingLicenseStatus'],
-      vehicleRegistrationUrl: json['vehicleRegistrationUrl'],
+      vehicleRegistrationUrl:
+          json['registrationPaperUrl'] ?? json['vehicleRegistrationUrl'],
       vehicleRegistrationFileId: json['vehicleRegistrationFileId'],
       vehicleRegistrationDocId: json['vehicleRegistrationDocId'],
-      vehicleRegistrationStatus: json['vehicleRegistrationStatus'],
+      vehicleRegistrationStatus:
+          json['registrationPaperStatus'] ?? json['vehicleRegistrationStatus'],
       nationalIdUrl: json['nationalIdUrl'],
       nationalIdFileId: json['nationalIdFileId'],
       nationalIdDocId: json['nationalIdDocId'],
@@ -296,6 +322,12 @@ class DriverProfile {
       'licenseIssueDate': licenseIssueDate,
       'national_id': nationalId,
       'nationalId': nationalId,
+      'profileSchemaVersion': profileSchemaVersion,
+      'country_name': countryName,
+      'governorate_name': governorateName,
+      'work_region_name': workRegionName,
+      'work_region_id': workRegionId,
+      'home_address_text': landmark,
       'rating': rating,
       'customerRatingCount': customerRatingCount,
       if (customerRatingCount > 0) 'customerRating': rating,
@@ -324,9 +356,11 @@ class DriverProfile {
       'drivingLicenseFileId': drivingLicenseFileId,
       'drivingLicenseDocId': drivingLicenseDocId,
       'drivingLicenseStatus': drivingLicenseStatus,
+      'registrationPaperUrl': vehicleRegistrationUrl,
       'vehicleRegistrationUrl': vehicleRegistrationUrl,
       'vehicleRegistrationFileId': vehicleRegistrationFileId,
       'vehicleRegistrationDocId': vehicleRegistrationDocId,
+      'registrationPaperStatus': vehicleRegistrationStatus,
       'vehicleRegistrationStatus': vehicleRegistrationStatus,
       'nationalIdUrl': nationalIdUrl,
       'nationalIdFileId': nationalIdFileId,
@@ -351,6 +385,12 @@ class DriverProfile {
     String? vehicleType,
     String? licenseNumber,
     String? nationalId,
+    int? profileSchemaVersion,
+    String? countryName,
+    String? governorateName,
+    String? workRegionName,
+    String? workRegionId,
+    String? landmark,
     double? rating,
     int? totalDeliveries,
     DateTime? joinDate,
@@ -409,6 +449,12 @@ class DriverProfile {
       vehicleType: vehicleType ?? this.vehicleType,
       licenseNumber: licenseNumber ?? this.licenseNumber,
       nationalId: nationalId ?? this.nationalId,
+      profileSchemaVersion: profileSchemaVersion ?? this.profileSchemaVersion,
+      countryName: countryName ?? this.countryName,
+      governorateName: governorateName ?? this.governorateName,
+      workRegionName: workRegionName ?? this.workRegionName,
+      workRegionId: workRegionId ?? this.workRegionId,
+      landmark: landmark ?? this.landmark,
       rating: rating ?? this.rating,
       customerRatingCount: customerRatingCount,
       totalDeliveries: totalDeliveries ?? this.totalDeliveries,

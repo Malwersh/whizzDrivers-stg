@@ -458,6 +458,14 @@ class _DriverPerformanceScreenState extends State<DriverPerformanceScreen> {
                             style: TextStyle(
                                 color: _muted, fontSize: 14, height: 1.5)),
                         const SizedBox(height: 20),
+                        if (_metrics?.data['projection'] is Map &&
+                            (_metrics!.data['projection'] as Map)['status'] != 'CURRENT')
+                          Container(
+                            margin: const EdgeInsets.only(bottom: 16),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(color: const Color(0xFFF0F4FA), borderRadius: BorderRadius.circular(12)),
+                            child: const Text('يجري تحديث مؤشراتك. القيم الظاهرة هي آخر نسخة محفوظة، وقد لا تشمل أحدث نشاط بعد.', style: TextStyle(color: _navy, height: 1.5)),
+                          ),
                         if (_metrics == null)
                           Container(
                               margin: const EdgeInsets.only(bottom: 16),
@@ -501,6 +509,18 @@ class _DriverPerformanceScreenState extends State<DriverPerformanceScreen> {
                                   indent: 16,
                                   endIndent: 16,
                                   color: Color(0xFFEAECF0)),
+                              if (_metrics?.data['rejections'] is Map) ...[
+                                _metricRow(
+                                  title: 'الرفض المتتالي',
+                                  value: '${(_metrics!.data['rejections'] as Map)['consecutive'] ?? '—'}',
+                                  subtitle: (_metrics!.data['rejections'] as Map)['windowComplete'] == true ? 'منذ آخر قبول موثّق' : 'حد أدنى — لم يكتمل السجل بعد',
+                                  description: 'يُحسب الرفض الصريح وانتهاء مهلة العرض الذي ثبت ظهوره، ويعود العدّاد للصفر عند قبول موثّق. العروض المسحوبة أو غير المثبتة لا تُعد رفضًا. العدّاد مستقل عن نافذة آخر 100 عرض المعروضة في التفاصيل.',
+                                  icon: Icons.remove_circle_outline,
+                                  status: (_metrics!.data['rejections'] as Map)['windowComplete'] == true ? 'AVAILABLE' : 'PROVISIONAL',
+                                  detailKey: 'acceptance',
+                                ),
+                                const Divider(height: 1, indent: 16, endIndent: 16, color: Color(0xFFEAECF0)),
+                              ],
                               _rateRow(
                                   'معدل الإكمال',
                                   'completionRate',

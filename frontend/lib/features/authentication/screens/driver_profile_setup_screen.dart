@@ -22,13 +22,14 @@ class _DriverProfileSetupScreenState
   final _form = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _landmark = TextEditingController();
+  final _plate = TextEditingController();
   final _files = <String, Map<String, dynamic>>{};
   final _urls = <String, String>{};
   Map<String, dynamic>? _options;
   String? _governorate, _region, _error, _vehicleType;
   bool _loading = true, _saving = false;
   static const _documents = {
-    'registration_paper': 'سنوية السيارة',
+    'registration_paper': 'سنوية المركبة',
     'driving_license': 'إجازة السوق / رخصة القيادة',
     'national_id': 'البطاقة الوطنية'
   };
@@ -42,6 +43,7 @@ class _DriverProfileSetupScreenState
   void dispose() {
     _name.dispose();
     _landmark.dispose();
+    _plate.dispose();
     super.dispose();
   }
 
@@ -111,6 +113,7 @@ class _DriverProfileSetupScreenState
                 'profileSchemaVersion': 2,
                 'name': _name.text.trim(),
                 'vehicleType': _vehicleType,
+                'vehiclePlate': _plate.text.trim(),
                 'governorate_id': _governorate,
                 'work_region_id': _region,
                 'home_address_text': _landmark.text.trim(),
@@ -258,6 +261,17 @@ class _DriverProfileSetupScreenState
                                         ? 'اختر نوع المركبة'
                                         : null),
                                 const SizedBox(height: 24),
+                                TextFormField(
+                                  controller: _plate,
+                                  maxLength: 40,
+                                  decoration: const InputDecoration(
+                                      labelText: 'رقم لوحة المركبة'),
+                                  validator: (value) => value == null ||
+                                          value.trim().isEmpty
+                                      ? 'أدخل رقم لوحة المركبة كما في السنوية'
+                                      : null,
+                                ),
+                                const SizedBox(height: 16),
                                 const Text('صور الوثائق',
                                     style: TextStyle(
                                         fontSize: 20,

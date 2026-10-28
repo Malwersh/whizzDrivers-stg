@@ -55,6 +55,7 @@ class PushNotificationsService {
   static StreamSubscription<RemoteMessage>? _foregroundSub;
   static Timer? _tokenRetryTimer;
   static bool isWalletEvent(Map<String, dynamic> data) =>
+      data['type'] == 'wallet_cash_payout' ||
       data['type'] == 'wallet_topup_approved' ||
       data['type'] == 'wallet_topup_rejected' ||
       data['type'] == 'wallet_sandbox_payment_succeeded' ||

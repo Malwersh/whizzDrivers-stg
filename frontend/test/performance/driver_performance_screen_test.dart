@@ -3,6 +3,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wizz_driver/features/more/screens/driver_performance_screen.dart';
 
 void main() {
+  testWidgets('pending saved snapshot is labelled instead of appearing current', (tester) async {
+    await tester.pumpWidget(MaterialApp(home: DriverPerformanceScreen(load: () async => {
+      'rulesVersion': 'OBSERVED_DRIVER_PERFORMANCE_V4',
+      'projection': {'status': 'UPDATING', 'version': 7},
+      'acceptanceRate': null, 'acceptanceRateStatus': 'INSUFFICIENT_DATA',
+      'completionRate': null, 'completionRateStatus': 'INSUFFICIENT_DATA',
+    })));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('يجري تحديث مؤشراتك'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'last100 rating shows valid sample and private-safe source details',
       (tester) async {

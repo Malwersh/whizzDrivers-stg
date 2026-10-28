@@ -166,7 +166,7 @@ class DriverService {
 
         final ok = await AWSDynamoDBService().updateDriverProfile({
           'name': profile.name,
-          'city': profile.city,
+          if (profile.profileSchemaVersion != 2) 'city': profile.city,
           if (!accountBasicsOnly) ...{
             'vehicleType': profile.vehicleType,
             'licenseNumber': profile.licenseNumber,

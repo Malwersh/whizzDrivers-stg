@@ -21,8 +21,14 @@ class NotificationSoundFiles {
       final bytes = base64Decode(item['audio']);
       if (bytes.length > 256000 || sha256.convert(bytes).toString() != hash)
         continue;
-      final data = await bridge.invokeMapMethod<String, String>(
-          'install', {'file': '$id.wav', 'bytes': Uint8List.fromList(bytes)});
+      Map<String, String>? data;
+      try {
+        data = await bridge.invokeMapMethod<String, String>(
+            'install', {'file': '$id.wav', 'bytes': Uint8List.fromList(bytes)});
+      } catch (_) {
+        // One unavailable custom file must not block other sound choices.
+        continue;
+      }
       if (data == null) continue;
       if (defaultTargetPlatform == TargetPlatform.android) {
         await FlutterLocalNotificationsPlugin()

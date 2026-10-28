@@ -1,3 +1,5 @@
+import '../../providers/riverpod/tab_provider.dart';
+import 'screens/offer_sound_test_sheet.dart';
 import 'screens/driver_quality_screen.dart';
 import 'dart:convert';
 
@@ -109,6 +111,12 @@ class _MoreTabState extends ConsumerState<MoreTab> {
         surfaceTintColor: Colors.transparent,
         systemOverlayStyle: SystemUiOverlayStyle.dark,
         automaticallyImplyLeading: false,
+        leading: IconButton(
+            tooltip: 'العودة إلى الخريطة',
+            onPressed: () =>
+                ref.read(selectedTabProvider.notifier).state = DriverTabs.home,
+            icon:
+                const Icon(Icons.arrow_back_ios_new, color: Color(0xFF00296B))),
         centerTitle: true,
         title: const Text('المزيد',
             style: TextStyle(
@@ -245,7 +253,7 @@ class _MoreTabState extends ConsumerState<MoreTab> {
                       items: [
                         _buildMenuItem(
                           icon: Icons.directions_car_outlined,
-                          title: localizations.vehicleInformation,
+                          title: 'مركباتي',
                           iconColor:
                               HadhirColors.darkGray, // Dark gray for sub-items
                           onTap: () {
@@ -393,6 +401,10 @@ class _MoreTabState extends ConsumerState<MoreTab> {
                     _buildSection(
                       title: localizations.app,
                       items: [
+                        _buildMenuItem(
+                            icon: Icons.volume_up_outlined,
+                            title: 'اختبار صوت العروض',
+                            onTap: () => showOfferSoundTestSheet(context)),
                         _buildMenuItem(
                           icon: Icons.settings_outlined,
                           title: localizations.settings,
