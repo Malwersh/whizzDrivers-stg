@@ -24,7 +24,7 @@ class AuthGuard extends ConsumerWidget {
       return const Scaffold(
         backgroundColor: AppColors.background,
         body: Center(
-          child: CircularProgressIndicator(color: AppColors.primary),
+          child: CircularProgressIndicator(color: const Color(0xFF00296B)),
         ),
       );
     }

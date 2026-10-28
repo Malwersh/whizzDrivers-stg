@@ -89,7 +89,7 @@ class _DeliveryEquipmentScreenState extends State<DeliveryEquipmentScreen>
                   children: [
                     const Icon(
                       Icons.local_shipping_outlined,
-                      color: AppColors.white,
+                      color: const Color(0xFF00296B),
                       size: 24,
                     ),
                     const SizedBox(width: 12),
@@ -100,7 +100,7 @@ class _DeliveryEquipmentScreenState extends State<DeliveryEquipmentScreen>
                           const Text(
                             'Equipment Completion',
                             style: TextStyle(
-                              color: AppColors.white,
+                              color: const Color(0xFF00296B),
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
                             ),
@@ -114,7 +114,8 @@ class _DeliveryEquipmentScreenState extends State<DeliveryEquipmentScreen>
                                   backgroundColor: AppColors.white.withValues(
                                     alpha: 0.3,
                                   ),
-                                  valueColor: const AlwaysStoppedAnimation<Color>(
+                                  valueColor:
+                                      const AlwaysStoppedAnimation<Color>(
                                     AppColors.white,
                                   ),
                                 ),
@@ -123,7 +124,7 @@ class _DeliveryEquipmentScreenState extends State<DeliveryEquipmentScreen>
                               Text(
                                 '${_completionPercentage.toInt()}%',
                                 style: const TextStyle(
-                                  color: AppColors.white,
+                                  color: const Color(0xFF00296B),
                                   fontSize: 12,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -177,10 +178,10 @@ class _DeliveryEquipmentScreenState extends State<DeliveryEquipmentScreen>
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showAddEquipmentDialog(),
         backgroundColor: AppColors.primary,
-        icon: const Icon(Icons.add, color: AppColors.white),
+        icon: const Icon(Icons.add, color: const Color(0xFF00296B)),
         label: const Text(
           'Add Equipment',
-          style: TextStyle(color: AppColors.white),
+          style: TextStyle(color: const Color(0xFF00296B)),
         ),
       ),
     );
@@ -399,87 +400,88 @@ class _DeliveryEquipmentScreenState extends State<DeliveryEquipmentScreen>
               ),
             ],
           ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(16),
-        leading: Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: AppColors.primary.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(
-            _getIconData(type.iconName),
-            color: AppColors.primary,
-            size: 24,
-          ),
-        ),
-        title: Text(
-          type.name,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              type.nameArabic,
-              style: const TextStyle(
-                fontSize: 14,
-                color: AppColors.textSecondary,
+          child: ListTile(
+            contentPadding: const EdgeInsets.all(16),
+            leading: Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                _getIconData(type.iconName),
+                color: AppColors.primary,
+                size: 24,
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              type.description,
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.textSecondary,
-              ),
+            title: Text(
+              type.name,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
             ),
-            const SizedBox(height: 8),
-            Row(
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (type.isRequired)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.error.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Text(
-                      'Required',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.error,
+                Text(
+                  type.nameArabic,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  type.description,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    if (type.isRequired)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.error.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'Required',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: AppColors.error,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                if (type.estimatedPrice != null) ...[
-                  const SizedBox(width: 8),
-                  Text(
-                    '~${type.estimatedPrice!.toInt()} IQD',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
+                    if (type.estimatedPrice != null) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        '~${type.estimatedPrice!.toInt()} IQD',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ],
             ),
-          ],
-        ),
-        trailing: hasEquipment
-            ? const Icon(Icons.check_circle, color: AppColors.success)
-            : const Icon(Icons.add_circle_outline, color: AppColors.primary),
-        onTap: hasEquipment
-            ? null
-            : () => _showAddEquipmentFromTypeDialog(type),
-      ),
+            trailing: hasEquipment
+                ? const Icon(Icons.check_circle, color: AppColors.success)
+                : const Icon(Icons.add_circle_outline,
+                    color: const Color(0xFF00296B)),
+            onTap: hasEquipment
+                ? null
+                : () => _showAddEquipmentFromTypeDialog(type),
+          ),
         ),
       ),
     );
@@ -727,8 +729,7 @@ class _EquipmentFormDialogState extends State<_EquipmentFormDialog> {
       text: equipment?.serialNumber ?? '',
     );
     _priceController = TextEditingController(
-      text:
-          equipment?.purchasePrice?.toString() ??
+      text: equipment?.purchasePrice?.toString() ??
           type?.estimatedPrice?.toString() ??
           '',
     );
@@ -907,8 +908,7 @@ class _EquipmentFormDialogState extends State<_EquipmentFormDialog> {
   void _saveEquipment() {
     if (_formKey.currentState!.validate()) {
       final equipment = DeliveryEquipment(
-        id:
-            widget.equipment?.id ??
+        id: widget.equipment?.id ??
             DateTime.now().millisecondsSinceEpoch.toString(),
         name: _nameController.text,
         type: _selectedType,
@@ -918,9 +918,8 @@ class _EquipmentFormDialogState extends State<_EquipmentFormDialog> {
         purchasePrice: double.tryParse(_priceController.text),
         brand: _brandController.text.isEmpty ? null : _brandController.text,
         model: _modelController.text.isEmpty ? null : _modelController.text,
-        serialNumber: _serialController.text.isEmpty
-            ? null
-            : _serialController.text,
+        serialNumber:
+            _serialController.text.isEmpty ? null : _serialController.text,
         isRequired: widget.equipmentTypes
             .firstWhere((t) => t.id == _selectedType)
             .isRequired,

@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -23,45 +24,52 @@ class PasswordResetVerificationScreen extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<PasswordResetVerificationScreen> createState() => _PasswordResetVerificationScreenState();
+  ConsumerState<PasswordResetVerificationScreen> createState() =>
+      _PasswordResetVerificationScreenState();
 }
 
-class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetVerificationScreen> {
+class _PasswordResetVerificationScreenState
+    extends ConsumerState<PasswordResetVerificationScreen> {
   bool _isVerifying = false;
   bool _isResending = false;
   bool _codeVerified = false;
   bool _isResetting = false;
-  
+
   String? _errorMessage;
   String _currentCode = '';
   Key _otpKey = UniqueKey();
-  
+
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-  
+
   bool _obscureNewPassword = true;
   bool _obscureConfirmPassword = true;
-  
+
   late final String _normalizedIdentifier;
   AuthLogger get _logger => AuthLogger();
 
   @override
   void initState() {
     super.initState();
-    _normalizedIdentifier = widget.resetMethod == 'phone' 
+    _normalizedIdentifier = widget.resetMethod == 'phone'
         ? IdentityNormalizer.normalizeIraqiPhone(widget.identifier)
         : IdentityNormalizer.normalizeEmail(widget.identifier);
-    
+
     // Start initial cooldown (code was just sent)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(verificationThrottleProvider.notifier).recordSend(_normalizedIdentifier);
+      ref
+          .read(verificationThrottleProvider.notifier)
+          .recordSend(_normalizedIdentifier);
       _logger.logSendCode(
         identity: _normalizedIdentifier,
         channel: widget.resetMethod,
         purpose: 'password_reset',
         attempt: 1,
-        cooldownSeconds: ref.read(verificationThrottleProvider).identityState(_normalizedIdentifier).currentCooldownDuration,
+        cooldownSeconds: ref
+            .read(verificationThrottleProvider)
+            .identityState(_normalizedIdentifier)
+            .currentCooldownDuration,
       );
     });
   }
@@ -73,7 +81,9 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
     super.dispose();
   }
 
-  bool get _isCodeComplete => _currentCode.length == 6 && _currentCode.replaceAll(RegExp(r'\D'), '').length == 6;
+  bool get _isCodeComplete =>
+      _currentCode.length == 6 &&
+      _currentCode.replaceAll(RegExp(r'\D'), '').length == 6;
 
   int get _resendCooldown {
     final throttle = ref.watch(verificationThrottleProvider);
@@ -82,11 +92,14 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
 
   Future<void> _verifyCode() async {
     if (!_isCodeComplete || _isVerifying) return;
-    setState(() { _isVerifying = true; _errorMessage = null; });
+    setState(() {
+      _isVerifying = true;
+      _errorMessage = null;
+    });
 
     try {
       bool success = false;
-      
+
       if (AppConfig.enableAWSIntegration) {
         // Use AWS Cognito for verification
         // For now, we'll use the confirmResetPassword method directly
@@ -94,7 +107,8 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
         if (widget.resetMethod == 'phone') {
           // Note: AWS Cognito handles phone reset differently
           // For now, simulate success for valid codes
-          success = _currentCode == '123456' || _currentCode == '317010'; // Test codes
+          success = _currentCode == '123456' ||
+              _currentCode == '317010'; // Test codes
         } else {
           // Email reset verification
           success = _currentCode == '123456';
@@ -105,14 +119,16 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
       }
 
       if (success) {
-        setState(() { _codeVerified = true; });
+        setState(() {
+          _codeVerified = true;
+        });
         _logger.logVerifyCode(
           identity: _normalizedIdentifier,
           channel: widget.resetMethod,
           purpose: 'password_reset',
           success: true,
         );
-        
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -122,7 +138,7 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
           );
         }
       } else {
-        setState(() { 
+        setState(() {
           _errorMessage = 'الرمز غير صحيح، يرجى المحاولة مرة أخرى';
           _clearCode();
         });
@@ -135,7 +151,7 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
         );
       }
     } catch (e) {
-      setState(() { 
+      setState(() {
         _errorMessage = 'حدث خطأ أثناء التحقق';
         _clearCode();
       });
@@ -148,15 +164,20 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
       );
     } finally {
       if (mounted) {
-        setState(() { _isVerifying = false; });
+        setState(() {
+          _isVerifying = false;
+        });
       }
     }
   }
 
   Future<void> _resendCode() async {
     if (_resendCooldown > 0 || _isResending) return;
-    setState(() { _isResending = true; _errorMessage = null; });
-    
+    setState(() {
+      _isResending = true;
+      _errorMessage = null;
+    });
+
     final notifier = ref.read(verificationThrottleProvider.notifier);
     notifier.setSending(_normalizedIdentifier, true);
 
@@ -167,11 +188,13 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
       if (AppConfig.enableAWSIntegration) {
         if (widget.resetMethod == 'phone') {
           final cognitoService = ref.read(cognitoAuthServiceProvider);
-          final result = await cognitoService.resetPasswordPhone(phone: widget.identifier);
+          final result =
+              await cognitoService.resetPasswordPhone(phone: widget.identifier);
           success = result['success'] == true;
           message = result['message'];
         } else {
-          success = await CognitoAuthServiceEnhanced.resetPasswordEmail(email: widget.identifier);
+          success = await CognitoAuthServiceEnhanced.resetPasswordEmail(
+              email: widget.identifier);
           message = 'تم إرسال رمز التحقق إلى بريدك الإلكتروني';
         }
       } else {
@@ -185,36 +208,52 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
         notifier.recordSend(_normalizedIdentifier);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(message ?? 'تم إرسال رمز التحقق الجديد'), 
-            backgroundColor: AppColors.success
-          ));
+              content: Text(message ?? 'تم إرسال رمز التحقق الجديد'),
+              backgroundColor: AppColors.success));
         }
         _logger.logSendCode(
           identity: _normalizedIdentifier,
           channel: widget.resetMethod,
           purpose: 'password_reset',
-          attempt: ref.read(verificationThrottleProvider).identityState(_normalizedIdentifier).recentSends.length,
-          cooldownSeconds: ref.read(verificationThrottleProvider).identityState(_normalizedIdentifier).currentCooldownDuration,
+          attempt: ref
+              .read(verificationThrottleProvider)
+              .identityState(_normalizedIdentifier)
+              .recentSends
+              .length,
+          cooldownSeconds: ref
+              .read(verificationThrottleProvider)
+              .identityState(_normalizedIdentifier)
+              .currentCooldownDuration,
         );
       } else {
         final msg = message ?? 'فشل في إعادة إرسال الرمز';
         notifier.setError(_normalizedIdentifier, msg);
-        setState(() { _errorMessage = msg; });
+        setState(() {
+          _errorMessage = msg;
+        });
       }
     } catch (e) {
       const msg = 'حدث خطأ أثناء إعادة الإرسال';
       notifier.setError(_normalizedIdentifier, msg);
-      setState(() { _errorMessage = msg; });
+      setState(() {
+        _errorMessage = msg;
+      });
     } finally {
       notifier.setSending(_normalizedIdentifier, false);
-      if (mounted) setState(() { _isResending = false; });
+      if (mounted)
+        setState(() {
+          _isResending = false;
+        });
     }
   }
 
   Future<void> _resetPassword() async {
     if (!_formKey.currentState!.validate()) return;
-    
-    setState(() { _isResetting = true; _errorMessage = null; });
+
+    setState(() {
+      _isResetting = true;
+      _errorMessage = null;
+    });
 
     try {
       bool success = false;
@@ -222,7 +261,7 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
 
       if (AppConfig.enableAWSIntegration) {
         final cognitoService = ref.read(cognitoAuthServiceProvider);
-        
+
         if (widget.resetMethod == 'phone') {
           final result = await cognitoService.confirmResetPasswordPhone(
             phone: widget.identifier,
@@ -232,7 +271,8 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
           success = result['success'] == true;
           message = result['message'];
         } else {
-          final result = await CognitoAuthServiceEnhanced.confirmResetPasswordEmail(
+          final result =
+              await CognitoAuthServiceEnhanced.confirmResetPasswordEmail(
             email: widget.identifier,
             confirmationCode: _currentCode,
             newPassword: _newPasswordController.text,
@@ -255,24 +295,33 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
               backgroundColor: AppColors.success,
             ),
           );
-          
+
           // Navigate back to login after successful password reset
           context.go('/login');
         }
       } else {
-        setState(() { _errorMessage = message ?? 'فشل في تغيير كلمة المرور'; });
+        setState(() {
+          _errorMessage = message ?? 'فشل في تغيير كلمة المرور';
+        });
       }
     } catch (e) {
-      setState(() { _errorMessage = 'حدث خطأ أثناء تغيير كلمة المرور'; });
+      setState(() {
+        _errorMessage = 'حدث خطأ أثناء تغيير كلمة المرور';
+      });
     } finally {
       if (mounted) {
-        setState(() { _isResetting = false; });
+        setState(() {
+          _isResetting = false;
+        });
       }
     }
   }
 
   void _clearCode() {
-    setState(() { _currentCode = ''; _otpKey = UniqueKey(); });
+    setState(() {
+      _currentCode = '';
+      _otpKey = UniqueKey();
+    });
   }
 
   String get _displayIdentifier {
@@ -317,24 +366,30 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
             children: [
               const SizedBox(height: 8),
               Icon(
-                widget.resetMethod == 'phone' ? Icons.phone_android : Icons.mark_email_read_outlined, 
-                size: 72, 
-                color: AppColors.primary
-              ),
+                  widget.resetMethod == 'phone'
+                      ? Icons.phone_android
+                      : Icons.mark_email_read_outlined,
+                  size: 72,
+                  color: const Color(0xFF00296B)),
               const SizedBox(height: 16),
-              
               if (!_codeVerified) ...[
                 Text(
-                  widget.resetMethod == 'phone' 
+                  widget.resetMethod == 'phone'
                       ? 'أدخل رمز التحقق المكون من 6 أرقام المرسل إلى رقم هاتفك'
                       : 'أدخل رمز التحقق المكون من 6 أرقام المرسل إلى بريدك الإلكتروني',
-                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 14, height: 1.4),
+                  style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                      height: 1.4),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 6),
                 Text(
                   _displayIdentifier,
-                  style: const TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
@@ -344,11 +399,11 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                   key: _otpKey,
                   enabled: !_isVerifying,
                   onCompleted: (_) => _verifyCode(),
-                  onChanged: (code) { 
-                    setState(() { 
-                      _currentCode = code; 
-                      _errorMessage = null; 
-                    }); 
+                  onChanged: (code) {
+                    setState(() {
+                      _currentCode = code;
+                      _errorMessage = null;
+                    });
                   },
                 ),
                 const SizedBox(height: 24),
@@ -370,11 +425,15 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
-                    onPressed: _isVerifying || !_isCodeComplete ? null : _verifyCode,
+                    onPressed:
+                        _isVerifying || !_isCodeComplete ? null : _verifyCode,
                     style: ElevatedButton.styleFrom(
+                      foregroundColor: readableForeground(AppColors.primary),
                       backgroundColor: AppColors.primary,
-                      disabledBackgroundColor: AppColors.textSecondary.withAlpha(77),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      disabledBackgroundColor:
+                          AppColors.textSecondary.withAlpha(77),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
                       elevation: 0,
                     ),
                     child: _isVerifying
@@ -383,12 +442,16 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                             height: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(AppColors.white),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                  AppColors.white),
                             ),
                           )
                         : const Text(
                             'تحقق من الرمز',
-                            style: TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                                color: const Color(0xFF00296B),
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600),
                           ),
                   ),
                 ),
@@ -400,16 +463,21 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                   children: [
                     const Text(
                       'لم تستلم الرمز؟ ',
-                      style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                      style: TextStyle(
+                          color: AppColors.textSecondary, fontSize: 14),
                     ),
                     GestureDetector(
                       onTap: _resendCooldown > 0 ? null : _resendCode,
                       child: Text(
                         _resendCooldown > 0
                             ? 'إعادة الإرسال خلال $_resendCooldownث'
-                            : (_isResending ? 'جاري الإرسال...' : 'إعادة الإرسال'),
+                            : (_isResending
+                                ? 'جاري الإرسال...'
+                                : 'إعادة الإرسال'),
                         style: TextStyle(
-                          color: _resendCooldown > 0 || _isResending ? AppColors.textSecondary : AppColors.primary,
+                          color: _resendCooldown > 0 || _isResending
+                              ? AppColors.textSecondary
+                              : AppColors.primary,
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
                         ),
@@ -421,13 +489,17 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                 // Password reset form
                 const Text(
                   'تم التحقق من الرمز بنجاح',
-                  style: TextStyle(color: AppColors.success, fontSize: 16, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                      color: AppColors.success,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 8),
                 const Text(
                   'يرجى إدخال كلمة المرور الجديدة',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                  style:
+                      TextStyle(color: AppColors.textSecondary, fontSize: 14),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
@@ -444,22 +516,29 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                         style: const TextStyle(color: AppColors.textPrimary),
                         decoration: InputDecoration(
                           labelText: 'كلمة المرور الجديدة',
-                          labelStyle: const TextStyle(color: AppColors.textSecondary),
-                          prefixIcon: const Icon(Icons.lock, color: AppColors.primary),
+                          labelStyle:
+                              const TextStyle(color: AppColors.textSecondary),
+                          prefixIcon: const Icon(Icons.lock,
+                              color: const Color(0xFF00296B)),
                           suffixIcon: IconButton(
                             icon: Icon(
-                              _obscureNewPassword ? Icons.visibility : Icons.visibility_off,
+                              _obscureNewPassword
+                                  ? Icons.visibility
+                                  : Icons.visibility_off,
                               color: AppColors.textSecondary,
                             ),
-                            onPressed: () => setState(() => _obscureNewPassword = !_obscureNewPassword),
+                            onPressed: () => setState(() =>
+                                _obscureNewPassword = !_obscureNewPassword),
                           ),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: AppColors.border),
+                            borderSide:
+                                const BorderSide(color: AppColors.border),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                            borderSide: const BorderSide(
+                                color: AppColors.primary, width: 2),
                           ),
                           filled: true,
                           fillColor: AppColors.surface,
@@ -484,22 +563,30 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                         style: const TextStyle(color: AppColors.textPrimary),
                         decoration: InputDecoration(
                           labelText: 'تأكيد كلمة المرور',
-                          labelStyle: const TextStyle(color: AppColors.textSecondary),
-                          prefixIcon: const Icon(Icons.lock_outline, color: AppColors.primary),
+                          labelStyle:
+                              const TextStyle(color: AppColors.textSecondary),
+                          prefixIcon: const Icon(Icons.lock_outline,
+                              color: const Color(0xFF00296B)),
                           suffixIcon: IconButton(
                             icon: Icon(
-                              _obscureConfirmPassword ? Icons.visibility : Icons.visibility_off,
+                              _obscureConfirmPassword
+                                  ? Icons.visibility
+                                  : Icons.visibility_off,
                               color: AppColors.textSecondary,
                             ),
-                            onPressed: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+                            onPressed: () => setState(() =>
+                                _obscureConfirmPassword =
+                                    !_obscureConfirmPassword),
                           ),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: AppColors.border),
+                            borderSide:
+                                const BorderSide(color: AppColors.border),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                            borderSide: const BorderSide(
+                                color: AppColors.primary, width: 2),
                           ),
                           filled: true,
                           fillColor: AppColors.surface,
@@ -521,7 +608,8 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                           padding: const EdgeInsets.only(bottom: 8.0),
                           child: Text(
                             _errorMessage!,
-                            style: const TextStyle(color: Colors.red, fontSize: 14),
+                            style: const TextStyle(
+                                color: Colors.red, fontSize: 14),
                             textAlign: TextAlign.center,
                           ),
                         ),
@@ -533,9 +621,13 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                         child: ElevatedButton(
                           onPressed: _isResetting ? null : _resetPassword,
                           style: ElevatedButton.styleFrom(
+                            foregroundColor:
+                                readableForeground(AppColors.primary),
                             backgroundColor: AppColors.primary,
-                            disabledBackgroundColor: AppColors.textSecondary.withAlpha(77),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            disabledBackgroundColor:
+                                AppColors.textSecondary.withAlpha(77),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
                             elevation: 0,
                           ),
                           child: _isResetting
@@ -544,12 +636,16 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                                   height: 20,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.white),
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        AppColors.white),
                                   ),
                                 )
                               : const Text(
                                   'تغيير كلمة المرور',
-                                  style: TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                                  style: TextStyle(
+                                      color: const Color(0xFF00296B),
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600),
                                 ),
                         ),
                       ),
@@ -557,14 +653,15 @@ class _PasswordResetVerificationScreenState extends ConsumerState<PasswordResetV
                   ),
                 ),
               ],
-
               const Spacer(),
-
               TextButton(
                 onPressed: () => context.go('/login'),
                 child: const Text(
                   'العودة لتسجيل الدخول',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 14, decoration: TextDecoration.underline),
+                  style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                      decoration: TextDecoration.underline),
                 ),
               ),
             ],

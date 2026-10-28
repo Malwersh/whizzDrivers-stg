@@ -675,7 +675,7 @@ class _EarningsTabState extends State<EarningsTab>
             children: [
               const Icon(
                 Icons.info_outline,
-                color: AppColors.primary,
+                color: const Color(0xFF00296B),
                 size: 20,
               ),
               const SizedBox(width: 8),
@@ -702,7 +702,7 @@ class _EarningsTabState extends State<EarningsTab>
                   'Need Help?',
                   style: TextStyle(
                     fontSize: 14,
-                    color: AppColors.primary,
+                    color: const Color(0xFF00296B),
                     fontWeight: FontWeight.w600,
                   ),
                 ),

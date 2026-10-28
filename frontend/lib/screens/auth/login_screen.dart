@@ -40,7 +40,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     );
 
     _animationController.forward();
-    
+
     // Listen to input changes for smart detection
     _usernameController.addListener(_onInputChanged);
   }
@@ -91,7 +91,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
             password: password,
           );
           success = res['success'] == true;
-          message = res['message'] ?? (success ? 'تم تسجيل الدخول بنجاح' : 'فشل في تسجيل الدخول');
+          message = res['message'] ??
+              (success ? 'تم تسجيل الدخول بنجاح' : 'فشل في تسجيل الدخول');
         } else if (inputType == 'phone') {
           final normalizedPhone = SmartInputDetector.normalizePhone(username);
           final res = await cognitoService.loginWithPhoneDetailed(
@@ -99,7 +100,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
             password: password,
           );
           success = res['success'] == true;
-          message = res['message'] ?? (success ? 'تم تسجيل الدخول بنجاح' : 'فشل في تسجيل الدخول');
+          message = res['message'] ??
+              (success ? 'تم تسجيل الدخول بنجاح' : 'فشل في تسجيل الدخول');
         } else {
           message = 'يرجى إدخال بريد إلكتروني صحيح أو رقم هاتف عراقي';
         }
@@ -152,10 +154,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   Future<void> _handlePostLogin() async {
     try {
       final cognitoService = ref.read(cognitoAuthServiceProvider);
-      
+
       // تحديث حالة التطبيق وحفظ معلومات الجلسة
       await cognitoService.getCurrentDriver();
-      
+
       debugPrint('✅ تم تسجيل الدخول وحفظ الجلسة بنجاح');
     } catch (e) {
       debugPrint('⚠️ خطأ في معالجة ما بعد تسجيل الدخول: $e');
@@ -249,13 +251,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                           ),
                           prefixIcon: Icon(
                             SmartInputDetector.getIcon(_detectedInputType),
-                            color: AppColors.primary,
+                            color: const Color(0xFF00296B),
                           ),
                           filled: true,
                           fillColor: AppColors.surface,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: AppColors.border),
+                            borderSide:
+                                const BorderSide(color: AppColors.border),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -290,7 +293,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                           labelText: 'كلمة المرور',
                           prefixIcon: const Icon(
                             Icons.lock,
-                            color: AppColors.primary,
+                            color: const Color(0xFF00296B),
                           ),
                           suffixIcon: IconButton(
                             icon: Icon(
@@ -306,7 +309,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                           fillColor: AppColors.surface,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: AppColors.border),
+                            borderSide:
+                                const BorderSide(color: AppColors.border),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -345,7 +349,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                           child: const Text(
                             'نسيت كلمة المرور؟',
                             style: TextStyle(
-                              color: AppColors.primary,
+                              color: const Color(0xFF00296B),
                               fontSize: 13,
                               fontWeight: FontWeight.w500,
                             ),
@@ -363,8 +367,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.primary,
                             foregroundColor: Colors.white,
-                            disabledBackgroundColor: AppColors.primary
-                                .withAlpha(153),
+                            disabledBackgroundColor:
+                                AppColors.primary.withAlpha(153),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -376,7 +380,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                                   height: 18,
                                   width: 18,
                                   child: CircularProgressIndicator(
-                                    color: Colors.white,
+                                    color: const Color(0xFF00296B),
                                     strokeWidth: 2,
                                   ),
                                 )

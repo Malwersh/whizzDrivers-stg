@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 
 import '../../../design_system/app_colors.dart';
@@ -203,7 +204,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   Icon(
                     Icons.feedback_outlined,
                     size: 48,
-                    color: AppColors.primary,
+                    color: const Color(0xFF00296B),
                   ),
                   SizedBox(height: 16),
                   Text(
@@ -437,17 +438,19 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               child: ElevatedButton(
                 onPressed: _isLoading ? null : _submitFeedback,
                 style: ElevatedButton.styleFrom(
+                  foregroundColor: readableForeground(AppColors.primary),
                   backgroundColor: AppColors.primary,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(28),
                   ),
                 ),
                 child: _isLoading
-                    ? const CircularProgressIndicator(color: AppColors.white)
+                    ? const CircularProgressIndicator(
+                        color: const Color(0xFF00296B))
                     : const Text(
                         'Submit Feedback',
                         style: TextStyle(
-                          color: AppColors.white,
+                          color: const Color(0xFF00296B),
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),

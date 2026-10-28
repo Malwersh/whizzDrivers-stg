@@ -1,3 +1,4 @@
+import '../../utils/readable_colors.dart';
 // Email Registration Screen
 // Allows users to register with email and password
 // Version: 1.0
@@ -200,11 +201,13 @@ class _EmailRegistrationScreenState
       debugPrint('✅ SignUp result: ${signUpResult.isSignUpComplete}');
       debugPrint('✅ Next step: ${signUpResult.nextStep.signUpStep}');
 
-          final deliveryDetails = signUpResult.nextStep.codeDeliveryDetails;
-          final deliveryDestination = deliveryDetails?.destination;
-          final deliveryMedium = deliveryDetails?.deliveryMedium;
-          debugPrint('📨 Code delivery medium: ${deliveryMedium?.name ?? "unknown"}');
-          debugPrint('📨 Code delivery destination: ${deliveryDestination ?? "unknown"}');
+      final deliveryDetails = signUpResult.nextStep.codeDeliveryDetails;
+      final deliveryDestination = deliveryDetails?.destination;
+      final deliveryMedium = deliveryDetails?.deliveryMedium;
+      debugPrint(
+          '📨 Code delivery medium: ${deliveryMedium?.name ?? "unknown"}');
+      debugPrint(
+          '📨 Code delivery destination: ${deliveryDestination ?? "unknown"}');
 
       if (signUpResult.nextStep.signUpStep == AuthSignUpStep.confirmSignUp) {
         debugPrint('📧 Email verification required');
@@ -273,7 +276,8 @@ class _EmailRegistrationScreenState
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // Icon
-                const Icon(Icons.email_outlined, size: 80, color: AppColors.primary),
+                const Icon(Icons.email_outlined,
+                    size: 80, color: const Color(0xFF00296B)),
                 const SizedBox(height: 24),
 
                 // Title
@@ -445,6 +449,7 @@ class _EmailRegistrationScreenState
                 ElevatedButton(
                   onPressed: _isLoading ? null : _handleRegister,
                   style: ElevatedButton.styleFrom(
+                    foregroundColor: readableForeground(AppColors.primary),
                     backgroundColor: AppColors.primary,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -467,7 +472,7 @@ class _EmailRegistrationScreenState
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
-                            color: Colors.white,
+                            color: const Color(0xFF00296B),
                           ),
                         ),
                 ),
@@ -486,7 +491,7 @@ class _EmailRegistrationScreenState
                       child: const Text(
                         'تسجيل الدخول',
                         style: TextStyle(
-                          color: AppColors.primary,
+                          color: const Color(0xFF00296B),
                           fontWeight: FontWeight.bold,
                         ),
                       ),

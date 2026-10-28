@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 import '../../../design_system/app_colors.dart';
 import '../../../models/earnings.dart';
@@ -155,16 +156,18 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
                     child: ElevatedButton.icon(
                       onPressed: _addPaymentMethod,
                       style: ElevatedButton.styleFrom(
+                        foregroundColor: readableForeground(AppColors.primary),
                         backgroundColor: AppColors.primary,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(25),
                         ),
                       ),
-                      icon: const Icon(Icons.add, color: AppColors.white),
+                      icon:
+                          const Icon(Icons.add, color: const Color(0xFF00296B)),
                       label: const Text(
                         'Add Payment Method',
                         style: TextStyle(
-                          color: AppColors.white,
+                          color: const Color(0xFF00296B),
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),
@@ -373,9 +376,8 @@ class _AddPaymentMethodSheetState extends State<AddPaymentMethodSheet> {
         type: _selectedType!,
         displayName: typeData['name'],
         phoneNumber: typeData['requiresPhone'] ? _phoneController.text : null,
-        accountNumber: !typeData['requiresPhone']
-            ? _accountController.text
-            : null,
+        accountNumber:
+            !typeData['requiresPhone'] ? _accountController.text : null,
         isDefault: false,
         isActive: true,
       );
@@ -414,7 +416,6 @@ class _AddPaymentMethodSheetState extends State<AddPaymentMethodSheet> {
             ),
           ),
           const SizedBox(height: 20),
-
           ...List.generate(_paymentTypes.length, (index) {
             final type = _paymentTypes[index];
             return GestureDetector(
@@ -445,13 +446,13 @@ class _AddPaymentMethodSheetState extends State<AddPaymentMethodSheet> {
                     ),
                     const Spacer(),
                     if (_selectedType == type['type'])
-                      const Icon(Icons.check_circle, color: AppColors.primary),
+                      const Icon(Icons.check_circle,
+                          color: const Color(0xFF00296B)),
                   ],
                 ),
               ),
             );
           }),
-
           if (_selectedType != null) ...[
             const SizedBox(height: 20),
             if (_paymentTypes.firstWhere(
@@ -476,7 +477,6 @@ class _AddPaymentMethodSheetState extends State<AddPaymentMethodSheet> {
                 ),
               ),
           ],
-
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
@@ -486,17 +486,19 @@ class _AddPaymentMethodSheetState extends State<AddPaymentMethodSheet> {
                   ? _addPaymentMethod
                   : null,
               style: ElevatedButton.styleFrom(
+                foregroundColor: readableForeground(AppColors.primary),
                 backgroundColor: AppColors.primary,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(25),
                 ),
               ),
               child: _isLoading
-                  ? const CircularProgressIndicator(color: AppColors.white)
+                  ? const CircularProgressIndicator(
+                      color: const Color(0xFF00296B))
                   : const Text(
                       'Add Payment Method',
                       style: TextStyle(
-                        color: AppColors.white,
+                        color: const Color(0xFF00296B),
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),

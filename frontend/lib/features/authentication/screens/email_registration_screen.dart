@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 // Email Registration Screen
 // Allows users to register with email and password
 // Version: 1.0
@@ -114,7 +115,8 @@ class _EmailRegistrationScreenState
           '/email-verification',
           extra: {
             'email': _emailController.text.trim(),
-            'username': response['phoneUsername'] ?? _emailController.text.trim(),
+            'username':
+                response['phoneUsername'] ?? _emailController.text.trim(),
             'fromSignup': true,
             'isEmailAuth': true,
           },
@@ -139,7 +141,8 @@ class _EmailRegistrationScreenState
           '/email-verification',
           extra: {
             'email': _emailController.text.trim(),
-            'username': response['phoneUsername'] ?? _emailController.text.trim(),
+            'username':
+                response['phoneUsername'] ?? _emailController.text.trim(),
             'fromSignup': false,
             'isEmailAuth': true,
           },
@@ -171,7 +174,8 @@ class _EmailRegistrationScreenState
   /// Required because User Pool is configured for phone-only authentication
   String _generatePhoneFromEmail(String email) {
     final emailHash = email.hashCode.abs();
-    final phoneNumber = '+964${emailHash.toString().padLeft(10, '0').substring(0, 10)}';
+    final phoneNumber =
+        '+964${emailHash.toString().padLeft(10, '0').substring(0, 10)}';
     return phoneNumber;
   }
 
@@ -265,7 +269,8 @@ class _EmailRegistrationScreenState
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // Icon
-                const Icon(Icons.email_outlined, size: 80, color: AppColors.primary),
+                const Icon(Icons.email_outlined,
+                    size: 80, color: const Color(0xFF00296B)),
                 const SizedBox(height: 24),
 
                 // Title
@@ -437,6 +442,7 @@ class _EmailRegistrationScreenState
                 ElevatedButton(
                   onPressed: _isLoading ? null : _handleRegister,
                   style: ElevatedButton.styleFrom(
+                    foregroundColor: readableForeground(AppColors.primary),
                     backgroundColor: AppColors.primary,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -459,7 +465,7 @@ class _EmailRegistrationScreenState
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
-                            color: Colors.white,
+                            color: const Color(0xFF00296B),
                           ),
                         ),
                 ),
@@ -478,7 +484,7 @@ class _EmailRegistrationScreenState
                       child: const Text(
                         'تسجيل الدخول',
                         style: TextStyle(
-                          color: AppColors.primary,
+                          color: const Color(0xFF00296B),
                           fontWeight: FontWeight.bold,
                         ),
                       ),

@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -49,10 +50,10 @@ class _CustomerUnavailableDialogState extends State<CustomerUnavailableDialog> {
 
     try {
       await widget.onConfirmUnavailable();
-      
+
       if (mounted) {
         Navigator.pop(context);
-        
+
         // رسالة تأكيد
         showDialog(
           context: context,
@@ -160,6 +161,7 @@ class _CustomerUnavailableDialogState extends State<CustomerUnavailableDialog> {
                     ),
                   ),
                   style: ElevatedButton.styleFrom(
+                    foregroundColor: readableForeground(Colors.green.shade600),
                     backgroundColor: Colors.green.shade600,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -194,6 +196,7 @@ class _CustomerUnavailableDialogState extends State<CustomerUnavailableDialog> {
                 child: ElevatedButton(
                   onPressed: _isSubmitting ? null : _confirmUnavailable,
                   style: ElevatedButton.styleFrom(
+                    foregroundColor: readableForeground(Colors.orange.shade600),
                     backgroundColor: Colors.orange.shade600,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),

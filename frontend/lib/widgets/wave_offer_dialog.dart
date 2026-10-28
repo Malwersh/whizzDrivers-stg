@@ -4,7 +4,7 @@ import '../models/wave_offer.dart';
 import '../widgets/items_list_bottom_sheet.dart';
 
 /// 🌊 Wave Offer Dialog
-/// 
+///
 /// Dialog لعرض العرض الموجي مع:
 /// - معلومات الموجة (wave number, rank)
 /// - عد تنازلي دائري (30 ثانية)
@@ -62,7 +62,8 @@ class _WaveOfferDialogState extends State<WaveOfferDialog>
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() {
-          _remainingSeconds = (_animation.value * widget.offer.remainingSeconds).ceil();
+          _remainingSeconds =
+              (_animation.value * widget.offer.remainingSeconds).ceil();
           if (_remainingSeconds <= 0) {
             timer.cancel();
           }
@@ -322,7 +323,7 @@ class _WaveOfferDialogState extends State<WaveOfferDialog>
                 ),
                 child: const Icon(
                   Icons.restaurant_menu,
-                  color: Colors.white,
+                  color: const Color(0xFF00296B),
                   size: 24,
                 ),
               ),
@@ -370,9 +371,14 @@ class _WaveOfferDialogState extends State<WaveOfferDialog>
           valueColor: const Color(0xFF00296B),
         ),
         if (widget.offer.financialTerms != null) ...[
-          _buildDetailRow(Icons.payments_outlined,'النقد المطلوب من الزبون','${widget.offer.orderTotal.toStringAsFixed(3)} د.ع'),
-          _buildDetailRow(Icons.lock_outline,'الحجز من المحفظة','${widget.offer.holdRequiredAmount!.toStringAsFixed(3)} د.ع'),
-          _buildDetailRow(Icons.favorite_border,'الإكرامية ضمن إجمالي الاستحقاق','${widget.offer.tip.toStringAsFixed(3)} د.ع'),
+          _buildDetailRow(Icons.payments_outlined, 'النقد المطلوب من الزبون',
+              '${widget.offer.orderTotal.toStringAsFixed(3)} د.ع'),
+          _buildDetailRow(Icons.lock_outline, 'الحجز من المحفظة',
+              '${widget.offer.holdRequiredAmount!.toStringAsFixed(3)} د.ع'),
+          _buildDetailRow(
+              Icons.favorite_border,
+              'الإكرامية ضمن إجمالي الاستحقاق',
+              '${widget.offer.tip.toStringAsFixed(3)} د.ع'),
         ],
         const Divider(height: 24),
         _buildDetailRow(
