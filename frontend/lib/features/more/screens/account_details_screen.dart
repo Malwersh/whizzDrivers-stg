@@ -1,3 +1,4 @@
+import 'registration_details_widgets.dart';
 import 'package:flutter/material.dart';
 import '../../../models/driver_profile.dart';
 import '../../../services/driver_service.dart';
@@ -52,8 +53,9 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
 
   Future<void> _save() async {
     if (_saving || _profile == null) return;
-    if (_name.text.trim().isEmpty || _city.text.trim().isEmpty) {
-      _notice('أدخل الاسم والمدينة قبل الحفظ.');
+    if (_name.text.trim().isEmpty ||
+        (_profile!.profileSchemaVersion != 2 && _city.text.trim().isEmpty)) {
+      _notice('أكمل البيانات المطلوبة قبل الحفظ.');
       return;
     }
     setState(() => _saving = true);
@@ -88,7 +90,8 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
   }
 
   String _status(String? value) => switch (value?.toUpperCase()) {
-        'APPROVED' || 'ACTIVE' => 'معتمد',
+        'APPROVED' || 'VERIFIED' => 'معتمد',
+        'ACTIVE' => 'اكتمل الملف · بانتظار اعتماد الإدارة',
         'SUSPENDED' || 'BLOCKED' => 'موقوف',
         'REJECTED' => 'غير معتمد',
         'PENDING' || 'PENDING_PROFILE' || 'PENDING_REVIEW' => 'قيد المراجعة',
@@ -220,7 +223,9 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                                         color: Color(0xFF667085))),
                               ]),
                         ] else
-                          const Text('—', semanticsLabel: 'لا توجد تقييمات زبائن موثقة بعد'),
+                          const Text('—',
+                              semanticsLabel:
+                                  'لا توجد تقييمات زبائن موثقة بعد'),
                         ListTile(
                             contentPadding: EdgeInsets.zero,
                             title: const Text('أدائي وتفاصيل التقييم'),
@@ -234,12 +239,14 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                       _section('المعلومات الشخصية', [
                         if (_editing) ...[
                           _editField('الاسم الكامل', _name),
-                          _editField('المدينة', _city)
+                          if (_profile!.profileSchemaVersion != 2)
+                            _editField('المدينة', _city)
                         ] else ...[
                           _field('الاسم الكامل', _profile!.name,
                               Icons.person_outline),
-                          _field('المدينة', _profile!.city,
-                              Icons.location_city_outlined)
+                          if (_profile!.profileSchemaVersion != 2)
+                            _field('المدينة', _profile!.city,
+                                Icons.location_city_outlined)
                         ],
                         _field(
                             'رقم الهاتف', _profile!.phone, Icons.phone_outlined,
@@ -262,32 +269,16 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                                   _saving ? 'جارٍ الحفظ…' : 'حفظ التعديلات')),
                         ],
                       ]),
-                      _section('الحساب والوثائق', [
+                      RegistrationAreaCard(profile: _profile!),
+                      RegistrationDocumentsCard(profile: _profile!),
+                      _section('الحساب', [
                         _field('حالة الحساب', _status(_profile!.status),
                             Icons.account_circle_outlined),
-                        _field(
-                            'التحقق من الوثائق',
-                            _profile!.documentsVerified == true
-                                ? 'موثقة'
-                                : _profile!.documentsVerified == false
-                                    ? 'لم يكتمل التحقق'
-                                    : 'لا تتوفر نتيجة تحقق موثقة',
-                            Icons.verified_user_outlined),
-                        _field('رقم الهوية', _profile!.nationalId,
-                            Icons.badge_outlined),
-                        _field('رقم إجازة السوق', _profile!.licenseNumber,
-                            Icons.credit_card_outlined),
-                        _field('صلاحية إجازة السوق', _profile!.licenseExpiry,
-                            Icons.event_outlined),
                         if (_profile!.createdAt != null)
                           _field(
                               'تاريخ الانضمام',
                               '${_profile!.createdAt!.day}/${_profile!.createdAt!.month}/${_profile!.createdAt!.year}',
                               Icons.calendar_month_outlined),
-                        const Text(
-                            'اعتماد الحساب لا يعني تأكيد صلاحية جميع الوثائق.',
-                            style: TextStyle(
-                                color: Color(0xFF667085), height: 1.6)),
                       ]),
                       _section('إدارة الحساب', [
                         ListTile(

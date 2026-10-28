@@ -28,8 +28,9 @@ void main() {
     expect(find.text('—'), findsOneWidget);
     expect(find.text('0.0'), findsNothing);
     expect(find.text('PENDING'), findsNothing);
-    await tester.scrollUntilVisible(find.text('التحقق من الوثائق'), 250);
-    expect(find.text('لا تتوفر نتيجة تحقق موثقة'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('الوثائق المطلوبة'), 250);
+    expect(find.text('لم تُرفع الوثيقة'), findsWidgets);
+    expect(find.text('مرفوعة · معتمدة'), findsNothing);
     expect(tester.takeException(), isNull);
   });
   testWidgets('verified rating, responsive layout and save failure',

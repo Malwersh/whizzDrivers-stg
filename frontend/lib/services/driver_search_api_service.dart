@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'driver_location_mode.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -16,6 +18,8 @@ class DriverSearchStartException implements Exception {
 /// ✨ Driver Search API Service
 /// Handles start/stop searching via REST API
 class DriverSearchApiService {
+  static final ValueNotifier<int> confirmedStopEvents = ValueNotifier<int>(0);
+
   // API Gateway base URL for driver profile API
   static String get _baseUrl => Environment.apiBaseUrl;
 
@@ -175,10 +179,12 @@ class DriverSearchApiService {
   /// - Updates WizzDriverLiveState: isSearching=false, status='offline'
   /// - Keeps WebSocket connection active
   /// - Returns confirmation
-  static Future<Map<String, dynamic>> stopSearching() async {
+  static Future<Map<String, dynamic>> stopSearching(
+      {http.Client? client, Future<String?> Function()? tokenProvider}) async {
     try {
       // Get auth token
-      final authToken = await DriverAuthHelper.getCurrentAccessToken();
+      final authToken =
+          await (tokenProvider ?? DriverAuthHelper.getCurrentAccessToken)();
 
       if (authToken == null) {
         throw Exception('Authentication required');
@@ -187,21 +193,29 @@ class DriverSearchApiService {
       print('📡 Sending stop-searching request');
 
       // Make API call
-      final response = await http.post(
+      final response = await (client?.post ?? http.post)(
         Uri.parse('$_baseUrl/driver/stop-searching'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $authToken',
         },
         body: jsonEncode({}),
-      );
+      ).timeout(const Duration(seconds: 20));
 
       print('📥 Response status: ${response.statusCode}');
       print('📥 Response body: ${response.body}');
 
       final data = jsonDecode(response.body);
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 && data['success'] == true) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove('isSearchingForOffers');
+          await prefs.remove('searchEndTime');
+        } catch (_) {
+          /* Confirmed server result still updates mounted screens. */
+        }
+        confirmedStopEvents.value++;
         return {
           'success': true,
           'data': data,
@@ -465,7 +479,8 @@ class DriverSearchApiService {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json'
       }).timeout(const Duration(seconds: 25));
-      if (response.statusCode != 200) return null;
+      if (await DriverAuthHelper.getCurrentAccessToken() != token ||
+          response.statusCode != 200) return null;
       final body = jsonDecode(response.body);
       return body is Map<String, dynamic> &&
               [

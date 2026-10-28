@@ -7,6 +7,10 @@ class DriverTabs {
   static const wallet = 2;
   static const notifications = 4;
   static const more = 5;
+  static const bottomVisible = [home, trips, wallet, notifications];
+  static int bottomPosition(int id) => bottomVisible.contains(normalize(id))
+      ? bottomVisible.indexOf(normalize(id))
+      : 0;
   static const visible = [home, trips, wallet, notifications, more];
 
   // Old earnings-tab links now lead to More, where earnings is available.

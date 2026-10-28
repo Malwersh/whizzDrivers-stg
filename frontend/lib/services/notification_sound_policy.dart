@@ -26,7 +26,7 @@ class NotificationSoundPolicy {
     'merchantAcceptanceSeconds': 300
   };
   static DateTime? _loaded;
-  static bool _busy = false;
+  static Future<void>? _pending;
   static String? file(String key) {
     final id = _values[key];
     if (NotificationSoundFiles.installed.containsKey(id)) return '$id.wav';
@@ -72,11 +72,16 @@ class NotificationSoundPolicy {
     _channelsReady = true;
   }
 
-  static Future<void> refresh() async {
-    if (_busy ||
-        _loaded != null && DateTime.now().difference(_loaded!).inMinutes < 5)
-      return;
-    _busy = true;
+  static Future<void> refresh({bool force = false}) {
+    if (_pending != null) return _pending!;
+    if (!force &&
+        _loaded != null &&
+        DateTime.now().difference(_loaded!).inMinutes < 5)
+      return Future.value();
+    return _pending = _refresh().whenComplete(() => _pending = null);
+  }
+
+  static Future<void> _refresh() async {
     try {
       await prepareChannels();
       final prefs = await SharedPreferences.getInstance();
@@ -113,7 +118,11 @@ class NotificationSoundPolicy {
         ]) {
           if (v[k] != 'silent' &&
               !files.containsKey(v[k]) &&
-              !NotificationSoundFiles.installed.containsKey(v[k])) return;
+              !List<dynamic>.from(policy['catalog'] ?? []).any((item) =>
+                  item is Map &&
+                  item['id'] == v[k] &&
+                  item['sha256'] is String &&
+                  v[k] == 'custom_${item['sha256']}')) return;
         }
         _values = {..._values, ...v};
         await prefs.setString(
@@ -122,8 +131,6 @@ class NotificationSoundPolicy {
       }
     } catch (_) {
       /* Keep last known policy and default on first launch. */
-    } finally {
-      _busy = false;
     }
   }
 }

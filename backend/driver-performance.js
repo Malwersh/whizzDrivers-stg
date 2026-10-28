@@ -41,8 +41,9 @@ async function commitmentDecision(offer,readOrder,readHold){
 async function readPerformance({db,GetCommand,QueryCommand,driverId,tables,now=()=>Date.now(),maxPages=10,windowSize=100,rulesVersion=2}){
  if(!validId(driverId)||!tables?.offers||!tables?.orders||!tables?.holds||!tables?.drivers)throw Error('PERFORMANCE_UNAVAILABLE');
  const started=Date.now();
- const asOf=new Date(now()).toISOString(), decisions=[],commitments=[],offerEvents=[],activityAccepted=[],seen=new Set(),attempts=new Set();
+ const asOf=new Date(now()).toISOString(), decisions=[],commitments=[],offerEvents=[],activityAccepted=[],activityExpiries=[],seen=new Set(),attempts=new Set();
  const activitySince=new Date(Date.parse(asOf)-30*86400000).toISOString();let activityBoundarySeen=false,activityLegacyExcluded=0;
+ let consecutiveRejections=0,streakComplete=false;const streakEvents=[];let oldestScannedOffer=Infinity;
  let cursor,pages=0,rowsRead=0,unconfirmed=0,withdrawn=0,legacy=0,legacyInWindow=0,exhausted=false;
  do{
   const result=await db.send(new QueryCommand({TableName:tables.offers,IndexName:'driverId-sentAt-index',KeyConditionExpression:'driverId=:driver AND sentAt<=:asOf',ExpressionAttributeValues:{':driver':driverId,':asOf':asOf},ScanIndexForward:false,Limit:100,...(cursor?{ExclusiveStartKey:cursor}:{})}));
@@ -54,15 +55,16 @@ async function readPerformance({db,GetCommand,QueryCommand,driverId,tables,now=(
    }));
    for(const row of current){
     if(!row)continue;
-    if(date(row.sentAt)&&Date.parse(row.sentAt)<Date.parse(activitySince))activityBoundarySeen=true;
+    if(date(row.sentAt)){oldestScannedOffer=Math.min(oldestScannedOffer,Date.parse(row.sentAt));if(Date.parse(row.sentAt)<Date.parse(activitySince))activityBoundarySeen=true;}
     if(row.driverId!==driverId)throw Error('PERFORMANCE_UNAVAILABLE');
     if(!validId(row.offerId)||seen.has(row.offerId))continue;seen.add(row.offerId);
     const inOfferWindow=decisions.length<windowSize;
     if(row.kind!=='FINANCIAL_DRIVER_OFFER'||row.schemaVersion!==2){legacy++;if(inOfferWindow)legacyInWindow++;if(date(row.sentAt)&&Date.parse(row.sentAt)>=Date.parse(activitySince))activityLegacyExcluded++;continue;}
     if(rulesVersion>=2&&row.responseStatus==='financial_expired'){const receipt=(await db.send(new GetCommand({TableName:tables.offers,Key:{orderId:row.orderId,SK:'DISPLAY_ACK#'+row.offerId+'#'+driverId},ConsistentRead:true}))).Item;if(receipt?.offerSK===row.SK)row.deviceDisplayReceipt=receipt;}
     const observed=offerDecision(row,driverId),decision=rulesVersion===1&&observed==='EXPIRED_DELIVERED'?null:observed;
-    if(decision&&decisions.length<windowSize){decisions.push(decision);offerEvents.push({orderId:row.orderId,offerId:row.offerId,occurredAt:row.responseAt||row.expiresAt,status:decision});}
-    if(decision==='ACCEPTED'&&Date.parse(row.responseAt)>=Date.parse(activitySince)&&Date.parse(row.responseAt)<=Date.parse(asOf))activityAccepted.push(row.offerId);
+    if(decision){const at=Date.parse(decision==='EXPIRED_DELIVERED'?row.expiresAt:row.responseAt);if(Number.isFinite(at)&&at<=Date.parse(asOf))streakEvents.push({status:decision,at});}
+    if(decision&&decisions.length<windowSize){decisions.push(decision);offerEvents.push({orderId:row.orderId,offerId:row.offerId,sentAt:row.sentAt,occurredAt:row.responseAt||row.expiresAt,status:decision});}
+    if(decision==='ACCEPTED'&&Date.parse(row.responseAt)>=Date.parse(activitySince)&&Date.parse(row.responseAt)<=Date.parse(asOf)){activityAccepted.push(row.offerId);activityExpiries.push(Date.parse(row.responseAt)+30*86400000+1);}
     if(decision==='ACCEPTED'&&commitments.length<windowSize){const key=row.orderId+':'+row.financialReceipt.assignmentAttempt;if(!attempts.has(key)){attempts.add(key);commitments.push(row);}}
     if(!decision&&inOfferWindow){if(['order_assigned_to_other','financial_withdrawn','withdrawn'].includes(row.responseStatus))withdrawn++;else if(['financial_expired','expired'].includes(row.responseStatus)||Date.parse(row.expiresAt)<=Date.parse(asOf))unconfirmed++;}
    }
@@ -70,6 +72,13 @@ async function readPerformance({db,GetCommand,QueryCommand,driverId,tables,now=(
   cursor=result.LastEvaluatedKey;pages++;exhausted=!cursor;
   if(decisions.length>=windowSize&&commitments.length>=windowSize&&(rulesVersion<3||activityBoundarySeen))break;
  }while(cursor&&pages<maxPages&&Date.now()-started<15000);
+ // A later response to an older offer can reset a newer offer's rejection.
+ // At identical timestamps an acceptance wins conservatively; never invent a penalty.
+ streakEvents.sort((a,b)=>b.at-a.at||(a.status===b.status?0:a.status==='ACCEPTED'?-1:b.status==='ACCEPTED'?1:0));
+ const latestAcceptance=streakEvents.find(e=>e.status==='ACCEPTED');
+ for(const event of streakEvents){if(event.status==='ACCEPTED')break;consecutiveRejections++;}
+ // All supported financial offers expire within 15 minutes; otherwise require exhaustion.
+ streakComplete=exhausted||!!latestAcceptance&&oldestScannedOffer+900000<=latestAcceptance.at;
  const read=async(table,key)=>(await db.send(new GetCommand({TableName:table,Key:key,ConsistentRead:true}))).Item;
  const orderCache=new Map();const readOrder=id=>{if(!orderCache.has(id))orderCache.set(id,read(tables.orders,{PK:'ORDER#'+id,SK:'META'}));return orderCache.get(id);};
  const outcomes=[];
@@ -83,6 +92,7 @@ async function readPerformance({db,GetCommand,QueryCommand,driverId,tables,now=(
  const extended={};
  if(rulesVersion>=4){extended.ratingWindow=await readRatingWindow({db,GetCommand,QueryCommand,driverId,tables,readOrder,now});}
  if(rulesVersion>=3){
+  extended.ratingAllTime={average:ratingValid?rating:null,count:ratingValid?count:0,basis:'ALL_TIME_VERIFIED_CUSTOMER_RATINGS'};
   extended.ratingReview={underReview:Number.isSafeInteger(profile?.customerRatingUnderReviewCount)&&profile.customerRatingUnderReviewCount>=0?profile.customerRatingUnderReviewCount:0,excluded:Number.isSafeInteger(profile?.customerRatingExcludedCount)&&profile.customerRatingExcludedCount>=0?profile.customerRatingExcludedCount:0,basis:'ALL_TIME_VERIFIED_CUSTOMER_RATINGS',affectsEligibility:false};
   const timingEvents=[];
   for(let i=0;i<commitments.length;i+=5)timingEvents.push(...await Promise.all(commitments.slice(i,i+5).map(async offer=>{
@@ -96,7 +106,7 @@ async function readPerformance({db,GetCommand,QueryCommand,driverId,tables,now=(
   extended.onTimeRateStatus=onTime+late?(timingReview||timingExcluded||!commitmentComplete?'PROVISIONAL':'AVAILABLE'):'INSUFFICIENT_DATA';
   extended.punctuality={policyVersion:TIMING_POLICY,onTime,lateObserved:late,sampleSize:onTime+late,reviewExcluded:timingReview,unavailableExcluded:timingExcluded,excusedExcluded,inProgress:timingPending,windowSize,windowComplete:commitmentComplete,graceSeconds:300,eventBasis:'SERVER_RECORDED_DRIVER_STATUS',attribution:'OBSERVATION_ONLY_NO_AUTOMATIC_DRIVER_FAULT',affectsEligibility:false};
   const activityComplete=exhausted||activityBoundarySeen;
-  extended.activity={periodDays:30,fromInclusive:activitySince,untilInclusive:asOf,accepted:activityAccepted.length,status:!activityComplete?'PARTIAL':activityLegacyExcluded?'PROVISIONAL':'AVAILABLE',coverageComplete:activityComplete,legacyExcluded:activityLegacyExcluded,basis:'VERIFIED_ACCEPTANCES_IN_BOUNDED_OFFER_HISTORY',affectsEligibility:false};
+  extended.activity={periodDays:30,fromInclusive:activitySince,untilInclusive:asOf,nextChangeAt:activityExpiries.length?new Date(Math.min(...activityExpiries)).toISOString():null,accepted:activityAccepted.length,status:!activityComplete?'PARTIAL':activityLegacyExcluded?'PROVISIONAL':'AVAILABLE',coverageComplete:activityComplete,legacyExcluded:activityLegacyExcluded,basis:'VERIFIED_ACCEPTANCES_IN_BOUNDED_OFFER_HISTORY',affectsEligibility:false};
   extended.details={acceptance:offerEvents,completion:commitments.map((o,i)=>({orderId:o.orderId,offerId:o.offerId,attempt:o.financialReceipt.assignmentAttempt,occurredAt:o.financialReceipt.acceptedAt||o.responseAt,status:outcomes[i]})),punctuality:timingEvents,...(rulesVersion>=4?{rating:extended.ratingWindow.events}:{})};
  }
  return {...extended,schemaVersion:1,rulesVersion:rulesVersion>=4?'OBSERVED_DRIVER_PERFORMANCE_V4':rulesVersion>=3?'OBSERVED_DRIVER_PERFORMANCE_V3':rulesVersion===2?RULES:'OBSERVED_DRIVER_PERFORMANCE_V1',updatedAt:asOf,windowSize,readCoverage:{pages,rowsRead,exhausted,offerComplete,commitmentComplete,legacyExcluded:legacy},
@@ -104,6 +114,7 @@ async function readPerformance({db,GetCommand,QueryCommand,driverId,tables,now=(
   acceptance:{accepted,declined,expiredDelivered,sampleSize:decisions.length,unconfirmedExcluded:unconfirmed,withdrawnExcluded:withdrawn,basis:'VERIFIED_RESPONSES_AND_DEVICE_DISPLAYED_TIMEOUTS',windowComplete:offerComplete},
   completionRate:samples?(completed+returned)/samples:null,completionRateStatus:!samples?'INSUFFICIENT_DATA':review||!commitmentComplete?'PROVISIONAL':'AVAILABLE',
   completion:{completed,returned,driverFailures:failed,sampleSize:samples,acceptedCommitments:commitments.length,inProgress,reviewExcluded:review,noFaultExcluded:excluded,windowComplete:commitmentComplete},
+  rejections:{consecutive:consecutiveRejections,windowComplete:streakComplete||exhausted,basis:'VERIFIED_DECLINES_AND_DISPLAYED_TIMEOUTS_SINCE_LAST_ACCEPTANCE',status:streakComplete||exhausted?'AVAILABLE':'PARTIAL'},
   customerRating:rulesVersion>=4?extended.ratingWindow.average:ratingValid?rating:null,customerRatingCount:rulesVersion>=4?extended.ratingWindow.count:ratingValid?count:0,
   dispatchEffect:'EXISTING_CAPTURED_WAVE_RULES_UNCHANGED',notImplemented:rulesVersion>=3?['QUALITY_SCORE','REWARD_TIERS']:['ON_TIME_ATTRIBUTION','QUALITY_SCORE','REWARD_TIERS']};
 }

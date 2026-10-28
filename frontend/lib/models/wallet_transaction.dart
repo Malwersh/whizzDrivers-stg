@@ -128,6 +128,12 @@ class WalletTransaction {
         return 'تسوية تحصيل الطلب$order';
       case 'CASH_ADJUDICATION_SETTLED':
         return 'تسوية مراجعة التحصيل$order';
+      case 'DRIVER_PAYOUT_RESERVED':
+        return 'حجز طلب صرف نقدي';
+      case 'DRIVER_PAYOUT_RELEASED':
+        return 'إعادة مبلغ طلب الصرف إلى الرصيد المتاح';
+      case 'DRIVER_PAYOUT_PAID':
+        return 'صرف نقدي من الصندوق';
       case 'ORDER_EXCEPTION_FINANCIAL':
         return 'تعويض أو تسوية مراجعة الطلب$order';
       case 'PLATFORM_CREDIT':

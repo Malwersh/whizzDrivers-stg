@@ -372,9 +372,9 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
           ],
         ),
         child: BottomNavigationBar(
-          currentIndex: DriverTabs.position(selectedIndex),
+          currentIndex: DriverTabs.bottomPosition(selectedIndex),
           onTap: (index) {
-            final targetTab = DriverTabs.idAt(index);
+            final targetTab = DriverTabs.bottomVisible[index];
             GlobalAppStateManager().onTabNavigation(
                 DriverTabs.name(selectedIndex), DriverTabs.name(targetTab));
             ref.read(selectedTabProvider.notifier).state = targetTab;
@@ -388,9 +388,9 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
           unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.normal),
           items: const [
             BottomNavigationBarItem(
-              icon: Icon(Icons.home_outlined),
-              activeIcon: Icon(Icons.home),
-              label: 'الرئيسية',
+              icon: Icon(Icons.local_offer_outlined),
+              activeIcon: Icon(Icons.local_offer_rounded),
+              label: 'العروض',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.local_taxi_outlined),
@@ -406,11 +406,6 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
               icon: Icon(Icons.notifications_outlined),
               activeIcon: Icon(Icons.notifications),
               label: 'الإشعارات',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.more_horiz_outlined),
-              activeIcon: Icon(Icons.more_horiz),
-              label: 'المزيد',
             ),
           ],
         ),
