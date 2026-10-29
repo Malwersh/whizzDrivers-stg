@@ -1,3 +1,4 @@
+import '../../services/financial_offer_inbox.dart';
 import 'widgets/store_marker_halo.dart';
 import 'widgets/store_photo_marker.dart';
 import 'widgets/map_tools.dart';
@@ -166,6 +167,47 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   String?
       _currentRejectConfirmationOfferId; // معرّف العرض الذي يتم تأكيد رفضه حالياً
   StreamSubscription? _waveOfferSubscription;
+  StreamSubscription? _financialPushSubscription;
+  final Set<String> _pushHydrating={};
+  final Map<String,DateTime> _pushRetryAfter={};
+  bool _drainingFinancialPush=false;
+
+  Future<void> _drainFinancialPush() async {
+    if(!mounted||_drainingFinancialPush)return;
+    _drainingFinancialPush=true;
+    try{
+      final owner=await _bindOfferOwner();if(owner==null||!mounted)return;
+      for(final reference in await FinancialOfferInbox.pending(owner)){
+        if(!mounted)break;
+        await _receiveFinancialPush(reference);
+      }
+    } finally { _drainingFinancialPush=false; }
+  }
+
+  Future<void> _receiveFinancialPush(Map<String,dynamic> data)async{
+    final id=data['offerId']?.toString()??'';
+    if(id.isEmpty||_pushHydrating.contains(id)||(_pushRetryAfter[id]?.isAfter(DateTime.now())??false))return;
+    _pushHydrating.add(id);
+    final epoch=_offerAuthEpoch;
+    try{
+      final owner=await _bindOfferOwner();
+      if(owner==null||data['driverId']!=owner||!mounted||epoch!=_offerAuthEpoch)return;
+      if(_currentWaveOffers.any((o)=>o.offerId==id)){await PushNotificationsService.clearStashedFinancialOffer(data);return;}
+      final hydrated=await FinancialOfferReference.hydrate(data,owner);
+      if(!mounted||epoch!=_offerAuthEpoch||await _bindOfferOwner()!=owner)return;
+      final offer=WaveOffer.fromJson(hydrated);
+      if(!await _offerStillVisible(offer)){await PushNotificationsService.clearStashedFinancialOffer(data);return;}
+      if(!mounted||epoch!=_offerAuthEpoch)return;
+      await _handleWaveOffer(offer,fromSocket:false);
+      if(mounted&&epoch==_offerAuthEpoch&&_currentWaveOffers.any((o)=>o.offerId==id)){
+        await PushNotificationsService.clearStashedFinancialOffer(data);
+        _pushRetryAfter.remove(id);
+      }
+    } catch (_) {
+      // Keep the reference for a bounded retry until its original expiry.
+      _pushRetryAfter[id]=DateTime.now().add(const Duration(seconds:3));
+    } finally { _pushHydrating.remove(id); }
+  }
   StreamSubscription? _offerExpiredSubscription;
   StreamSubscription? _offerTakenSubscription;
   StreamSubscription<dynamic>? _offerAuthSubscription;
@@ -320,6 +362,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       if (event.eventName == 'SIGNED_OUT' || event.eventName == 'SIGNED_IN') {
         _offerAuthEpoch++;
         _performancePreview.clear();
+        _pushRetryAfter.clear();
         _offerClosureScope.bind(null);
         if (mounted)
           setState(() {
@@ -327,6 +370,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             _currentWaveOffer = null;
           });
       }
+    });
+    _financialPushSubscription=FinancialOfferInbox.events.listen((data){
+      unawaited(_receiveFinancialPush(data));
     });
     _startLocationWaves();
     _searchPositionTimer = Timer.periodic(
@@ -559,9 +605,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       print('🔌 Reconnecting WebSocket...');
 
-      final prefs = await SharedPreferences.getInstance();
-      final driverId = prefs.getString('driver_id') ??
-          '74b83488-f041-70a4-52d7-d2370b7eec06';
+      final driverId = await _bindOfferOwner();
+      if (driverId == null) throw const DriverSearchStartException('أعد تسجيل الدخول.', code: 'AUTH_REQUIRED');
       final authToken = await CognitoTokenService.getIdToken();
       if (authToken == null)
         throw const DriverSearchStartException(
@@ -667,6 +712,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   Future<void> _consumeWaveOfferFromPushTap() async {
     print('🔍 [Consume] _consumeWaveOfferFromPushTap() called');
     await _refreshOfferClosures();
+    await _drainFinancialPush();
     try {
       final data =
           await PushNotificationsService.consumeStashedWaveOfferFromTap();
@@ -701,14 +747,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
 
       if (data['type'] == 'financial_wave_offer_available') {
-        final hydrated = await FinancialOfferReference.hydrate(data, owner);
-        if (!mounted || await _bindOfferOwner() != owner) return;
-        final offer = WaveOffer.fromJson(hydrated);
-        if (!await _offerStillVisible(offer) ||
-            !mounted ||
-            _currentWaveOffers.any((o) => o.offerId == offer.offerId)) return;
-        await _handleWaveOffer(offer, fromSocket: false);
-        await PushNotificationsService.clearStashedFinancialOffer(data);
+        await _receiveFinancialPush(data);
         return;
       }
 
@@ -855,6 +894,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
     _offerExpiryCleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
+      unawaited(_drainFinancialPush());
+      _pushRetryAfter.removeWhere((_,at)=>DateTime.now().difference(at).inMinutes>2);
 
       if (_currentWaveOffers.isNotEmpty) {
         unawaited(_refreshOfferClosures());
@@ -1399,12 +1440,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       print('🔄 WebSocket disconnected - attempting reconnection...');
       print('📱 Reason: App crash, network loss, or connection timeout');
 
-      final prefs = await SharedPreferences.getInstance();
-      final driverId = prefs.getString('driver_id') ??
-          '74b83488-f041-70a4-52d7-d2370b7eec06'; // Mustafa - مركز المناذرة
-      final authToken = prefs.getString('auth_token') ??
-          prefs.getString('id_token') ??
-          'mock_token';
+      final driverId = await _bindOfferOwner();
+      if (driverId == null) throw const DriverSearchStartException('أعد تسجيل الدخول.', code: 'AUTH_REQUIRED');
+      final authToken = await CognitoTokenService.getIdToken();
+      if (authToken == null) throw const DriverSearchStartException('أعد تسجيل الدخول.', code: 'AUTH_REQUIRED');
 
       print('🚗 معرف السائق: $driverId');
 
@@ -3460,6 +3499,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     _performancePreview.clear();
     _offerClosureScope.bind(null);
     _offerAuthSubscription?.cancel();
+    _financialPushSubscription?.cancel();
     try {
       print('🧹 Disposing SparkHomeSimpleArabic resources...');
 
@@ -3964,6 +4004,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         _currentWaveOffers.add(waveOffer);
         _currentWaveOffer = waveOffer;
       });
+      ref.read(selectedTabProvider.notifier).state = 0;
       unawaited(_performancePreview.prefetch(owner));
       await DriverOfferAudio.play(waveOffer.offerId);
     } catch (_) {/* A failed scope check cannot display a stale offer. */}

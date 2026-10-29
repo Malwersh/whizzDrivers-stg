@@ -1,3 +1,4 @@
+import 'financial_offer_inbox.dart';
 import 'financial_offer_reference.dart';
 import 'driver_offer_audio.dart';
 import 'notification_sound_policy.dart';
@@ -115,7 +116,7 @@ class PushNotificationsService {
     );
 
     // Token acquisition can fail while APNs is registering. Listeners must still be installed.
-    await refreshTokenRegistration();
+    // Install message listeners before a potentially slow token-registration request.
     _tokenRetryTimer?.cancel();
     _tokenRetryTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       if (!_tokenRegistered) {
@@ -142,7 +143,7 @@ class PushNotificationsService {
         try{
           final user=await Amplify.Auth.getCurrentUser();
           final expires=DateTime.tryParse(message.data['expiresAt']?.toString()??'');
-          if(message.data['driverId']==user.userId&&expires!=null&&expires.isAfter(DateTime.now())){
+          if(message.data['type']!='financial_wave_offer_available'&&message.data['driverId']==user.userId&&expires!=null&&expires.isAfter(DateTime.now())){
             unawaited(DriverOfferAudio.play(message.data['offerId']?.toString()??''));
           }
         }catch(_){/* A signed-out device must not announce an offer. */}
@@ -192,6 +193,7 @@ class PushNotificationsService {
     });
 
     _initialized = true;
+    unawaited(refreshTokenRegistration());
   }
 
   static Future<void> refreshTokenRegistration() async {
@@ -266,6 +268,7 @@ class PushNotificationsService {
   static Future<void> _unregisterSignedOutDevice() async {
     try {
       await OfferClosureInbox.clear();
+      await FinancialOfferInbox.clear();
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_pendingWaveOfferKey);
       await prefs.remove(_pendingTabIndexKey);
@@ -285,7 +288,7 @@ class PushNotificationsService {
                   'Authorization': 'Bearer $idToken',
                   'Content-Type': 'application/json'
                 },
-                body: jsonEncode({'token': token}))
+                body: jsonEncode({'token': token, 'app': 'driver'}))
             .timeout(const Duration(seconds: 10));
       } catch (_) {
         debugPrint('Device unregistration will rely on token invalidation.');
@@ -365,7 +368,7 @@ class PushNotificationsService {
       }
       final type = (data['type'] ?? '').toString().trim();
       if (type == 'financial_wave_offer_available') {
-        final reference = FinancialOfferReference.read(data);
+        final reference = await FinancialOfferInbox.record(data);
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(_pendingWaveOfferKey, jsonEncode({...reference, 'type': type}));
         return;
@@ -483,6 +486,7 @@ class PushNotificationsService {
   }
 
   static Future<void> clearStashedFinancialOffer(Map<String, dynamic> reference) async {
+    await FinancialOfferInbox.remove(reference);
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_pendingWaveOfferKey);
     if (raw == null) return;
