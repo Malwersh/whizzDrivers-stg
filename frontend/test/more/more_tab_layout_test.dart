@@ -88,6 +88,30 @@ void main() {
     expect(tester.takeException(), isNull);
   });
   testWidgets(
+      'published legal destinations are enabled instead of legacy placeholder dialogs',
+      (tester) async {
+    await tester
+        .pumpWidget(app(MoreTab(loadProfile: () => Future.value(profile()))));
+    await tester.pumpAndSettle();
+    final local = AppLocalizations.of(tester.element(find.byType(MoreTab)))!;
+    for (final title in [
+      'سياسة الاستخدام',
+      local.termsOfService,
+      local.privacyPolicy,
+      'التعذر والعودة والسلامة'
+    ]) {
+      await tester.scrollUntilVisible(find.text(title), 250,
+          scrollable: find.byType(Scrollable).first);
+      await tester.pumpAndSettle();
+      final row = find
+          .ancestor(of: find.text(title), matching: find.byType(InkWell))
+          .first;
+      expect(tester.widget<InkWell>(row).onTap, isNotNull, reason: title);
+    }
+    expect(find.text(local.occupationalAccidentPolicy), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets(
       'unsupported menu entries cannot open dummy pages or claim actions succeeded',
       (tester) async {
     final routes = <Route<dynamic>>[];
@@ -110,9 +134,6 @@ void main() {
       local.safetyToolkit,
       local.emergencyContacts,
       local.identityVerification,
-      local.termsOfService,
-      local.privacyPolicy,
-      local.occupationalAccidentPolicy,
       local.settings,
       local.wizzOff
     ]) {

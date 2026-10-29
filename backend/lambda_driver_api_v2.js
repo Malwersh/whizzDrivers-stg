@@ -1450,6 +1450,7 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     // Ensure profile exists (migrate from old key, or create skeleton) so profile setup can proceed.
     await ensureProfileExists(username, fallbackDriverIds, accessToken);
     const existingProfile = await getDriverProfileItem(username);
+    let registrationLegal=null;
 
     console.log('📝 Update profile received body:', JSON.stringify(body, null, 2));
     
@@ -1464,6 +1465,10 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
         }
       }
       catch (_) { return {statusCode:400,headers,body:JSON.stringify({message:'اختر نوع مركبة ومحافظة ومنطقة عمل مفتوحة مرتبطة بها'})}; }
+    }
+    if(!existingProfile?.legalAcceptance && (body.profileSchemaVersion===2 || (!isProfileComplete(existingProfile) && isProfileComplete({...existingProfile,...body})))){
+      if(body.legalAccepted!==true||!body.legalAcceptance)throw Object.assign(Error('LEGAL_ACCEPTANCE_REQUIRED'),{statusCode:409});
+      registrationLegal=await require('./customer-legal-contract-344').consent(dynamodb,GetCommand,process.env.LEGAL_SETTINGS_TABLE,body.legalAcceptance,'DRIVER');
     }
     const vehicleFields=['vehicleType','registrationPaperUrl','vehiclePlate','vehicleInfo','vehicleRegistry','vehicleOperational','personalDocumentReview'];
     if (existingProfile?.vehicleRegistry && vehicleFields.some(k => body[k] !== undefined)) {
@@ -1510,6 +1515,8 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
       }
     }
 
+    if(registrationLegal){updates.push('#legalAcceptance = :legalAcceptance');expressionAttributeNames['#legalAcceptance']='legalAcceptance';expressionAttributeValues[':legalAcceptance']={schemaVersion:1,subjectId:username,acceptedAt:now,...require('./customer-legal-contract-344').pin(registrationLegal.bundle),documentSnapshot:registrationLegal.bundle};}
+
     // Always update updatedAt
     updates.push('#updatedAt = :updatedAt');
     expressionAttributeNames['#updatedAt'] = 'updatedAt';
@@ -1541,14 +1548,18 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     console.log('🔄 Attribute names:', expressionAttributeNames);
     console.log('🔄 Attribute values:', expressionAttributeValues);
 
-    const result = await dynamodb.send(new UpdateCommand({
+    const updateInput = {
       TableName: DRIVERS_TABLE,
       Key: { driverId: username },
       UpdateExpression: updateExpression,
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
-      ReturnValues: 'ALL_NEW',
-    }));
+    };
+    let result;
+    if(registrationLegal){
+      await dynamodb.send(new TransactWriteCommand({TransactItems:[registrationLegal.condition,{Update:updateInput}]}));
+      result={Attributes:(await dynamodb.send(new GetCommand({TableName:DRIVERS_TABLE,Key:{driverId:username},ConsistentRead:true}))).Item};
+    }else result=await dynamodb.send(new UpdateCommand({...updateInput,ReturnValues:'ALL_NEW'}));
 
     console.log('✅ Profile updated:', result.Attributes);
 
@@ -1562,6 +1573,7 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     };
   } catch (error) {
     console.error('Error updating profile:', error);
+    if(['LEGAL_ACCEPTANCE_REQUIRED','LEGAL_VERSION_CHANGED','LEGAL_DOCUMENTS_UNAVAILABLE'].includes(error.code||error.message))return {statusCode:error.statusCode||409,headers,body:JSON.stringify({code:error.code||error.message,message:'راجع السياسات المنشورة ووافق عليها قبل إرسال بياناتك'})};
     return {
       statusCode: 500,
       headers,

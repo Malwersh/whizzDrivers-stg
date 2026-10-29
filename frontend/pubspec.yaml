@@ -134,6 +134,8 @@ flutter:
   assets:
     - assets/fonts/
     - assets/images/
+    - assets/images/wizz-wordmark-blue.png
+    - assets/images/wizz-company-primary.png
     - assets/sounds/
     - assets/Wiz_Logo/
 
