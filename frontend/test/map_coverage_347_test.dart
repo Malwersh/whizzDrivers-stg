@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:wizz_driver/services/map_data_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -57,5 +61,31 @@ void main() {
     expect(find.textContaining('41.878'), findsNothing);
     expect(find.textContaining('-87.629'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+  test(
+      'the real map request preserves typed coverage rejection and does not misclassify server failures',
+      () async {
+    for (final status in [404, 500]) {
+      await expectLater(
+          MapDataService.fetchMapData(
+              lat: 40,
+              lng: -96,
+              tokenProvider: () async => 'current',
+              client: MockClient((r) async {
+                expect(r.headers['Authorization'], 'Bearer current');
+                return http.Response(
+                    jsonEncode({
+                      'success': false,
+                      'error': 'Region not found for coordinates'
+                    }),
+                    status);
+              })),
+          throwsA(isA<MapDataFailure>().having(
+              (e) => e.kind,
+              'kind',
+              status == 404
+                  ? MapDataFailureKind.outsideCoverage
+                  : MapDataFailureKind.server)));
+    }
   });
 }

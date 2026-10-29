@@ -334,6 +334,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   MapDataResponse? _mapData;
   bool _isLoadingMapData = false;
   bool _outsideCoverageNoticeShown = false;
+  bool _coverageSheetOpen = false;
+  bool _outsideCoverageConfirmed = false;
+  bool _checkingCoverageForStart = false;
 
   // 📊 Driver Performance Metrics
 
@@ -1114,31 +1117,74 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     }
   }
 
-  void _startSearchingForOffers() async {
-    try {
-      if (!mounted) {
-        print('⚠️ Widget not mounted, cannot start search');
-        return;
-      }
+  void _markOutsideCoverage() {
+    _stopStoresStatusAutoRefresh();
+    if (!mounted) return;
+    setState(() {
+      _outsideCoverageConfirmed = true;
+      _mapData = null; _readyPickups.clear(); ++_markerBuildVersion;
+      _markers.removeWhere((m) => m.markerId != const MarkerId('driver_location'));
+    });
+  }
 
+  Future<void> _showOutsideCoverage({bool force = false}) async {
+    if (!mounted || _coverageSheetOpen || (!force && _outsideCoverageNoticeShown)) return;
+    _outsideCoverageNoticeShown = true;
+    _coverageSheetOpen = true;
+    try {
+      await showModalBottomSheet<void>(
+        context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+        builder: (sheetContext) => OutsideCoverageSheet(latitude: _dispatchLat, longitude: _dispatchLng,
+          onRefresh: () {
+            Navigator.of(sheetContext).pop();
+            _outsideCoverageNoticeShown = false;
+            unawaited(_loadMapData());
+          }),
+      );
+    } finally { _coverageSheetOpen = false; }
+  }
+
+  Future<bool> _showCoverageFailure(Object error) async {
+    final outside = error is MapDataFailure && error.kind == MapDataFailureKind.outsideCoverage ||
+      error is DriverSearchStartException && error.code == 'OUTSIDE_SERVICE_AREA';
+    if (!outside || !mounted) return false;
+    _markOutsideCoverage();
+    await _showOutsideCoverage(force: true);
+    return true;
+  }
+
+  void _startSearchingForOffers() async {
+    if (!mounted || _checkingCoverageForStart || _isStartingOnline) return;
+    setState(() => _checkingCoverageForStart = true);
+    try {
       await DriverSearchApiService.checkSearchEligibility();
       if (!mounted) return;
-
-      print('📱 فتح نافذة اختيار وقت البحث...');
-
-      // إظهار modal اختيار الوقت أولاً مثل Spark
+      // Recheck a fresh GPS point before opening the time picker. A dismissed
+      // notice is not permission to search, and old coverage must not trap a
+      // driver who has since returned to a served area.
+      await _requireDispatchPosition();
+      if (!mounted) return;
+      final data = await MapDataService.fetchMapData(lat: _dispatchLat, lng: _dispatchLng);
+      if (!mounted) return;
+      setState(() {
+        _mapData = data;
+        _outsideCoverageConfirmed = false;
+        _outsideCoverageNoticeShown = false;
+      });
+      _updateMapMarkers();
+      _startStoresStatusAutoRefresh();
       _showSparkNowTimeSelection();
-    } catch (e, stackTrace) {
-      print('🚨 خطأ في بدء البحث: $e');
+    } catch (error) {
+      if (await _showCoverageFailure(error)) return;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e is DriverSearchStartException
-              ? e.message
-              : 'تعذر التحقق من حالة حسابك. حاول مرة أخرى.'),
+          content: Text(error is DriverSearchStartException ? error.message
+            : error is MapDataFailure ? error.toString()
+              : 'تعذر التحقق من الموقع أو حالة الحساب. أعد المحاولة.'),
         ));
       }
-
-      print('Stack trace: $stackTrace');
+    } finally {
+      if (mounted) setState(() => _checkingCoverageForStart = false);
     }
   }
 
@@ -1293,6 +1339,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       unawaited(_refreshSearchPosition());
       _startSearchTimer();
     } catch (error) {
+      if (mounted) setState(() => _onlineSheetOpacity = 1);
+      if (await _showCoverageFailure(error)) return;
       if (mounted) {
         setState(() => _onlineSheetOpacity = 1);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -2056,6 +2104,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       setState(() {
         _outsideCoverageNoticeShown = false;
+        _outsideCoverageConfirmed = false;
         _mapData = data;
         _updateMapMarkers();
         _isLoadingMapData = false;
@@ -2071,19 +2120,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       });
 
       if (e is MapDataFailure && e.kind == MapDataFailureKind.outsideCoverage) {
-        _stopStoresStatusAutoRefresh();
-        setState(() {
-          _mapData = null; _readyPickups.clear(); ++_markerBuildVersion;
-          _markers.removeWhere((m) => m.markerId != const MarkerId('driver_location'));
-        });
-        if (!mounted || _outsideCoverageNoticeShown) return;
-        _outsideCoverageNoticeShown = true;
-        final latitude = _dispatchLat, longitude = _dispatchLng;
-        await showModalBottomSheet<void>(
-          context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
-          builder: (_) => OutsideCoverageSheet(latitude: latitude, longitude: longitude,
-            onRefresh: () { Navigator.of(context).pop(); _outsideCoverageNoticeShown = false; unawaited(_loadMapData()); }),
-        );
+        _markOutsideCoverage();
+        await _showOutsideCoverage();
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -3236,7 +3274,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               );
             },
             child: GoOnlineButton(
-              busy: _isStartingOnline || _isCheckingWalletBalance,
+              busy: _isStartingOnline || _isCheckingWalletBalance || _checkingCoverageForStart,
               onPressed: _startSearchingForOffers,
             ),
           ),
@@ -3466,7 +3504,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         const LocationPermissionNotice(),
 
         // Popular offer times section
-        const DemandCard(),
+        if (_outsideCoverageConfirmed)
+          const Padding(padding: EdgeInsets.all(20), child: Text('أنت خارج مناطق الخدمة حاليًا', style: TextStyle(color: AppColors.secondary)))
+        else const DemandCard(),
       ],
     );
   }
@@ -3618,7 +3658,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   Widget _buildSparkNowModal(StateSetter setModalState) {
     final timeOptions = _timeOptions ?? <DateTime>[];
-    final busy = _isCheckingWalletBalance || _isStartingOnline;
+    final busy = _isCheckingWalletBalance || _isStartingOnline || _checkingCoverageForStart;
     final buttonShape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(14),
     );

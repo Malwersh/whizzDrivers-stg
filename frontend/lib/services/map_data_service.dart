@@ -18,10 +18,13 @@ class MapDataService {
   static Future<MapDataResponse> fetchMapData({
     required double lat,
     required double lng,
+    http.Client? client,
+    Future<String?> Function()? tokenProvider,
   }) async {
     try {
       // 🔐 Get authentication token
-      final authToken = await DriverAuthHelper.getCurrentAccessToken();
+      final authToken =
+          await (tokenProvider ?? DriverAuthHelper.getCurrentAccessToken)();
 
       if (authToken == null) {
         throw const MapDataFailure(MapDataFailureKind.authentication);
@@ -37,7 +40,7 @@ class MapDataService {
       debugPrint('🗺️ Fetching map data: $uri');
       debugPrint('🔑 Auth token length: ${authToken.length}');
 
-      final response = await http.get(
+      final response = await (client?.get ?? http.get)(
         uri,
         headers: {
           'Content-Type': 'application/json',

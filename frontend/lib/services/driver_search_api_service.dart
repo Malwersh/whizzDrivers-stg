@@ -124,7 +124,13 @@ class DriverSearchApiService {
       } else {
         return {
           'success': false,
-          'code': response.statusCode == 401 ? 'AUTH_REQUIRED' : data['code'],
+          'code': response.statusCode == 401
+              ? 'AUTH_REQUIRED'
+              : response.statusCode == 400 &&
+                      data['code'] == null &&
+                      data['message'] == 'لا يمكن تحديد المنطقة من موقعك الحالي'
+                  ? 'OUTSIDE_SERVICE_AREA'
+                  : data['code'],
           'statusCode': response.statusCode,
           'message': response.statusCode == 401
               ? 'تعذر تجديد جلسة الدخول. أعد تسجيل الدخول.'
