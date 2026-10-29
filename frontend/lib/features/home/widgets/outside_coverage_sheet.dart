@@ -85,19 +85,13 @@ class _OutsideCoverageSheetState extends State<OutsideCoverageSheet> {
                             const Text('موقعك الحالي',
                                 style: TextStyle(
                                     fontSize: 12, color: Color(0xFF526078))),
-                            if (_location != null)
-                              Padding(
-                                  padding: const EdgeInsets.only(top: 6),
-                                  child: Text(_location!,
-                                      style: const TextStyle(
-                                          color: AppColors.secondary,
-                                          fontSize: 15))),
-                            const SizedBox(height: 6),
-                            Text(
-                                '${widget.latitude.toStringAsFixed(5)}, ${widget.longitude.toStringAsFixed(5)}',
-                                textDirection: TextDirection.ltr,
-                                style: const TextStyle(
-                                    color: Color(0xFF526078), fontSize: 12)),
+                            Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Text(
+                                    _location ?? 'موقعك المحدد على الخريطة',
+                                    style: const TextStyle(
+                                        color: AppColors.secondary,
+                                        fontSize: 15))),
                           ])),
                   const SizedBox(height: 20),
                   SizedBox(

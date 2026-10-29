@@ -16,7 +16,7 @@ class MainActivity : FlutterActivity() {
      val label = try {
       @Suppress("DEPRECATION")
       val place = android.location.Geocoder(this, java.util.Locale("ar")).getFromLocation(lat, lng, 1)?.firstOrNull()
-      listOfNotNull(place?.locality, place?.adminArea, place?.countryName).filter { it.isNotBlank() }.distinct().joinToString("، ").ifBlank { null }
+      listOfNotNull(place?.locality, place?.countryName).filter { it.isNotBlank() }.distinct().joinToString("، ").ifBlank { null }
      } catch (_: Exception) { null }
      runOnUiThread { result.success(label) }
     }.start()

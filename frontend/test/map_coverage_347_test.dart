@@ -37,15 +37,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('أنت خارج مناطق الخدمة حاليًا'), findsOneWidget);
     expect(find.text('شيكاغو، الولايات المتحدة'), findsOneWidget);
-    expect(find.text('41.87810, -87.62980'), findsOneWidget);
+    expect(find.textContaining('41.878'), findsNothing);
+    expect(find.textContaining('-87.629'), findsNothing);
     expect(find.textContaining('الإنترنت'), findsNothing);
     await tester.tap(find.text('تحديث موقعي'));
     expect(refreshed, isTrue);
     tester.binding.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
   });
-  testWidgets('place lookup failure keeps truthful coordinates',
-      (tester) async {
+  testWidgets('place lookup failure never exposes coordinates', (tester) async {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         const MethodChannel('com.whizz.driver/location_label'),
         (_) async => throw PlatformException(code: 'offline'));
@@ -54,7 +54,8 @@ void main() {
             body: OutsideCoverageSheet(
                 latitude: 41.8781, longitude: -87.6298, onRefresh: () {}))));
     await tester.pumpAndSettle();
-    expect(find.text('41.87810, -87.62980'), findsOneWidget);
+    expect(find.textContaining('41.878'), findsNothing);
+    expect(find.textContaining('-87.629'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

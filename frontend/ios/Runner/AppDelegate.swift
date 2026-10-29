@@ -219,7 +219,7 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
         guard call.method == "describe", let args = call.arguments as? [String: Double], let lat = args["latitude"], let lng = args["longitude"] else { result(FlutterMethodNotImplemented); return }
         CLGeocoder().reverseGeocodeLocation(CLLocation(latitude:lat,longitude:lng),preferredLocale:Locale(identifier:"ar")) { marks, _ in
           let p=marks?.first
-          let values=[p?.locality,p?.administrativeArea,p?.country].compactMap{$0}.filter{!$0.isEmpty}
+          let values=[p?.locality,p?.country].compactMap{$0}.filter{!$0.isEmpty}
           var unique=[String]();for v in values {if !unique.contains(v){unique.append(v)}}
           DispatchQueue.main.async {result(unique.isEmpty ? nil : unique.joined(separator:"، "))}
         }
