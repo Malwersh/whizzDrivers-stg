@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+import 'map_data_failure.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -8,9 +11,9 @@ import '../config/environment.dart';
 /// Service for fetching map data from backend API
 class MapDataService {
   static const String _baseUrl = Environment.apiBaseUrl;
-  
+
   /// Fetch map data for driver's current location
-  /// 
+  ///
   /// Returns stores, regions, and hot stores info
   static Future<MapDataResponse> fetchMapData({
     required double lat,
@@ -19,9 +22,9 @@ class MapDataService {
     try {
       // 🔐 Get authentication token
       final authToken = await DriverAuthHelper.getCurrentAccessToken();
-      
+
       if (authToken == null) {
-        throw Exception('Authentication required');
+        throw const MapDataFailure(MapDataFailureKind.authentication);
       }
 
       final uri = Uri.parse('$_baseUrl/driver/map-data').replace(
@@ -43,31 +46,34 @@ class MapDataService {
       ).timeout(
         const Duration(seconds: 10),
         onTimeout: () {
-          throw Exception('Request timeout - please check your connection');
+          throw TimeoutException('Map request timed out');
         },
       );
 
       debugPrint('📥 Map data response status: ${response.statusCode}');
-      
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        debugPrint('✅ Map data received: ${data['nearby_stores']?.length ?? 0} stores');
-        return MapDataResponse.fromJson(data);
-      } else if (response.statusCode == 404) {
-        debugPrint('❌ Region not found: ${response.body}');
-        throw Exception('لا يمكن تحديد المنطقة من موقعك الحالي');
-      } else if (response.statusCode == 401 || response.statusCode == 403) {
-        debugPrint('❌ Authentication failed: ${response.body}');
-        throw Exception('فشل التحقق من الهوية - الرجاء تسجيل الدخول مجدداً');
-      } else {
-        debugPrint('❌ HTTP Error ${response.statusCode}: ${response.body}');
-        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+
+      Map<String, dynamic> data;
+      try {
+        data = Map<String, dynamic>.from(json.decode(response.body));
+      } catch (_) {
+        throw const MapDataFailure(MapDataFailureKind.server);
       }
-    } catch (e) {
-      if (e.toString().contains('لا يمكن تحديد المنطقة')) {
-        rethrow;
+      final failure = MapDataFailure.fromResponse(response.statusCode, data);
+      if (failure != null) throw failure;
+      if (data['success'] != true) {
+        throw const MapDataFailure(MapDataFailureKind.server);
       }
-      throw Exception('فشل تحميل بيانات الخريطة: $e');
+      return MapDataResponse.fromJson(data);
+    } on MapDataFailure {
+      rethrow;
+    } on TimeoutException {
+      throw const MapDataFailure(MapDataFailureKind.connection);
+    } on SocketException {
+      throw const MapDataFailure(MapDataFailureKind.connection);
+    } on http.ClientException {
+      throw const MapDataFailure(MapDataFailureKind.connection);
+    } catch (_) {
+      throw const MapDataFailure(MapDataFailureKind.server);
     }
   }
 }

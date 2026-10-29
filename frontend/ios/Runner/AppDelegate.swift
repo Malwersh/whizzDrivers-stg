@@ -3,6 +3,7 @@ import UIKit
 import GoogleMaps
 import FirebaseCore
 import AVFoundation
+import CoreLocation
 
 /// Native iOS WebSocket using URLSessionWebSocketTask
 /// This bypasses the Dart SDK bug that transforms wss:// to https://:0
@@ -39,7 +40,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "INVALID_ARGS", message: "Missing URL", details: nil))
                 return
             }
-            connect(urlString: urlString, result: result)
+            connect(urlString: urlString, headers: args["headers"] as? [String: String] ?? [:], result: result)
             
         case "send":
             guard let args = call.arguments as? [String: Any],
@@ -57,7 +58,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
         }
     }
     
-    private func connect(urlString: String, result: @escaping FlutterResult) {
+    private func connect(urlString: String, headers: [String: String], result: @escaping FlutterResult) {
         print("🔌 [Native] Connecting to: \(urlString)")
         
         guard let url = URL(string: urlString) else {
@@ -72,7 +73,9 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
         config.timeoutIntervalForResource = 300
         
         urlSession = URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue())
-        webSocketTask = urlSession?.webSocketTask(with: url)
+        var request = URLRequest(url: url)
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        webSocketTask = urlSession?.webSocketTask(with: request)
         
         receiveMessage()
         webSocketTask?.resume()
@@ -124,7 +127,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
                 case .success(let message):
                     switch message {
                     case .string(let text):
-                        print("📥 [Native] Received: \(text)")
+                        print("Native socket message received")
                         self?.eventSink?([
                             "type": "message",
                             "data": text,
@@ -211,6 +214,17 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
         }
     
     GeneratedPluginRegistrant.register(with: self)
+    if let registrar = self.registrar(forPlugin: "DriverLocationLabel") {
+      FlutterMethodChannel(name: "com.whizz.driver/location_label", binaryMessenger: registrar.messenger()).setMethodCallHandler { call, result in
+        guard call.method == "describe", let args = call.arguments as? [String: Double], let lat = args["latitude"], let lng = args["longitude"] else { result(FlutterMethodNotImplemented); return }
+        CLGeocoder().reverseGeocodeLocation(CLLocation(latitude:lat,longitude:lng),preferredLocale:Locale(identifier:"ar")) { marks, _ in
+          let p=marks?.first
+          let values=[p?.locality,p?.administrativeArea,p?.country].compactMap{$0}.filter{!$0.isEmpty}
+          var unique=[String]();for v in values {if !unique.contains(v){unique.append(v)}}
+          DispatchQueue.main.async {result(unique.isEmpty ? nil : unique.joined(separator:"، "))}
+        }
+      }
+    }
     if let soundRegistrar = self.registrar(forPlugin: "NotificationSoundFiles") { NotificationSoundFiles.register(with: soundRegistrar) }
     
     // Register Native WebSocket plugin

@@ -1,3 +1,5 @@
+import '../../services/map_data_failure.dart';
+import 'widgets/outside_coverage_sheet.dart';
 import '../../services/financial_offer_inbox.dart';
 import 'widgets/store_marker_halo.dart';
 import 'widgets/store_photo_marker.dart';
@@ -331,6 +333,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   MapDataResponse? _mapData;
   bool _isLoadingMapData = false;
+  bool _outsideCoverageNoticeShown = false;
 
   // 📊 Driver Performance Metrics
 
@@ -2052,6 +2055,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       if (!mounted) return;
 
       setState(() {
+        _outsideCoverageNoticeShown = false;
         _mapData = data;
         _updateMapMarkers();
         _isLoadingMapData = false;
@@ -2066,45 +2070,27 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         _isLoadingMapData = false;
       });
 
-      // 🔄 إعادة المحاولة مرة واحدة إذا كان الخطء Authentication
-      if (e.toString().contains('Authentication')) {
-        await Future.delayed(const Duration(seconds: 2));
-
-        if (!mounted) return;
-
-        try {
-          await _requireDispatchPosition();
-          final data = await MapDataService.fetchMapData(
-            lat: _dispatchLat,
-            lng: _dispatchLng,
-          );
-
-          if (!mounted) return;
-
-          setState(() {
-            _mapData = data;
-            _updateMapMarkers();
-          });
-
-          return; // نجحت إعادة المحاولة
-        } catch (retryError) {}
-      }
-
-      // عرض رسالة للمستخدم فقط إذا فشلت كل المحاولات
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              e.toString().contains('Authentication')
-                  ? 'خطأ في المصادقة - الرجاء إعادة تسجيل الدخول'
-                  : 'فشل تحميل المطاعم - تأكد من الاتصال بالإنترنت',
-              textAlign: TextAlign.center,
-            ),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
+      if (e is MapDataFailure && e.kind == MapDataFailureKind.outsideCoverage) {
+        _stopStoresStatusAutoRefresh();
+        setState(() {
+          _mapData = null; _readyPickups.clear(); ++_markerBuildVersion;
+          _markers.removeWhere((m) => m.markerId != const MarkerId('driver_location'));
+        });
+        if (!mounted || _outsideCoverageNoticeShown) return;
+        _outsideCoverageNoticeShown = true;
+        final latitude = _dispatchLat, longitude = _dispatchLng;
+        await showModalBottomSheet<void>(
+          context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+          builder: (_) => OutsideCoverageSheet(latitude: latitude, longitude: longitude,
+            onRefresh: () { Navigator.of(context).pop(); _outsideCoverageNoticeShown = false; unawaited(_loadMapData()); }),
         );
+        return;
       }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e is MapDataFailure ? e.toString() : 'تعذر تحديد موقعك. تحقق من إذن الموقع وGPS ثم أعد المحاولة.'),
+        backgroundColor: AppColors.secondary,
+        action: SnackBarAction(label: 'إعادة المحاولة', textColor: Colors.white, onPressed: () => unawaited(_loadMapData())),
+      ));
     }
   }
 
