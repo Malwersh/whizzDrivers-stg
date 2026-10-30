@@ -147,7 +147,7 @@ class WalletFundingService {
     if (_pending == null) {
       if (payload == null) throw Exception('لا توجد محاولة شحن لاستئنافها');
       if (payload['amount'] is! int ||
-          payload['amount'] < 25000 ||
+          payload['amount'] < 1 ||
           payload['amount'] > 9007199254740991 ||
           payload['method'] != 'MANUAL_VERIFICATION' ||
           payload['configVersion'] is! int ||
@@ -180,6 +180,7 @@ class WalletFundingService {
             'METHOD_DISABLED',
             'INVALID_REQUEST',
             'INVALID_FUNDING_REQUEST',
+            'FUNDING_AMOUNT_LIMIT',
             'ACCOUNT_CLOSING'
           }.contains(e.code)) {
         await _clearPending();

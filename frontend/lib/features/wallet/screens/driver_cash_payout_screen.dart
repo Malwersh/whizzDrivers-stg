@@ -116,7 +116,8 @@ class _DriverCashPayoutScreenState extends State<DriverCashPayoutScreen> {
   @override
   Widget build(BuildContext context) {
     final eligibility = data?['eligibility'] as Map?,
-        eligible = eligibility?['eligibleIqd'] as num?;
+        eligible = eligibility?['eligibleIqd'] as num?,
+        perRequest = data?['limits']?['maximumPerRequestIqd'] as num?;
     final blockedReason = DriverCashPayoutService.blockedReason(eligibility);
     return Scaffold(
         backgroundColor: const Color(0xFFF5F7FB),
@@ -158,6 +159,9 @@ class _DriverCashPayoutScreenState extends State<DriverCashPayoutScreen> {
                                   fontWeight: FontWeight.w600,
                                   color: AppColors.secondary)),
                           const SizedBox(height: 8),
+                          if (perRequest != null)
+                            Text(
+                                'الحد الأعلى لطلب الصرف: ${money(perRequest)}'),
                           const Text(
                               'يشمل التعويضات والشحن المثبت غير المستخدم. أجرة التوصيل التي احتفظت بها نقدًا لا تُصرف مرة أخرى.',
                               style: TextStyle(fontSize: 13, height: 1.6)),
@@ -222,9 +226,17 @@ class _DriverCashPayoutScreenState extends State<DriverCashPayoutScreen> {
                                   ? null
                                   : () {
                                       final n = parseAmount(amount.text);
-                                      if (n == null || n <= 0 || n > eligible) {
-                                        setState(() => error =
-                                            'أدخل مبلغًا صحيحًا لا يتجاوز الرصيد المؤهل.');
+                                      if (n == null ||
+                                          n <= 0 ||
+                                          n > eligible ||
+                                          (perRequest != null &&
+                                              n > perRequest)) {
+                                        setState(() => error = perRequest !=
+                                                    null &&
+                                                n != null &&
+                                                n > perRequest
+                                            ? 'الحد الأعلى لطلب الصرف ${money(perRequest)}.'
+                                            : 'أدخل مبلغًا صحيحًا لا يتجاوز الرصيد المؤهل.');
                                         return;
                                       }
                                       _act({

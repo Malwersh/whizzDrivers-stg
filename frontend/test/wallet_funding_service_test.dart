@@ -21,6 +21,10 @@ Map<String, dynamic> saved(String sub, Map<String, dynamic> body,
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
+  test('first definitive amount-limit rejection releases draft for correction',()async{
+    final api=WalletFundingService(token:()async=>token('driverA'),client:MockClient((req)async=>http.Response(jsonEncode({'error':{'code':'FUNDING_AMOUNT_LIMIT','message':'Funding limits changed'}}),409)));
+    await api.initialize();await expectLater(api.submit(payload:{...payload('driverA'),'amount':15000}),throwsA(isA<FundingRejected>()));expect(api.hasPending,isFalse);
+  });
   test(
       'lost response survives reopening and retries the exact immutable request',
       () async {

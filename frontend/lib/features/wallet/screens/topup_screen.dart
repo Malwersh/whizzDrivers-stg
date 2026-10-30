@@ -154,13 +154,14 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
         RegExp('[٠-٩]'), (m) => '${m[0]!.codeUnitAt(0) - 0x660}');
     final amount = int.tryParse(normalized);
     if (amount == null ||
-        amount < 25000 ||
+        amount < (_config?['manual']?['minimum'] as int? ?? 25000) ||
+        amount > (_config?['manual']?['maximum'] as int? ?? 9007199254740991) ||
         _receipt == null ||
         _reference.text.trim().isEmpty ||
         _config == null ||
         _config?['manual']?['enabled'] != true) {
-      setState(() =>
-          _error = 'الحد الأدنى 25,000 د.ع. أدخل مرجع التحويل وارفع الوصل');
+      setState(() => _error =
+          'الحد الأدنى ${_config?['manual']?['minimum'] ?? 25000} د.ع${_config?['manual']?['maximum'] != null ? ' والحد الأعلى ${_config!['manual']['maximum']} د.ع' : ''}. أدخل مرجع التحويل وارفع الوصل');
       return;
     }
     await _sendPending(payload: {
@@ -170,6 +171,8 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
       'transferReference': _reference.text.trim().replaceAllMapped(
           RegExp('[٠-٩]'), (m) => '${m[0]!.codeUnitAt(0) - 0x660}'),
       'configVersion': _config!['version'],
+      if (_config!['limitsVersion'] is int)
+        'limitsVersion': _config!['limitsVersion'],
     });
   }
 
@@ -262,8 +265,8 @@ class _TopupScreenState extends State<TopupScreen> with WidgetsBindingObserver {
                           icon: const Icon(Icons.copy),
                           onPressed: () => Clipboard.setData(
                               ClipboardData(text: '${manual['phone']}')))),
-                  const Text(
-                      'حوّل مبلغاً لا يقل عن 25,000 دينار إلى الرقم الموضح، ثم ارفع الوصل وأرسل الطلب. صورة الوصل لا تضيف الرصيد قبل المراجعة.'),
+                  Text(
+                      'الحد الأدنى للشحن ${_config?['manual']?['minimum'] ?? 25000} د.ع${_config?['manual']?['maximum'] != null ? ' والحد الأعلى ${_config!['manual']['maximum']} د.ع' : ''}. حوّل إلى الرقم الموضح وارفع الوصل. يُضاف الرصيد بعد مراجعة الإدارة.'),
                   TextField(
                     controller: _amount,
                     keyboardType: TextInputType.number,
