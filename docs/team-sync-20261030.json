@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-30",
+  "branch": "integration/team-sync-20261030",
+  "snapshot": "7e9c2436690e2afc306fbfdd3268a446f66238a3",
+  "incoming": "1b88770c711c71d16585b759494af6b3cc3e6bbb",
+  "resolutions": [
+    {
+      "repo": "whizzDrivers-stg",
+      "file": "frontend/lib/features/more/more_tab.dart",
+      "resolution": "ours",
+      "reason": "Current verified-rating validation, modern More UI and newer vehicle/region profile schema supersede older equivalents; incoming cash-review Material fix retained by auto-merge."
+    },
+    {
+      "repo": "whizzDrivers-stg",
+      "file": "frontend/lib/models/driver_profile.dart",
+      "resolution": "ours",
+      "reason": "Current verified-rating validation, modern More UI and newer vehicle/region profile schema supersede older equivalents; incoming cash-review Material fix retained by auto-merge."
+    },
+    {
+      "repo": "whizzDrivers-stg",
+      "file": "frontend/test/ratings/profile_rating_test.dart",
+      "resolution": "ours",
+      "reason": "Current verified-rating validation, modern More UI and newer vehicle/region profile schema supersede older equivalents; incoming cash-review Material fix retained by auto-merge."
+    }
+  ],
+  "notes": [
+    "Upstream history is merged without force/reset. Current inventory/quote/permissions guards retained where upstream versions are older.",
+    "New customer regional carousel and GIF playback preserved alongside published home-layout callbacks.",
+    "Cloud deployments and financial/content records are unchanged by this GitHub synchronization."
+  ],
+  "tests": {
+    "flutterPassed": 16,
+    "iosSimulatorBuild": true
+  },
+  "githubReviewTarget": "staging-main",
+  "githubPullBranch": "feature/malwersh/bootstrap",
+  "integrationBackupBranch": "integration/team-sync-20261030",
+  "androidDeviceAcceptance": "Not run as part of this source synchronization",
+  "reviewedHistoricalBranches": "Older bootstrap/rating branches were compared; superseded quote, profile, product and region implementations were not allowed to replace current safeguards."
+}

@@ -95,7 +95,7 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             const Text(
-                              'تفاصيل الأرباح',
+                              'أجرة التوصيل',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
@@ -112,45 +112,76 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                           ],
                         ),
                         const SizedBox(height: 16),
-                        
+
                         // خط فاصل
                         Divider(color: Colors.grey[300]),
                         const SizedBox(height: 8),
-                        
+
                         // التفاصيل
-                        _buildEarningsRow('الأساسي', '${offer.deliveryFee.toStringAsFixed(0)} ${offer.currency}'),
-                        
+                        _buildEarningsRow(
+                            offer.financialTerms != null
+                                ? 'أجرة التوصيل الأساسية'
+                                : 'الأساسي',
+                            '${offer.deliveryFee.toStringAsFixed(0)} ${offer.currency}'),
+
                         // المكافأة (البونص) - إذا وُجدت
                         if (offer.bonusAmount > 0)
                           _buildEarningsRow(
-                            'المكافأة (البونص)', 
+                            'المكافأة (البونص)',
                             '+${offer.bonusAmount.toStringAsFixed(0)} ${offer.currency}',
                           ),
-                        
+
                         // الإكرامية - دائماً تُعرض
                         _buildEarningsRow(
-                          'الإكرامية (tip)', 
-                          offer.tip > 0 
+                          'الإكرامية (tip)',
+                          offer.tip > 0
                               ? '+${offer.tip.toStringAsFixed(0)} ${offer.currency}'
                               : '0 ${offer.currency}',
                         ),
-                        
+
                         const SizedBox(height: 8),
                         Divider(color: Colors.grey[300]),
                         const SizedBox(height: 8),
-                        
+
                         // الإجمالي
                         _buildEarningsRow(
-                          'الإجمالي',
+                          'إجمالي مستحقاتك',
                           '${offer.estimatedEarnings.toStringAsFixed(0)} ${offer.currency}',
                           isBold: true,
                         ),
                       ],
                     ),
                   ),
-                  
+
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                        color: Colors.grey[50],
+                        borderRadius: BorderRadius.circular(12)),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('التحصيل والمحفظة',
+                              style: TextStyle(
+                                  fontSize: 16, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 12),
+                          _buildEarningsRow('النقد المطلوب تحصيله من الزبون',
+                              '${offer.orderTotal.toStringAsFixed(0)} د.ع'),
+                          if (offer.driverCashRetained != null)
+                            _buildEarningsRow('تحتفظ به نقدًا من التحصيل',
+                                '${offer.driverCashRetained!.toStringAsFixed(0)} د.ع'),
+                          if ((offer.walletCreditAfterDelivery ?? 0) > 0)
+                            _buildEarningsRow('يُضاف لمحفظتك بعد التسليم',
+                                '${offer.walletCreditAfterDelivery!.toStringAsFixed(0)} د.ع'),
+                          if (offer.financialTerms != null &&
+                              offer.holdRequiredAmount != null)
+                            _buildEarningsRow('يُحجز من المحفظة عند القبول',
+                                '${offer.holdRequiredAmount!.toStringAsFixed(0)} د.ع'),
+                        ]),
+                  ),
                   const SizedBox(height: 24),
-                  
+
                   // Trip details
                   const Text(
                     'تفاصيل الرحلة',
@@ -160,9 +191,9 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                       color: Colors.black,
                     ),
                   ),
-                  
+
                   const SizedBox(height: 16),
-                  
+
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -196,17 +227,22 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                             GestureDetector(
                               onTap: () => _showOrderItemsBottomSheet(context),
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 6),
                                 decoration: BoxDecoration(
                                   color: AppColors.primary.withOpacity(0.1),
                                   borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+                                  border: Border.all(
+                                      color:
+                                          AppColors.primary.withOpacity(0.3)),
                                 ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Text(
-                                      '${offer.itemsCount} عنصر',
+                                      offer.items.isEmpty
+                                          ? 'تفاصيل العناصر غير متاحة'
+                                          : '${offer.itemsCount} قطعة',
                                       style: const TextStyle(
                                         fontSize: 14,
                                         color: AppColors.secondary,
@@ -228,26 +264,29 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                       ],
                     ),
                   ),
-                  
+
                   const SizedBox(height: 24),
-                  
+
                   // Pickup location
-                _buildLocationSection(
-                  'استلام من المتجر',
-                  offer.restaurantName,
-                  offer.restaurantAddress,
-                  Icons.store,
-                  AppColors.secondary,
-                ),                  const SizedBox(height: 20),
-                  
+                  _buildLocationSection(
+                    'استلام من المتجر',
+                    offer.restaurantName,
+                    offer.restaurantAddress,
+                    Icons.store,
+                    AppColors.secondary,
+                  ),
+                  const SizedBox(height: 20),
+
                   // Delivery location
-                _buildLocationSection(
-                  'توصيل إلى',
-                  offer.customerName,
-                  offer.customerAddress,
-                  Icons.person,
-                  AppColors.accent,
-                ),                  // Special instructions
+                  _buildLocationSection(
+                    'توصيل إلى',
+                    offer.customerName.isEmpty ? 'الزبون' : offer.customerName,
+                    offer.customerAddress.isEmpty
+                        ? 'عنوان التوصيل غير متاح'
+                        : offer.customerAddress,
+                    Icons.person,
+                    AppColors.accent,
+                  ), // Special instructions
                   if (offer.specialInstructions != null) ...[
                     const SizedBox(height: 24),
                     const Text(
@@ -276,7 +315,7 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                       ),
                     ),
                   ],
-                  
+
                   const SizedBox(height: 40),
                 ],
               ),
@@ -324,9 +363,9 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                     ),
                   ),
                 ),
-                
+
                 const SizedBox(width: 12),
-                
+
                 // Accept button
                 Expanded(
                   child: SizedBox(
@@ -334,9 +373,9 @@ class OrderDetailsBottomSheet extends StatelessWidget {
                     child: ElevatedButton(
                       onPressed: canAccept
                           ? () {
-                        Navigator.pop(context);
-                        onAccept();
-                      }
+                              Navigator.pop(context);
+                              onAccept();
+                            }
                           : null,
                       style: ElevatedButton.styleFrom(
                         backgroundColor:
@@ -368,7 +407,8 @@ class OrderDetailsBottomSheet extends StatelessWidget {
     );
   }
 
-  Widget _buildEarningsRow(String label, String amount, {String? subtext, bool isBold = false}) {
+  Widget _buildEarningsRow(String label, String amount,
+      {String? subtext, bool isBold = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(
@@ -409,7 +449,8 @@ class OrderDetailsBottomSheet extends StatelessWidget {
     );
   }
 
-  Widget _buildLocationSection(String title, String name, String address, IconData icon, Color color) {
+  Widget _buildLocationSection(
+      String title, String name, String address, IconData icon, Color color) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -432,17 +473,18 @@ class OrderDetailsBottomSheet extends StatelessWidget {
           child: Row(
             children: [
               // Use customer avatar for delivery section, regular icon for pickup
-              title == 'توصيل إلى' 
-                ? _buildCustomerAvatar(name)
-                : Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: color.withOpacity(0.1),
-                      shape: BoxShape.circle,
+              title == 'توصيل إلى'
+                  ? _buildCustomerAvatar(name)
+                  : Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: color.withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: _buildLocationIcon(
+                          icon, color, title == 'استلام من المتجر'),
                     ),
-                    child: _buildLocationIcon(icon, color, title == 'استلام من المتجر'),
-                  ),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
@@ -489,8 +531,10 @@ class OrderDetailsBottomSheet extends StatelessWidget {
 
   // دالة بناء أيقونة الموقع مع صورة المطعم
   Widget _buildLocationIcon(IconData icon, Color color, bool isStore) {
-    print('🖼️ OrderDetailsBottomSheet - isStore: $isStore, Restaurant Image URL: ${offer.restaurantImageUrl}');
-    print('🖼️ OrderDetailsBottomSheet - Restaurant Name: ${offer.restaurantName}');
+    print(
+        '🖼️ OrderDetailsBottomSheet - isStore: $isStore, Restaurant Image URL: ${offer.restaurantImageUrl}');
+    print(
+        '🖼️ OrderDetailsBottomSheet - Restaurant Name: ${offer.restaurantName}');
     if (isStore && offer.restaurantImageUrl != null) {
       return ClipOval(
         child: Image.network(
@@ -510,8 +554,9 @@ class OrderDetailsBottomSheet extends StatelessWidget {
   /// Builds a circular avatar with the first letter of the customer name
   Widget _buildCustomerAvatar(String customerName) {
     // Get first letter of customer name, fallback to 'ز' if empty
-    String firstLetter = customerName.isNotEmpty ? customerName[0].toUpperCase() : 'ز';
-    
+    String firstLetter =
+        customerName.isNotEmpty ? customerName[0].toUpperCase() : 'ز';
+
     return Container(
       width: 48,
       height: 48,
@@ -583,7 +628,8 @@ class OrderItemsBottomSheet extends StatelessWidget {
                 ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: AppColors.primary.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
@@ -726,7 +772,7 @@ class OrderItemsBottomSheet extends StatelessWidget {
                   const SizedBox(height: 4),
                 ],
                 Text(
-                  '${(item.price / 1000).toStringAsFixed(0)} $currency',
+                  'سعر القطعة: ${item.price.toStringAsFixed(item.price == item.price.roundToDouble() ? 0 : 3)} $currency',
                   style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
@@ -744,8 +790,9 @@ class OrderItemsBottomSheet extends StatelessWidget {
   /// Builds a circular avatar with the first letter of the customer name
   Widget _buildCustomerAvatar(String customerName) {
     // Get first letter of customer name, fallback to 'ز' if empty
-    String firstLetter = customerName.isNotEmpty ? customerName[0].toUpperCase() : 'ز';
-    
+    String firstLetter =
+        customerName.isNotEmpty ? customerName[0].toUpperCase() : 'ز';
+
     return Container(
       width: 48,
       height: 48,

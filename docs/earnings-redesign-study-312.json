@@ -1,0 +1,40 @@
+{
+  "task": 312,
+  "screen": "Driver earnings",
+  "approach": "One period screen with inline daily selection and linked trip receipts",
+  "sources": [
+    "https://sparkdriverapp-walmart.helpdocs.io/l/en/article/m42drex3qj-navigating-the-earnings-tab",
+    "https://help.uber.com/driving-and-delivering/article/viewing-trip-earnings?nodeId=9fbc207b-2837-4428-8133-2d2df7b3b17d",
+    "https://www.lyft.com/hub/posts/clearer-earnings-tab?locale_language=en&locale_region=US"
+  ],
+  "features": [
+    "Today/week/month/custom range",
+    "Confirmed total after complete cursor traversal",
+    "Base and tip breakdown only if reconciled",
+    "Weekly chart selects day inline",
+    "Existing authorized trip details",
+    "Loading/empty/error/retry states",
+    "Lazy tab activation",
+    "Whole-load authentication identity guard"
+  ],
+  "excludedFromEarnings": [
+    "Customer COD collection",
+    "Wallet topups/transfers/withdrawals",
+    "Unconfirmed legacy amounts"
+  ],
+  "limitations": [
+    "Completed-trip entitlement summary, not expense-adjusted net profit or bank payout balance",
+    "No bonus or compensation invented",
+    "No backend changes or financial writes"
+  ],
+  "validation": {
+    "flutterTests": 12,
+    "passed": true,
+    "analyzerErrors": 0,
+    "analyzerWarnings": 0,
+    "analyzerStyleInfo": 6,
+    "liveReadOnlyReport": "earnings-verification-312.json"
+  },
+  "buildNumber": 251,
+  "deviceInstall": "installed successfully on existing test iPhone"
+}

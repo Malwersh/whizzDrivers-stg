@@ -1,3 +1,4 @@
+import '../services/driver_location_mode.dart';
 // Driver Location Provider - Enhanced for Spark-style interface
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -45,7 +46,7 @@ class DriverLocationNotifier extends StateNotifier<DriverLocation?> {
   /// Get current position and update location
   Future<void> getCurrentLocation() async {
     try {
-      if (Environment.useTestLocation) {
+      if (await DriverLocationMode.usesFixedTestPosition()) {
         updateLocation(Environment.testLatitude, Environment.testLongitude);
         return;
       }
@@ -65,6 +66,7 @@ class DriverLocationNotifier extends StateNotifier<DriverLocation?> {
 }
 
 /// Provider for driver location
-final driverLocationProvider = StateNotifierProvider<DriverLocationNotifier, DriverLocation?>((ref) {
+final driverLocationProvider =
+    StateNotifierProvider<DriverLocationNotifier, DriverLocation?>((ref) {
   return DriverLocationNotifier();
 });

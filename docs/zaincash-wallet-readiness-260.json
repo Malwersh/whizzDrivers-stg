@@ -1,0 +1,9 @@
+{
+  "status": "CORE_IMPLEMENTED_STAGING_PUBLISHED_HUMAN_AND_PROVIDER_ACCEPTANCE_PENDING",
+  "centralEvidence": "../whizzCentralPlatform-stg/docs/zaincash-readiness-260.json",
+  "build": 264,
+  "flutterTestsPassed": 22,
+  "uatAndLiveEnabled": false,
+  "actualProviderCheckoutPending": true,
+  "cashCustomerOrdersUnchanged": true
+}

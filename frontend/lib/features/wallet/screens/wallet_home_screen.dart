@@ -1,3 +1,10 @@
+import '../../../services/driver_cash_payout_service.dart';
+import 'driver_cash_payout_screen.dart';
+import '../../../services/wallet_transfer_service.dart';
+import '../../../widgets/wallet_transfer_gate.dart';
+import 'dart:async';
+import '../../../services/push_notifications_service.dart';
+import 'wallet_transfer_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../design_system/app_colors.dart';
@@ -25,7 +32,30 @@ class WalletHomeScreen extends ConsumerStatefulWidget {
   ConsumerState<WalletHomeScreen> createState() => _WalletHomeScreenState();
 }
 
-class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
+class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen>
+    with WidgetsBindingObserver {
+  StreamSubscription<dynamic>? _fundingEvents;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _fundingEvents = PushNotificationsService.walletEvents.listen((_) {
+      if (mounted) _refresh();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) _refresh();
+  }
+
+  @override
+  void dispose() {
+    _fundingEvents?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
   Future<void> _refresh() async {
     ref.read(walletRefreshProvider.notifier).state++;
     try {
@@ -102,9 +132,46 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
   ) {
     return ListView(
       children: [
-        BalanceCard(balance: balance),
+        WalletTransferGate(
+            check: () async =>
+                (await WalletTransferService()
+                    .call('context'))['canTransfer'] ==
+                true,
+            builder: (enabled) => BalanceCard(
+                onFundingReturn: _refresh,
+                balance: balance,
+                onTransfer: enabled
+                    ? () async {
+                        await Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const WalletTransferScreen()));
+                        if (mounted) await _refresh();
+                      }
+                    : null)),
         const SizedBox(height: 16),
         MinimumBalanceIndicator(balance: balance),
+        WalletTransferGate(
+          check: () async =>
+              (await DriverCashPayoutService()
+                  .call({'action': 'CAPABILITIES'}))['enabled'] ==
+              true,
+          builder: (enabled) => enabled
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.secondary,
+                        minimumSize: const Size.fromHeight(44)),
+                    onPressed: () async {
+                      await Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const DriverCashPayoutScreen()));
+                      if (mounted) await _refresh();
+                    },
+                    icon: const Icon(Icons.payments_outlined, size: 20),
+                    label: const Text('صرف رصيد المحفظة'),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
 
         // Transaction History Header
         Padding(

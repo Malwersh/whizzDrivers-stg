@@ -75,27 +75,25 @@ class DriverService {
         if (data == null) return null;
 
         // Map API response to DriverProfile JSON schema
-        final vehicleType =
-          data['vehicleType'] ??
-          (data['vehicleInfo'] != null
-            ? data['vehicleInfo']['type'] ?? ''
-            : '');
+        final vehicleType = data['vehicleType'] ??
+            (data['vehicleInfo'] != null
+                ? data['vehicleInfo']['type'] ?? ''
+                : '');
 
         final firstName = (data['firstName'] ?? '').toString().trim();
         final lastName = (data['lastName'] ?? '').toString().trim();
-        final synthesizedFullName = [firstName, lastName]
-          .where((p) => p.isNotEmpty)
-          .join(' ');
+        final synthesizedFullName =
+            [firstName, lastName].where((p) => p.isNotEmpty).join(' ');
 
         final nameValue =
-          (data['name'] ?? data['fullName'] ?? synthesizedFullName)
-            ?.toString()
-            .trim();
+            (data['name'] ?? data['fullName'] ?? synthesizedFullName)
+                ?.toString()
+                .trim();
         final mapped = {
+          ...data, // Preserve real document, timestamp and statistics fields.
           'id': data['driverId'] ?? '',
-          'name': (nameValue != null && nameValue.isNotEmpty)
-            ? nameValue
-            : null,
+          'name':
+              (nameValue != null && nameValue.isNotEmpty) ? nameValue : null,
           'phone': data['phoneNumber'] ?? data['phone'] ?? '',
           'email': data['email'] ?? '',
           'city': data['city'] ?? '',
@@ -104,8 +102,11 @@ class DriverService {
           'national_id': data['nationalId'] ?? '',
           'status': data['status'] ?? 'PENDING_PROFILE',
           'join_date': _joinDateIsoFromCreatedAt(data['createdAt']),
-          'total_deliveries': 0,
-          'rating': 0.0,
+          'total_deliveries':
+              data['totalDeliveries'] ?? data['total_deliveries'] ?? 0,
+          'rating': data['rating'] ?? 0.0,
+          'customerRating': data['customerRating'],
+          'customerRatingCount': data['customerRatingCount'],
           'isVerified': data['isVerified'] == true,
           'preferred_language': 'ar',
           'profile_photo': data['profilePhoto'],
@@ -149,7 +150,8 @@ class DriverService {
   }
 
   // Update driver profile exclusively via AWS when enabled
-  static Future<bool> updateDriverProfile(DriverProfile profile) async {
+  static Future<bool> updateDriverProfile(DriverProfile profile,
+      {bool accountBasicsOnly = false}) async {
     try {
       if (AppConfig.enableAWSIntegration) {
         debugPrint('DriverService (AWS): Updating driver profile via HTTP API');
@@ -164,11 +166,12 @@ class DriverService {
 
         final ok = await AWSDynamoDBService().updateDriverProfile({
           'name': profile.name,
-          'city': profile.city,
-          'vehicleType': profile.vehicleType,
-          'licenseNumber': profile.licenseNumber,
-          'nationalId': profile.nationalId,
-          'profilePhoto': profile.profilePhoto,
+          if (profile.profileSchemaVersion != 2) 'city': profile.city,
+          if (!accountBasicsOnly) ...{
+            'vehicleType': profile.vehicleType,
+            'licenseNumber': profile.licenseNumber,
+            'nationalId': profile.nationalId,
+          },
         });
         return ok;
       }
@@ -726,10 +729,12 @@ class DriverService {
   // Unassign active order (driver can unassign before pickup)
   static Future<Map<String, dynamic>> unassignActiveOrder(String reason) async {
     try {
-      debugPrint('DriverService: Unassigning active order with reason: $reason');
+      debugPrint(
+          'DriverService: Unassigning active order with reason: $reason');
 
       // Get auth token
-      final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+      final session =
+          await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
       if (!session.isSignedIn) {
         throw Exception('Not signed in');
       }
@@ -748,7 +753,8 @@ class DriverService {
         }),
       );
 
-      debugPrint('DriverService: Unassign response status: ${response.statusCode}');
+      debugPrint(
+          'DriverService: Unassign response status: ${response.statusCode}');
       debugPrint('DriverService: Unassign response body: ${response.body}');
 
       if (response.statusCode == 200) {

@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -42,16 +43,22 @@ class _NewPhoneVerificationScreenState
   @override
   void initState() {
     super.initState();
-    _normalizedPhone = IdentityNormalizer.normalizeIraqiPhone(widget.phoneNumber);
+    _normalizedPhone =
+        IdentityNormalizer.normalizeIraqiPhone(widget.phoneNumber);
     // Start initial cooldown when arriving (simulate first send already done)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(verificationThrottleProvider.notifier).recordSend(_normalizedPhone);
+      ref
+          .read(verificationThrottleProvider.notifier)
+          .recordSend(_normalizedPhone);
       _logger.logSendCode(
         identity: _normalizedPhone,
         channel: 'phone',
         purpose: 'signup',
         attempt: 1,
-        cooldownSeconds: ref.read(verificationThrottleProvider).identityState(_normalizedPhone).currentCooldownDuration,
+        cooldownSeconds: ref
+            .read(verificationThrottleProvider)
+            .identityState(_normalizedPhone)
+            .currentCooldownDuration,
       );
     });
   }
@@ -62,7 +69,8 @@ class _NewPhoneVerificationScreenState
   }
 
   bool get _isCodeComplete {
-    return _currentCode.length == 6 && _currentCode.replaceAll(RegExp(r'\D'), '').length == 6;
+    return _currentCode.length == 6 &&
+        _currentCode.replaceAll(RegExp(r'\D'), '').length == 6;
   }
 
   void _onCodeChanged(String code) {
@@ -94,7 +102,7 @@ class _NewPhoneVerificationScreenState
 
     try {
       Map<String, dynamic> result;
-      
+
       if (AppConfig.enableAWSIntegration) {
         // Use CognitoAuthService for AWS integration
         final cognitoService = ref.read(cognitoAuthServiceProvider);
@@ -229,7 +237,7 @@ class _NewPhoneVerificationScreenState
             }
           }
         }
-        
+
         _logger.logVerifyCode(
           identity: _normalizedPhone,
           channel: 'phone',
@@ -238,7 +246,8 @@ class _NewPhoneVerificationScreenState
         );
       } else {
         setState(() {
-          _errorMessage = result['message'] ?? 'الرمز غير صحيح، يرجى المحاولة مرة أخرى';
+          _errorMessage =
+              result['message'] ?? 'الرمز غير صحيح، يرجى المحاولة مرة أخرى';
           _resetCode();
         });
         _logger.logVerifyCode(
@@ -276,61 +285,99 @@ class _NewPhoneVerificationScreenState
   Future<void> _resendCode() async {
     if (_resendCooldown > 0 || _isResending) return;
 
-    setState(() { _isResending = true; _errorMessage = null; });
+    setState(() {
+      _isResending = true;
+      _errorMessage = null;
+    });
 
     final notifier = ref.read(verificationThrottleProvider.notifier);
     notifier.setSending(_normalizedPhone, true);
 
     try {
       Map<String, dynamic> result;
-      
+
       if (AppConfig.enableAWSIntegration) {
         // Use CognitoAuthService for AWS integration
         final cognitoService = ref.read(cognitoAuthServiceProvider);
-        result = await cognitoService.resendConfirmationCode(username: widget.phoneNumber);
+        result = await cognitoService.resendConfirmationCode(
+            username: widget.phoneNumber);
       } else {
         // Use NewAuthService for mock mode
         final authService = ref.read(newAuthServiceProvider);
-        result = await authService.sendPhoneVerification(phone: widget.phoneNumber); // Use original phone format
+        result = await authService.sendPhoneVerification(
+            phone: widget.phoneNumber); // Use original phone format
       }
-      
+
       if (result['success'] == true) {
         notifier.recordSend(_normalizedPhone);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم إرسال رمز التحقق الجديد'), backgroundColor: Colors.green));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('تم إرسال رمز التحقق الجديد'),
+              backgroundColor: Colors.green));
         }
         _logger.logSendCode(
           identity: _normalizedPhone,
           channel: 'phone',
           purpose: 'signup',
-          attempt: ref.read(verificationThrottleProvider).identityState(_normalizedPhone).recentSends.length,
-          cooldownSeconds: ref.read(verificationThrottleProvider).identityState(_normalizedPhone).currentCooldownDuration,
+          attempt: ref
+              .read(verificationThrottleProvider)
+              .identityState(_normalizedPhone)
+              .recentSends
+              .length,
+          cooldownSeconds: ref
+              .read(verificationThrottleProvider)
+              .identityState(_normalizedPhone)
+              .currentCooldownDuration,
         );
       } else {
-        final msg = result['message'] ?? 'فشل في إرسال الرمز. يرجى المحاولة مرة أخرى';
+        final msg =
+            result['message'] ?? 'فشل في إرسال الرمز. يرجى المحاولة مرة أخرى';
         notifier.setError(_normalizedPhone, msg);
-        setState(() { _errorMessage = msg; });
+        setState(() {
+          _errorMessage = msg;
+        });
         _logger.logSendCode(
           identity: _normalizedPhone,
           channel: 'phone',
           purpose: 'signup',
-          attempt: ref.read(verificationThrottleProvider).identityState(_normalizedPhone).recentSends.length + 1,
-          cooldownSeconds: ref.read(verificationThrottleProvider).identityState(_normalizedPhone).currentCooldownDuration,
+          attempt: ref
+                  .read(verificationThrottleProvider)
+                  .identityState(_normalizedPhone)
+                  .recentSends
+                  .length +
+              1,
+          cooldownSeconds: ref
+              .read(verificationThrottleProvider)
+              .identityState(_normalizedPhone)
+              .currentCooldownDuration,
         );
       }
     } catch (e) {
       notifier.setError(_normalizedPhone, 'حدث خطأ أثناء إرسال الرمز');
-      setState(() { _errorMessage = 'حدث خطأ أثناء إرسال الرمز'; });
+      setState(() {
+        _errorMessage = 'حدث خطأ أثناء إرسال الرمز';
+      });
       _logger.logSendCode(
         identity: _normalizedPhone,
         channel: 'phone',
         purpose: 'signup',
-        attempt: ref.read(verificationThrottleProvider).identityState(_normalizedPhone).recentSends.length + 1,
-        cooldownSeconds: ref.read(verificationThrottleProvider).identityState(_normalizedPhone).currentCooldownDuration,
+        attempt: ref
+                .read(verificationThrottleProvider)
+                .identityState(_normalizedPhone)
+                .recentSends
+                .length +
+            1,
+        cooldownSeconds: ref
+            .read(verificationThrottleProvider)
+            .identityState(_normalizedPhone)
+            .currentCooldownDuration,
       );
     } finally {
       notifier.setSending(_normalizedPhone, false);
-      if (mounted) setState(() { _isResending = false; });
+      if (mounted)
+        setState(() {
+          _isResending = false;
+        });
     }
   }
 
@@ -415,7 +462,7 @@ class _NewPhoneVerificationScreenState
               style: const TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
-                color: AppColors.primary,
+                color: const Color(0xFF00296B),
               ),
             ),
 
@@ -434,7 +481,8 @@ class _NewPhoneVerificationScreenState
             // Error message
             if (_errorMessage != null)
               Container(
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                padding:
+                    const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
                 decoration: BoxDecoration(
                   color: Colors.red.withAlpha(26),
                   borderRadius: BorderRadius.circular(8),
@@ -458,8 +506,10 @@ class _NewPhoneVerificationScreenState
               child: ElevatedButton(
                 onPressed: _isLoading || !_isCodeComplete ? null : _verifyCode,
                 style: ElevatedButton.styleFrom(
+                  foregroundColor: readableForeground(AppColors.primary),
                   backgroundColor: AppColors.primary,
-                  disabledBackgroundColor: AppColors.textSecondary.withAlpha(77),
+                  disabledBackgroundColor:
+                      AppColors.textSecondary.withAlpha(77),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -471,13 +521,14 @@ class _NewPhoneVerificationScreenState
                         height: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(AppColors.white),
+                          valueColor:
+                              AlwaysStoppedAnimation<Color>(AppColors.white),
                         ),
                       )
                     : const Text(
                         'تأكيد',
                         style: TextStyle(
-                          color: AppColors.white,
+                          color: const Color(0xFF00296B),
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),

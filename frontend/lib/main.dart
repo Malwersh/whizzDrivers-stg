@@ -23,7 +23,6 @@ import 'services/push_notifications_service.dart';
 
 import 'features/more/more_tab.dart';
 import 'features/trips/trips_screen.dart';
-import 'features/earnings/earnings_screen.dart';
 import 'features/notifications/notifications_screen.dart';
 import 'features/wallet/screens/wallet_home_screen.dart';
 import 'features/wallet/providers/wallet_provider.dart';
@@ -328,7 +327,7 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
   @override
   Widget build(BuildContext context) {
     final appState = ref.watch(appControllerProvider);
-    final selectedIndex = ref.watch(selectedTabProvider);
+    final selectedIndex = DriverTabs.normalize(ref.watch(selectedTabProvider));
 
     // Keep all tabs alive so the Home/search screen isn't disposed when switching tabs.
     // This prevents wave offers + search state from being reset/restarted unexpectedly.
@@ -336,7 +335,6 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
       const SparkHomeSimpleArabic(),
       TripsScreen(isActive: selectedIndex == 1),
       const WalletHomeScreen(),
-      const EarningsScreen(),
       const NotificationsScreen(),
       MoreTab(
         isDashing: appState.driverStatus != DriverStatus.offline,
@@ -348,7 +346,7 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
       body: Stack(
         children: [
           IndexedStack(
-            index: selectedIndex,
+            index: DriverTabs.position(selectedIndex),
             children: tabs,
           ),
           if (appState.isLoading)
@@ -374,33 +372,12 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
           ],
         ),
         child: BottomNavigationBar(
-          currentIndex: selectedIndex,
+          currentIndex: DriverTabs.bottomPosition(selectedIndex),
           onTap: (index) {
-            final previousIndex = selectedIndex;
-            final fromTab = previousIndex == 0
-                ? 'home'
-                : previousIndex == 1
-                    ? 'trips'
-                    : previousIndex == 2
-                        ? 'wallet'
-                        : previousIndex == 3
-                            ? 'earnings'
-                            : previousIndex == 4
-                                ? 'notifications'
-                                : 'more';
-            final toTab = index == 0
-                ? 'home'
-                : index == 1
-                    ? 'trips'
-                    : index == 2
-                        ? 'wallet'
-                        : index == 3
-                            ? 'earnings'
-                            : index == 4
-                                ? 'notifications'
-                                : 'more';
-            GlobalAppStateManager().onTabNavigation(fromTab, toTab);
-            ref.read(selectedTabProvider.notifier).state = index;
+            final targetTab = DriverTabs.bottomVisible[index];
+            GlobalAppStateManager().onTabNavigation(
+                DriverTabs.name(selectedIndex), DriverTabs.name(targetTab));
+            ref.read(selectedTabProvider.notifier).state = targetTab;
           },
           backgroundColor: Colors.transparent,
           elevation: 0,
@@ -411,9 +388,9 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
           unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.normal),
           items: const [
             BottomNavigationBarItem(
-              icon: Icon(Icons.home_outlined),
-              activeIcon: Icon(Icons.home),
-              label: 'الرئيسية',
+              icon: Icon(Icons.local_offer_outlined),
+              activeIcon: Icon(Icons.local_offer_rounded),
+              label: 'العروض',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.local_taxi_outlined),
@@ -426,19 +403,9 @@ class _DriverHomePageState extends riverpod.ConsumerState<DriverHomePage> {
               label: 'المحفظة',
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.attach_money_outlined),
-              activeIcon: Icon(Icons.attach_money),
-              label: 'أرباحي',
-            ),
-            BottomNavigationBarItem(
               icon: Icon(Icons.notifications_outlined),
               activeIcon: Icon(Icons.notifications),
               label: 'الإشعارات',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.more_horiz_outlined),
-              activeIcon: Icon(Icons.more_horiz),
-              label: 'المزيد',
             ),
           ],
         ),

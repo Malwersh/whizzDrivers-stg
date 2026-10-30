@@ -1,8 +1,11 @@
+import 'package:go_router/go_router.dart';
+import '../services/order_persistence_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/active_order_model.dart';
 import '../../../providers/riverpod/active_order_provider.dart';
-import '../widgets/order_status_timeline.dart';
+import '../widgets/active_trip_summary.dart';
+import '../widgets/driver_unassign_flow.dart';
 import 'heading_to_restaurant_screen.dart';
 import 'at_restaurant_screen.dart';
 import 'heading_to_customer_screen.dart';
@@ -34,9 +37,28 @@ class _DriverActiveOrderOverviewScreenState
 
   Future<void> _loadOrder() async {
     if (widget.orderId != null) {
-      await ref.read(activeOrderProvider.notifier).fetchOrderById(widget.orderId!);
+      await ref
+          .read(activeOrderProvider.notifier)
+          .fetchOrderById(widget.orderId!);
     } else {
       await ref.read(activeOrderProvider.notifier).fetchActiveOrder();
+    }
+    if (!mounted) return;
+    final state = ref.read(activeOrderProvider);
+    if (state.error == null &&
+        (state.order == null ||
+            ['returned', 'delivered', 'completed', 'cancelled']
+                .contains(state.order!.status))) {
+      if (state.order != null) {
+        await OrderPersistenceService.clearActiveOrder(
+            expectedOrderId: state.order!.orderId);
+        if (!mounted) return;
+        if (ref.read(activeOrderProvider).order?.orderId ==
+            state.order!.orderId) {
+          ref.read(activeOrderProvider.notifier).clearOrder();
+        }
+      }
+      if (mounted) context.go('/');
     }
   }
 
@@ -45,6 +67,7 @@ class _DriverActiveOrderOverviewScreenState
     return WillPopScope(
       onWillPop: () async => false, // منع الرجوع للخلف
       child: Scaffold(
+        backgroundColor: TripStyle.background,
         appBar: AppBar(
           automaticallyImplyLeading: false, // إخفاء زر الرجوع
           title: const Text(
@@ -52,13 +75,14 @@ class _DriverActiveOrderOverviewScreenState
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
           centerTitle: true,
-          backgroundColor: Colors.blue,
+          backgroundColor: Colors.white,
+          foregroundColor: TripStyle.ink,
           elevation: 0,
         ),
         body: Builder(
           builder: (context) {
             final orderState = ref.watch(activeOrderProvider);
-            
+
             // Loading
             if (orderState.isLoading) {
               return const Center(
@@ -109,7 +133,9 @@ class _DriverActiveOrderOverviewScreenState
                       ),
                       const SizedBox(height: 24),
                       ElevatedButton.icon(
-                        onPressed: () => ref.read(activeOrderProvider.notifier).fetchActiveOrder(),
+                        onPressed: () => ref
+                            .read(activeOrderProvider.notifier)
+                            .fetchActiveOrder(),
                         icon: const Icon(Icons.refresh),
                         label: const Text('إعادة المحاولة'),
                         style: ElevatedButton.styleFrom(
@@ -166,176 +192,20 @@ class _DriverActiveOrderOverviewScreenState
             final order = orderState.order!;
 
             return RefreshIndicator(
-              onRefresh: () => ref.read(activeOrderProvider.notifier).fetchActiveOrder(),
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Restaurant Header
-                    _buildRestaurantHeader(order),
-
-                    const SizedBox(height: 16),
-
-                    // Order Info Card
-                    _buildOrderInfoCard(order),
-
-                    const SizedBox(height: 16),
-
-                    // Status Timeline
-                    OrderStatusTimeline(currentStatus: order.status),
-
-                    const SizedBox(height: 24),
-
-                    // Main Action Button
-                    _buildMainActionButton(context, order, orderState.isLoading),
-                  ],
-                ),
+              onRefresh: () =>
+                  ref.read(activeOrderProvider.notifier).fetchActiveOrder(),
+              child: ActiveTripSummary(
+                order: order,
+                action: _buildMainActionButton(
+                    context, order, orderState.isLoading),
+                onUnassign: orderState.isLoading
+                    ? null
+                    : () => showDriverUnassignFlow(context, ref, order),
               ),
             );
           },
         ),
       ),
-    );
-  }
-
-  Widget _buildRestaurantHeader(ActiveOrder order) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(16),
-        leading: Container(
-          width: 50,
-          height: 50,
-          decoration: BoxDecoration(
-            color: Colors.orange[100],
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(
-            Icons.restaurant,
-            size: 28,
-            color: Colors.orange[800],
-          ),
-        ),
-        title: Text(
-          order.restaurantName,
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(
-            'رقم الطلب: #${order.orderNumber ?? order.shortOrderId}',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[600],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOrderInfoCard(ActiveOrder order) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'معلومات الطلب',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.grey[800],
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildInfoRow(
-              Icons.person,
-              'العميل',
-              order.customerName,
-            ),
-            const Divider(height: 24),
-            _buildInfoRow(
-              Icons.attach_money,
-              'القيمة',
-              '${(order.total ?? order.totalAmount).toStringAsFixed(2)} دينار',
-            ),
-            const Divider(height: 24),
-            _buildInfoRow(
-              Icons.payment,
-              'طريقة الدفع',
-              order.isCashPayment ? '💵 نقدي' : '💳 بطاقة',
-              valueColor:
-                  order.isCashPayment ? Colors.green[700] : Colors.blue[700],
-            ),
-            if (order.isCashPayment) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.amber[50],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.amber[200]!),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, color: Colors.amber[700]),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'تذكير: استلم المبلغ من العميل عند التسليم',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.amber[900],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInfoRow(
-    IconData icon,
-    String label,
-    String value, {
-    Color? valueColor,
-  }) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: Colors.grey[600]),
-        const SizedBox(width: 8),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.grey[600],
-          ),
-        ),
-        const Spacer(),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.bold,
-            color: valueColor ?? Colors.grey[800],
-          ),
-        ),
-      ],
     );
   }
 
@@ -346,15 +216,16 @@ class _DriverActiveOrderOverviewScreenState
   ) {
     String buttonText;
     VoidCallback? onPressed;
-    Color buttonColor = Colors.blue;
 
     switch (order.status) {
       case 'accepted':
-      case 'assigned':  // الحالة التي تأتي من API عند قبول الطلب
+      case 'assigned': // الحالة التي تأتي من API عند قبول الطلب
         buttonText = 'انطلق إلى المطعم';
         onPressed = () async {
           // ✅ تحديث حالة الطلب في قاعدة البيانات أولاً
-          final success = await ref.read(activeOrderProvider.notifier).startHeadingToStore();
+          final success = await ref
+              .read(activeOrderProvider.notifier)
+              .startHeadingToStore();
           if (success && mounted) {
             // ثم الانتقال لشاشة التوجه
             Navigator.of(context).push(
@@ -374,7 +245,12 @@ class _DriverActiveOrderOverviewScreenState
             );
           }
         };
-        buttonColor = Colors.green;
+        break;
+
+      case 'heading_to_store':
+        buttonText = 'متابعة الطريق إلى المطعم';
+        onPressed = () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => HeadingToRestaurantScreen(order: order)));
         break;
 
       case 'at_store':
@@ -387,9 +263,9 @@ class _DriverActiveOrderOverviewScreenState
             ),
           );
         };
-        buttonColor = Colors.orange;
         break;
 
+      case 'heading_to_customer':
       case 'picked_up':
         buttonText = 'انطلق إلى العميل';
         onPressed = () {
@@ -399,7 +275,6 @@ class _DriverActiveOrderOverviewScreenState
             ),
           );
         };
-        buttonColor = Colors.green;
         break;
 
       case 'at_customer':
@@ -412,36 +287,27 @@ class _DriverActiveOrderOverviewScreenState
             ),
           );
         };
-        buttonColor = Colors.purple;
         break;
 
       case 'delivered':
       case 'completed':
         buttonText = 'تم التسليم ✓';
         onPressed = null;
-        buttonColor = Colors.green;
         break;
 
       default:
-        // الحالة الافتراضية - بداية الرحلة
-        buttonText = 'بدء التوصيل';
-        onPressed = () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => HeadingToRestaurantScreen(order: order),
-            ),
-          );
-        };
-        buttonColor = Colors.blue;
+        buttonText = 'حدّث حالة الطلب للمتابعة';
+        onPressed = _loadOrder;
     }
 
     return ElevatedButton(
       onPressed: isLoading ? null : onPressed,
       style: ElevatedButton.styleFrom(
-        backgroundColor: buttonColor,
+        backgroundColor: TripStyle.yellow,
+        foregroundColor: TripStyle.ink,
         minimumSize: const Size(double.infinity, 54),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(100),
+          borderRadius: BorderRadius.circular(16),
         ),
         elevation: 2,
       ),
@@ -459,7 +325,7 @@ class _DriverActiveOrderOverviewScreenState
               style: const TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.bold,
-                color: Colors.white,
+                color: TripStyle.ink,
               ),
             ),
     );

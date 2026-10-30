@@ -1,6 +1,11 @@
+import '../../legal/application_legal_screen.dart';
+import '../../providers/riverpod/tab_provider.dart';
+import 'screens/offer_sound_test_sheet.dart';
+import 'screens/driver_quality_screen.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -16,11 +21,10 @@ import '../../screens/wizz_logo_demo.dart';
 import '../../screens/wizz_logo_showcase.dart';
 import '../../services/driver_service.dart';
 import '../../utils/app_icon_generator.dart';
-import '../../widgets/gradient_border_container.dart';
-import '../../widgets/wizz_logo.dart';
-import '../earnings/earnings_tab.dart';
-// import '../wallet/screens/wallet_screen.dart'; // TODO: إضافة المحفظة الجديدة
+import '../earnings/earnings_screen.dart';
+import '../wallet/screens/wallet_home_screen.dart';
 import 'screens/account_details_screen.dart';
+import 'screens/driver_performance_screen.dart';
 import 'screens/app_settings_screen.dart';
 import 'screens/delivery_equipment_screen.dart';
 import 'screens/emergency_contacts_screen.dart';
@@ -32,8 +36,13 @@ import 'screens/vehicle_info_screen.dart';
 class MoreTab extends ConsumerStatefulWidget {
   final ValueChanged<bool>? onDashStatusChanged;
   final bool isDashing;
+  final Future<DriverProfile?> Function()? loadProfile;
 
-  const MoreTab({super.key, this.onDashStatusChanged, this.isDashing = false});
+  const MoreTab(
+      {super.key,
+      this.onDashStatusChanged,
+      this.isDashing = false,
+      this.loadProfile});
 
   @override
   ConsumerState<MoreTab> createState() => _MoreTabState();
@@ -57,7 +66,9 @@ class _MoreTabState extends ConsumerState<MoreTab> {
           _isLoading = true;
         });
       }
-      final profile = await DriverService.getDriverProfile();
+      final profile = await (widget.loadProfile?.call() ??
+          DriverService.getDriverProfile());
+      if (!mounted) return;
       setState(() {
         _driverProfile = profile;
         _isLoading = false;
@@ -73,13 +84,14 @@ class _MoreTabState extends ConsumerState<MoreTab> {
         }
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load profile: ${e.toString()}'),
+          const SnackBar(
+            content: Text('تعذر تحميل بيانات الحساب. حاول التحديث مجددًا.'),
             backgroundColor: AppColors.error,
           ),
         );
@@ -92,37 +104,32 @@ class _MoreTabState extends ConsumerState<MoreTab> {
     final localizations = AppLocalizations.of(context)!;
 
     return Scaffold(
-      backgroundColor: HadhirColors.background,
+      backgroundColor: const Color(0xFFF4F6FA),
       appBar: AppBar(
         elevation: 0,
-        backgroundColor: HadhirColors.primary,
+        backgroundColor: Colors.white,
         scrolledUnderElevation: 0,
-        surfaceTintColor: HadhirColors.primary,
-        shadowColor: HadhirColors.primary.withOpacity(0.3),
+        surfaceTintColor: Colors.transparent,
         systemOverlayStyle: SystemUiOverlayStyle.dark,
-        toolbarHeight: 50, // Thin app bar
-        automaticallyImplyLeading: false, // Remove back button
+        automaticallyImplyLeading: false,
+        leading: IconButton(
+            tooltip: 'العودة إلى الخريطة',
+            onPressed: () =>
+                ref.read(selectedTabProvider.notifier).state = DriverTabs.home,
+            icon:
+                const Icon(Icons.arrow_back_ios_new, color: Color(0xFF00296B))),
         centerTitle: true,
-        titleSpacing: 20,
-        leading: const Padding(
-          padding: EdgeInsets.all(8.0),
-          child: WizzLogoCompact(size: 32),
-        ),
-        title: const Text(
-          'المزيد',
-          style: TextStyle(
-            color: HadhirColors.textPrimary,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(
-            height: 0.5,
-            color: Colors.black.withOpacity(0.1),
-          ),
-        ),
+        title: const Text('المزيد',
+            style: TextStyle(
+                color: Color(0xFF00296B),
+                fontSize: 20,
+                fontWeight: FontWeight.w700)),
+        actions: [
+          IconButton(
+              tooltip: 'تحديث الحساب',
+              onPressed: _isLoading ? null : _loadDriverProfile,
+              icon: const Icon(Icons.refresh_rounded, color: Color(0xFF00296B)))
+        ],
       ),
       body: _isLoading
           ? const Center(
@@ -132,622 +139,664 @@ class _MoreTabState extends ConsumerState<MoreTab> {
                 ), // Green loading indicator
               ),
             )
-          : SingleChildScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildProfileHeader(),
-                  _buildSection(
-                    title: localizations.driverTools,
-                    items: [
-                      _buildMenuItem(
-                        icon: Icons.account_balance_wallet,
-                        title: localizations.wallet,
-                        subtitle: localizations.viewEarningsAndBalance,
-                        iconColor:
-                            HadhirColors.secondary, // Green accent for wallet
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const Center(child: Text('المحفظة قيد البناء')),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.attach_money_outlined,
-                        title: localizations.earnings,
-                        subtitle: localizations.viewDailyAndWeeklyEarnings,
-                        iconColor:
-                            HadhirColors.secondary, // Green accent for earnings
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const EarningsTab(),
-                            ),
-                          );
-                        },
-                      ),
-                      if (widget.isDashing)
+          : RefreshIndicator(
+              onRefresh: _loadDriverProfile,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildProfileHeader(),
+                    _buildSection(
+                      title: localizations.driverTools,
+                      items: [
                         _buildMenuItem(
-                          icon: Icons.stop_circle,
-                          title: localizations.wizzOff,
-                          subtitle: localizations.endYourDashSession,
-                          onTap: _showStopDashDialog,
-                        ),
-                    ],
-                  ),
-                  _buildSection(
-                    title: localizations.account,
-                    items: [
-                      _buildMenuItem(
-                        icon: Icons.payment_outlined,
-                        title: localizations.paymentMethods,
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  const PaymentMethodsScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.account_balance_wallet_outlined,
-                        title: localizations.instantPay,
-                        subtitle: localizations.getPaidInstantly,
-                        iconColor: HadhirColors
-                            .secondary, // Green accent for instant pay
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Instant payment setup would open here',
+                          icon: Icons.account_balance_wallet,
+                          title: localizations.wallet,
+                          subtitle: localizations.viewEarningsAndBalance,
+                          iconColor:
+                              HadhirColors.secondary, // Green accent for wallet
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const WalletHomeScreen(),
                               ),
-                              backgroundColor:
-                                  HadhirColors.secondary, // Green snackbar
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                  _buildSection(
-                    title: localizations.vehicleAndEquipment,
-                    items: [
-                      _buildMenuItem(
-                        icon: Icons.directions_car_outlined,
-                        title: localizations.vehicleInformation,
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const VehicleInfoScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.local_shipping_outlined,
-                        title: localizations.deliveryEquipment,
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  const DeliveryEquipmentScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.phone_android_outlined,
-                        title: localizations.phoneNumber,
-                        subtitle: _driverProfile?.phone ?? localizations.notSet,
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          _showPhoneUpdateDialog();
-                        },
-                      ),
-                    ],
-                  ),
-                  _buildSection(
-                    title: localizations.safety,
-                    items: [
-                      _buildMenuItem(
-                        icon: Icons.security_outlined,
-                        title: localizations.safetyToolkit,
-                        iconColor:
-                            HadhirColors.secondary, // Green accent for safety
-                        onTap: () {
-                          _showSafetyDialog();
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.contact_emergency_outlined,
-                        title: localizations.emergencyContacts,
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  const EmergencyContactsScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.verified_user_outlined,
-                        title: localizations.identityVerification,
-                        subtitle: _getVerificationStatus(),
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  const IdentityVerificationScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                  _buildSection(
-                    title: localizations.support,
-                    items: [
-                      _buildMenuItem(
-                        icon: Icons.chat_bubble_outline,
-                        title: localizations.liveChat,
-                        subtitle: localizations.chatWithOurSupportTeam,
-                        iconColor:
-                            HadhirColors.secondary, // Green accent for support
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  const LiveChatScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                  _buildSection(
-                    title: localizations.legal,
-                    items: [
-                      _buildMenuItem(
-                        icon: Icons.description_outlined,
-                        title: localizations.termsOfService,
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          _showTermsDialog();
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.privacy_tip_outlined,
-                        title: localizations.privacyPolicy,
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          _showPrivacyDialog();
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.gavel_outlined,
-                        title: localizations.occupationalAccidentPolicy,
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          _showAccidentPolicyDialog();
-                        },
-                      ),
-                    ],
-                  ),
-                  _buildSection(
-                    title: localizations.app,
-                    items: [
-                      _buildMenuItem(
-                        icon: Icons.settings_outlined,
-                        title: localizations.settings,
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const AppSettingsScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.palette_outlined,
-                        title: 'Arctic Cyan Colors',
-                        subtitle: 'View the new color system',
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const ArcticCyanDemo(),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.apps_rounded,
-                        title: 'App Icon Preview',
-                        subtitle: 'View Wizz logo app icons',
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const AppIconPreview(),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.auto_awesome,
-                        title: 'WIZZ Logo Demo',
-                        subtitle: 'Complete logo showcase',
-                        iconColor:
-                            HadhirColors.brandingOrange, // Orange for demo
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const WizzLogoDemo(),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.photo_library,
-                        title: 'WIZZ Logo Showcase',
-                        subtitle: 'Official SVG & App Icons',
-                        iconColor: HadhirColors
-                            .secondary, // Green for official showcase
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const WizzLogoShowcase(),
-                            ),
-                          );
-                        },
-                      ),
-                      _buildMenuItem(
-                        icon: Icons.info_outline,
-                        title: localizations.about,
-                        subtitle: '${localizations.version} 1.0.0',
-                        iconColor:
-                            HadhirColors.darkGray, // Dark gray for sub-items
-                        onTap: () {
-                          _showAboutDialog();
-                        },
-                      ),
-                    ],
-                  ),
-                  Container(
-                    margin: const EdgeInsets.all(16),
-                    width: double.infinity,
-                    height: 56,
-                    child: GradientBorderContainer(
-                      borderWidth: 2,
-                      borderRadius: 28,
-                      child: OutlinedButton(
-                        onPressed: () {
-                          _showSignOutDialog();
-                        },
-                        style: OutlinedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          side: BorderSide.none,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(28),
-                          ),
+                            );
+                          },
                         ),
-                        child: Text(
-                          localizations.signOut,
-                          style: const TextStyle(
-                            color: HadhirColors.darkGray,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        _buildMenuItem(
+                          icon: Icons.attach_money_outlined,
+                          title: localizations.earnings,
+                          subtitle: localizations.viewDailyAndWeeklyEarnings,
+                          iconColor: HadhirColors
+                              .secondary, // Green accent for earnings
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const EarningsScreen(),
+                              ),
+                            );
+                          },
                         ),
-                      ),
+                        _buildMenuItem(
+                          icon: Icons.insights_outlined,
+                          title: 'أدائي',
+                          subtitle: 'معدلات الأداء وتقييمات العملاء',
+                          onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const DriverPerformanceScreen(),
+                              )),
+                        ),
+                        _buildMenuItem(
+                          icon: Icons.shield_outlined,
+                          title: 'الجودة والسلامة',
+                          subtitle: 'الملاحظات والاعتراضات',
+                          onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const DriverQualityScreen())),
+                        ),
+                        if (widget.isDashing)
+                          _buildMenuItem(
+                            icon: Icons.stop_circle,
+                            title: localizations.wizzOff,
+                            enabled: false,
+                            subtitle: 'أوقف التوفر من الشاشة الرئيسية',
+                            onTap: _showStopDashDialog,
+                          ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                ],
-              ),
-            ),
+                    _buildSection(
+                      title: localizations.account,
+                      items: [
+                        _buildMenuItem(
+                          icon: Icons.payment_outlined,
+                          title: localizations.paymentMethods,
+                          enabled: false,
+                          iconColor:
+                              HadhirColors.darkGray, // Dark gray for sub-items
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) =>
+                                    const PaymentMethodsScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        _buildMenuItem(
+                          icon: Icons.account_balance_wallet_outlined,
+                          title: localizations.instantPay,
+                          subtitle: 'غير متاح حاليًا',
+                          enabled: false,
+                          iconColor: HadhirColors
+                              .secondary, // Green accent for instant pay
+                          onTap: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Instant payment setup would open here',
+                                ),
+                                backgroundColor:
+                                    HadhirColors.secondary, // Green snackbar
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                    _buildSection(
+                      title: localizations.vehicleAndEquipment,
+                      items: [
+                        _buildMenuItem(
+                          icon: Icons.directions_car_outlined,
+                          title: 'مركباتي',
+                          iconColor:
+                              HadhirColors.darkGray, // Dark gray for sub-items
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const VehicleInfoScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        _buildMenuItem(
+                          icon: Icons.local_shipping_outlined,
+                          title: localizations.deliveryEquipment,
+                          enabled: false,
+                          iconColor:
+                              HadhirColors.darkGray, // Dark gray for sub-items
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) =>
+                                    const DeliveryEquipmentScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        _buildMenuItem(
+                          icon: Icons.phone_android_outlined,
+                          title: localizations.phoneNumber,
+                          enabled: false,
+                          subtitle:
+                              _driverProfile?.phone ?? localizations.notSet,
+                          iconColor:
+                              HadhirColors.darkGray, // Dark gray for sub-items
+                          onTap: () {
+                            _showPhoneUpdateDialog();
+                          },
+                        ),
+                      ],
+                    ),
+                    _buildSection(
+                      title: localizations.safety,
+                      items: [
+                        _buildMenuItem(
+                          icon: Icons.security_outlined,
+                          title: localizations.safetyToolkit,
+                          enabled: false,
+                          iconColor:
+                              HadhirColors.secondary, // Green accent for safety
+                          onTap: () {
+                            _showSafetyDialog();
+                          },
+                        ),
+                        _buildMenuItem(
+                          icon: Icons.contact_emergency_outlined,
+                          title: localizations.emergencyContacts,
+                          enabled: false,
+                          iconColor:
+                              HadhirColors.darkGray, // Dark gray for sub-items
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) =>
+                                    const EmergencyContactsScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        _buildMenuItem(
+                          icon: Icons.verified_user_outlined,
+                          title: localizations.identityVerification,
+                          enabled: false,
+                          subtitle: _getVerificationStatus(),
+                          iconColor:
+                              HadhirColors.darkGray, // Dark gray for sub-items
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) =>
+                                    const IdentityVerificationScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                    _buildSection(
+                      title: localizations.support,
+                      items: [
+                        _buildMenuItem(
+                          icon: Icons.chat_bubble_outline,
+                          title: localizations.liveChat,
+                          subtitle: localizations.chatWithOurSupportTeam,
+                          iconColor: HadhirColors
+                              .secondary, // Green accent for support
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const LiveChatScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                    _buildSection(
+                      title: localizations.legal,
+                      items: [
+                        _buildMenuItem(
+                            icon: Icons.policy_outlined,
+                            title: 'سياسة الاستخدام',
+                            onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) =>
+                                        const ApplicationLegalScreen(
+                                            documentId: 'USAGE')))),
+                        _buildMenuItem(
+                            icon: Icons.assignment_return_outlined,
+                            title: 'التعذر والعودة والسلامة',
+                            onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) =>
+                                        const ApplicationLegalScreen(
+                                            documentId: 'CANCELLATION')))),
+                        _buildMenuItem(
+                          icon: Icons.description_outlined,
+                          title: localizations.termsOfService,
+                          onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const ApplicationLegalScreen(
+                                      documentId: 'TERMS'))),
+                        ),
+                        _buildMenuItem(
+                          icon: Icons.privacy_tip_outlined,
+                          title: localizations.privacyPolicy,
+                          onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const ApplicationLegalScreen(
+                                      documentId: 'PRIVACY'))),
+                        ),
+                      ],
+                    ),
+                    _buildSection(
+                      title: localizations.app,
+                      items: [
+                        _buildMenuItem(
+                            icon: Icons.volume_up_outlined,
+                            title: 'اختبار صوت العروض',
+                            onTap: () => showOfferSoundTestSheet(context)),
+                        _buildMenuItem(
+                          icon: Icons.settings_outlined,
+                          title: localizations.settings,
+                          enabled: false,
+                          iconColor:
+                              HadhirColors.darkGray, // Dark gray for sub-items
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const AppSettingsScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        if (kDebugMode)
+                          _buildMenuItem(
+                            icon: Icons.palette_outlined,
+                            title: 'Arctic Cyan Colors',
+                            subtitle: 'View the new color system',
+                            iconColor: HadhirColors
+                                .darkGray, // Dark gray for sub-items
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const ArcticCyanDemo(),
+                                ),
+                              );
+                            },
+                          ),
+                        if (kDebugMode)
+                          _buildMenuItem(
+                            icon: Icons.apps_rounded,
+                            title: 'App Icon Preview',
+                            subtitle: 'View Wizz logo app icons',
+                            iconColor: HadhirColors
+                                .darkGray, // Dark gray for sub-items
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const AppIconPreview(),
+                                ),
+                              );
+                            },
+                          ),
+                        if (kDebugMode)
+                          _buildMenuItem(
+                            icon: Icons.auto_awesome,
+                            title: 'WIZZ Logo Demo',
+                            subtitle: 'Complete logo showcase',
+                            iconColor:
+                                HadhirColors.brandingOrange, // Orange for demo
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const WizzLogoDemo(),
+                                ),
+                              );
+                            },
+                          ),
+                        if (kDebugMode)
+                          _buildMenuItem(
+                            icon: Icons.photo_library,
+                            title: 'WIZZ Logo Showcase',
+                            subtitle: 'Official SVG & App Icons',
+                            iconColor: HadhirColors
+                                .secondary, // Green for official showcase
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      const WizzLogoShowcase(),
+                                ),
+                              );
+                            },
+                          ),
+                        _buildMenuItem(
+                          icon: Icons.info_outline,
+                          title: localizations.about,
+                          subtitle: 'معلومات تطبيق السائق',
+                          iconColor:
+                              HadhirColors.darkGray, // Dark gray for sub-items
+                          onTap: () {
+                            _showAboutDialog();
+                          },
+                        ),
+                      ],
+                    ),
+                    Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                        child: OutlinedButton.icon(
+                            onPressed: _showSignOutDialog,
+                            icon: const Icon(Icons.logout_rounded, size: 20),
+                            label: Text(localizations.signOut),
+                            style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFFB42318),
+                                backgroundColor: Colors.white,
+                                minimumSize: const Size(double.infinity, 52),
+                                side:
+                                    const BorderSide(color: Color(0xFFF0D6D3)),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14))))),
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              )),
     );
   }
 
+  static const _navy = Color(0xFF00296B);
+  static const _muted = Color(0xFF667085);
+
   Widget _buildProfileHeader() {
+    final profile = _driverProfile;
+    final hasRating = (profile?.customerRatingCount ?? 0) > 0;
     return Container(
-      margin: const EdgeInsets.all(16),
-      child: GradientBorderContainer(
-        borderWidth: 2,
-        borderRadius: 16,
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: AppColors.white, // Monochrome: pure white background
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(
-                  alpha: 0.03,
-                ), // Subtle monochrome shadow
-                blurRadius: 10,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-      child: InkWell(
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const AccountDetailsScreen(),
-            ),
-          );
-        },
-        child: Row(
-          children: [
-            _buildProfileAvatar(),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _driverProfile?.name ?? 'Driver Name',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.star,
-                        color: AppColors.warning,
-                        size: 16,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${_driverProfile?.rating.toStringAsFixed(1) ?? '4.9'} • Driver since ${_getJoinedDate()}',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const Icon(Icons.chevron_right, color: AppColors.grey400),
-          ],
-        ),
-      ),
-        ),
-      ),
-    );
+        margin: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFEAECF0))),
+        clipBehavior: Clip.antiAlias,
+        child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const AccountDetailsScreen())),
+              child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(children: [
+                          _buildProfileAvatar(),
+                          const SizedBox(width: 14),
+                          Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                Text(
+                                    profile?.name.trim().isNotEmpty == true
+                                        ? profile!.name
+                                        : 'حساب السائق',
+                                    style: const TextStyle(
+                                        fontSize: 19,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF182230))),
+                                const SizedBox(height: 5),
+                                Text(
+                                    profile == null
+                                        ? 'تعذر تحميل بيانات الحساب'
+                                        : 'عرض معلومات الحساب وتحديثها',
+                                    style: const TextStyle(
+                                        fontSize: 12,
+                                        height: 1.5,
+                                        color: _muted)),
+                              ])),
+                          const SizedBox(width: 6),
+                          const Icon(Icons.chevron_left_rounded,
+                              textDirection: TextDirection.ltr,
+                              color: Color(0xFF98A2B3),
+                              size: 20),
+                        ]),
+                        const SizedBox(height: 16),
+                        const Divider(height: 1, color: Color(0xFFEAECF0)),
+                        const SizedBox(height: 14),
+                        Wrap(
+                            spacing: 12,
+                            runSpacing: 8,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              if (hasRating)
+                                Semantics(
+                                  label:
+                                      'تقييم الزبائن ${profile!.rating.toStringAsFixed(1)} من 5',
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 0, vertical: 4),
+                                    child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.star_rounded,
+                                              color: Color(0xFFB77900),
+                                              size: 19),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                              profile.rating.toStringAsFixed(1),
+                                              textDirection: TextDirection.ltr,
+                                              style: const TextStyle(
+                                                  fontSize: 17,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: _navy)),
+                                        ]),
+                                  ),
+                                )
+                              else
+                                Text(
+                                    profile == null
+                                        ? 'تعذر تحميل التقييم'
+                                        : '—',
+                                    style: const TextStyle(
+                                        fontSize: 12, color: _muted)),
+                              if (profile != null)
+                                Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                        color: const Color(0xFFF0F4FA),
+                                        borderRadius: BorderRadius.circular(7)),
+                                    child: Text(_getVerificationStatus(),
+                                        style: const TextStyle(
+                                            fontSize: 11,
+                                            color: _navy,
+                                            fontWeight: FontWeight.w600))),
+                            ]),
+                        if (profile?.createdAt != null)
+                          Padding(
+                              padding: const EdgeInsets.only(top: 10),
+                              child: Text('انضممت في ${_getJoinedDate()}',
+                                  style: const TextStyle(
+                                      fontSize: 11, color: _muted))),
+                      ])),
+            )));
   }
 
   String _getJoinedDate() {
-    if (_driverProfile?.joinDate != null) {
-      final date = _driverProfile!.joinDate;
-      final months = [
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec',
-      ];
-      return '${months[date.month - 1]} ${date.year}';
-    }
-    return 'Nov 2023';
+    final date = _driverProfile?.createdAt;
+    if (date == null) return 'تاريخ غير متاح';
+    const months = [
+      'يناير',
+      'فبراير',
+      'مارس',
+      'أبريل',
+      'مايو',
+      'يونيو',
+      'يوليو',
+      'أغسطس',
+      'سبتمبر',
+      'أكتوبر',
+      'نوفمبر',
+      'ديسمبر'
+    ];
+    return '${months[date.month - 1]} ${date.year}';
   }
 
   String _getVerificationStatus() {
     final localizations = AppLocalizations.of(context)!;
-    if (_driverProfile?.isVerified == true) {
-      return localizations.verified;
-    }
-    return localizations.pendingVerification;
+    return _driverProfile?.isVerified == true
+        ? localizations.verified
+        : localizations.pendingVerification;
   }
 
   Widget _buildProfileAvatar() {
-    final profilePhoto = _driverProfile?.profilePhoto;
-
-    if (profilePhoto != null && profilePhoto.isNotEmpty) {
-      return GradientBorderContainer.circular(
-        borderWidth: 3,
-        child: Container(
-          width: 60,
-          height: 60,
-          decoration: const BoxDecoration(shape: BoxShape.circle),
-          child: ClipOval(
-            child: profilePhoto.startsWith('data:')
-                ? Image.memory(
-                    _getImageBytesFromDataUrl(profilePhoto),
-                    width: 60,
-                    height: 60,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return _buildDefaultAvatar();
-                    },
-                  )
-                : Image.network(
-                    profilePhoto,
-                    width: 60,
-                    height: 60,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return _buildDefaultAvatar();
-                    },
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return _buildDefaultAvatar();
-                    },
-                  ),
-          ),
-        ),
-      );
-    }
-
-    return _buildDefaultAvatar();
+    final photo = _driverProfile?.profilePhoto;
+    if (photo == null || photo.isEmpty) return _buildDefaultAvatar();
+    final image = photo.startsWith('data:')
+        ? Image.memory(_getImageBytesFromDataUrl(photo),
+            width: 54,
+            height: 54,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _buildDefaultAvatar())
+        : Image.network(photo,
+            width: 54,
+            height: 54,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _buildDefaultAvatar(),
+            loadingBuilder: (_, child, progress) =>
+                progress == null ? child : _buildDefaultAvatar());
+    return ClipRRect(borderRadius: BorderRadius.circular(16), child: image);
   }
 
-  Widget _buildDefaultAvatar() {
-    return GradientBorderContainer.circular(
-      borderWidth: 3,
-      child: Container(
-        width: 60,
-        height: 60,
-        decoration: const BoxDecoration(
-          color: Colors.white, // Monochrome: white background
-          shape: BoxShape.circle,
-        ),
-        child: const Icon(
-          Icons.person,
-          size: 30,
-          color: Colors.black, // Monochrome: black icon
-        ),
-      ),
-    );
-  }
+  Widget _buildDefaultAvatar() => Container(
+      width: 54,
+      height: 54,
+      decoration: BoxDecoration(
+          color: const Color(0xFFF0F4FA),
+          borderRadius: BorderRadius.circular(16)),
+      child: const Icon(Icons.person_outline_rounded, size: 30, color: _navy));
 
   Uint8List _getImageBytesFromDataUrl(String dataUrl) {
-    // Extract base64 part from data URL (data:image/jpeg;base64,...)
-    final base64String = dataUrl.split(',').last;
-    return base64Decode(base64String);
+    try {
+      return base64Decode(dataUrl.split(',').last);
+    } catch (_) {
+      return Uint8List(0);
+    }
   }
 
-  Widget _buildSection({required String title, required List<Widget> items}) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: GradientBorderContainer(
-        borderWidth: 2,
-        borderRadius: 16,
-        child: Container(
-          decoration: BoxDecoration(
-            color: AppColors.white, // Monochrome: pure white background
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(
-                  alpha: 0.03,
-                ), // Subtle monochrome shadow
-                blurRadius: 10,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-                child: Text(
-                  title,
+  Widget _buildSection({required String title, required List<Widget> items}) =>
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 6, 20, 16),
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Padding(
+              padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+              child: Text(title,
                   style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-              ),
-              ...items,
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _muted))),
+          Container(
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: const Color(0xFFEAECF0))),
+              child: Column(children: [
+                for (var i = 0; i < items.length; i++) ...[
+                  if (i > 0)
+                    const Divider(
+                        height: 1,
+                        indent: 16,
+                        endIndent: 16,
+                        color: Color(0xFFF0F2F5)),
+                  items[i],
+                ]
+              ])),
+        ]),
+      );
 
-  Widget _buildMenuItem({
-    required IconData icon,
-    required String title,
-    String? subtitle,
-    Widget? trailing,
-    Color? iconColor,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        child: Row(
-          children: [
-            Icon(icon, color: iconColor ?? AppColors.textSecondary, size: 24),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  if (subtitle != null) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            if (trailing != null) trailing,
-            if (trailing == null)
-              const Icon(Icons.chevron_right, color: AppColors.grey400),
-          ],
+  Widget _buildMenuItem(
+          {required IconData icon,
+          required String title,
+          String? subtitle,
+          Widget? trailing,
+          Color? iconColor,
+          required VoidCallback onTap,
+          bool enabled = true}) =>
+      Material(
+        color: Colors.white,
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+              child: Row(children: [
+                Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFF0F4FA),
+                        borderRadius: BorderRadius.circular(11)),
+                    child: Icon(icon,
+                        size: 20,
+                        color: enabled ? _navy : const Color(0xFF98A2B3))),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(title,
+                          style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  enabled ? const Color(0xFF182230) : _muted)),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 4),
+                        Text(subtitle,
+                            style: const TextStyle(
+                                fontSize: 12, height: 1.5, color: _muted))
+                      ],
+                      if (!enabled &&
+                          !(subtitle?.contains('غير متاح') ?? false)) ...[
+                        const SizedBox(height: 4),
+                        const Text('غير متاح حاليًا',
+                            style: TextStyle(
+                                fontSize: 12, height: 1.5, color: _muted)),
+                      ],
+                    ])),
+                const SizedBox(width: 8),
+                if (trailing != null)
+                  trailing
+                else if (enabled)
+                  const Icon(Icons.chevron_left_rounded,
+                      textDirection: TextDirection.ltr,
+                      size: 18,
+                      color: Color(0xFF98A2B3)),
+              ])),
         ),
-      ),
-    );
-  }
+      );
 
   void _showPhoneUpdateDialog() {
     final TextEditingController phoneController = TextEditingController();
@@ -786,8 +835,7 @@ class _MoreTabState extends ConsumerState<MoreTab> {
                           ? 'Phone number updated successfully'
                           : 'Failed to update phone number',
                     ),
-                    backgroundColor:
-                        success
+                    backgroundColor: success
                         ? HadhirColors.secondary
                         : AppColors.error, // Green for success
                   ),
@@ -859,91 +907,14 @@ class _MoreTabState extends ConsumerState<MoreTab> {
     );
   }
 
-  void _showTermsDialog() {
-    final localizations = AppLocalizations.of(context)!;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(localizations.termsOfService),
-        content: const SingleChildScrollView(
-          child: Text(
-            'Here would be the Terms of Service content...\n\n'
-            'This would contain the full legal terms and conditions for using the Hadhir Driver app.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(localizations.close),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showPrivacyDialog() {
-    final localizations = AppLocalizations.of(context)!;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(localizations.privacyPolicy),
-        content: const SingleChildScrollView(
-          child: Text(
-            'Here would be the Privacy Policy content...\n\n'
-            'This would contain information about how user data is collected, used, and protected.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(localizations.close),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAccidentPolicyDialog() {
-    final localizations = AppLocalizations.of(context)!;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(localizations.occupationalAccidentPolicy),
-        content: const SingleChildScrollView(
-          child: Text(
-            'Here would be the Occupational Accident Policy content...\n\n'
-            'This would contain information about accident coverage and procedures.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(localizations.close),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showAboutDialog() {
     final localizations = AppLocalizations.of(context)!;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(localizations.aboutWizzDriver),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('${localizations.version}: 1.0.0'),
-            const SizedBox(height: 8),
-            Text('${localizations.build}: 2024.12.15'),
-            const SizedBox(height: 8),
-            const Text('© 2024 Wizz, Inc.'),
-            const SizedBox(height: 8),
-            Text(localizations.madeForIraqiDrivers),
-          ],
-        ),
+        content: const Text(
+            'تطبيق ويز للسائق\n\nمتابعة الرحلات والأرباح والمحفظة، والوصول إلى الدعم ومعلومات الحساب.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -960,7 +931,8 @@ class _MoreTabState extends ConsumerState<MoreTab> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text(localizations.signOut),
-        content: Text(localizations.signOutConfirmation,
+        content: Text(
+          localizations.signOutConfirmation,
         ),
         actions: [
           TextButton(
@@ -997,16 +969,15 @@ class _MoreTabState extends ConsumerState<MoreTab> {
       // Enhanced logout using CognitoAuthService
       try {
         debugPrint('🚪 Starting enhanced logout process...');
-        
+
         // Use auth service for proper logout
         final authService = ref.read(authServiceProvider);
         await authService.logout();
-        
+
         debugPrint('✅ Auth service logout completed successfully');
-        
+
         // Small delay to ensure cleanup is complete
         await Future.delayed(const Duration(milliseconds: 500));
-        
       } catch (e) {
         debugPrint('⚠️ Error during logout cleanup: $e');
         // Continue with navigation even if cleanup fails

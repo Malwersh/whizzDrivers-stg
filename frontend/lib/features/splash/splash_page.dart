@@ -141,23 +141,8 @@ class _SplashPageState extends ConsumerState<SplashPage>
       final activeOrder = await activeOrderService.getActiveOrder();
       
       if (activeOrder == null) {
-        debugPrint('ℹ️ Splash: No active order found from server, checking local backup...');
-
-        // Fallback: لو السيرفر لم يُرجع الطلب بعد (تأخر تزامن)، جرّب النسخة المحلية
-        final localActiveOrder = await OrderPersistenceService.getActiveOrder();
-        final localOrderId = localActiveOrder?['orderId'] as String?;
-        final localStatus = localActiveOrder?['status'] as String?;
-
-        if (localOrderId != null && localOrderId.isNotEmpty) {
-          debugPrint('🛟 Splash: Restoring local active order fallback: $localOrderId ($localStatus)');
-          if (!mounted) return;
-          await Future.delayed(const Duration(milliseconds: 300));
-          if (!mounted) return;
-          context.go('/active-order', extra: {'orderId': localOrderId});
-          return;
-        }
-
-        debugPrint('ℹ️ Splash: No local fallback, navigating to home');
+        // A successful server response is authoritative; never resurrect a returned cache.
+        await OrderPersistenceService.clearActiveOrder();
         // Go to home (search screen). If a push-tap requested a specific tab,
         // consume it here (after auth/profile checks) to avoid cold-start races.
         if (!mounted) return;

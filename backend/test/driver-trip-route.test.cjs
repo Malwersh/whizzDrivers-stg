@@ -1,0 +1,11 @@
+const {test}=require('node:test'),assert=require('node:assert/strict');
+const {tripPoints,pickupView,createDriverTripRouter,readDriverTripRoute}=require('../driver-trip-route');
+const order={driverId:'driver',status:'heading_to_store',storeName:'مطعم فتوش',storeId:'store',storeAddress:{fullAddress:'عنوان المتجر',latitude:31.92,longitude:44.45},deliveryAddress:{lat:31.9,lng:44.48}};
+const payload={code:'Ok',routes:[{distance:3067.2,duration:480,geometry:{type:'LineString',coordinates:[[44.45,31.92],[44.46,31.91],[44.48,31.9]]}}]};
+test('pickup fields use real store name/address and numeric server points',()=>{assert.equal(pickupView(order).restaurantName,'مطعم فتوش');assert.equal(pickupView(order).restaurantAddress,'عنوان المتجر');assert.deepEqual(tripPoints(order),{origin:[44.45,31.92],destination:[44.48,31.9]});assert.throws(()=>tripPoints({}));});
+test('geometry is road-provider data, server coordinates only and display-only',async()=>{
+ let calls=0;const route=createDriverTripRouter({getToken:async()=> 'private-token',request:async(url)=>{calls++;assert.equal(url.searchParams.get('geometries'),'geojson');assert.equal(url.pathname,'/directions/v5/mapbox/driving/44.45,31.92;44.48,31.9');return new Response(JSON.stringify(payload));}});
+ const result=await route(order);assert.equal(result.purpose,'DISPLAY_ONLY');assert.equal(result.distanceMeters,3068);assert.equal(result.coordinates.length,3);assert.equal(JSON.stringify(result).includes('private-token'),false);await route(order);assert.equal(calls,1);
+});
+for(const bad of [{code:'NoRoute'},{...payload,routes:[{...payload.routes[0],geometry:{type:'LineString',coordinates:[[200,31],[44,32]]}}]}])test('invalid provider result fails without invented line',async()=>{const route=createDriverTripRouter({getToken:async()=> 'token',request:async()=>new Response(JSON.stringify(bad))});await assert.rejects(route(order),/TRIP_ROUTE_UNAVAILABLE/);});
+test('foreign driver and terminal order cannot read route',async()=>{for(const o of [{...order,driverId:'other'},{...order,status:'delivered'}]){const result=await readDriverTripRoute({db:{send:async()=>({Item:o})},GetCommand:class{constructor(v){}},table:'orders',driverId:'driver',orderId:'order'});assert.equal(result.statusCode,404);}});

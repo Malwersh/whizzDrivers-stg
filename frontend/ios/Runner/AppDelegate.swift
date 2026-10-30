@@ -2,6 +2,8 @@ import Flutter
 import UIKit
 import GoogleMaps
 import FirebaseCore
+import AVFoundation
+import CoreLocation
 
 /// Native iOS WebSocket using URLSessionWebSocketTask
 /// This bypasses the Dart SDK bug that transforms wss:// to https://:0
@@ -38,7 +40,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "INVALID_ARGS", message: "Missing URL", details: nil))
                 return
             }
-            connect(urlString: urlString, result: result)
+            connect(urlString: urlString, headers: args["headers"] as? [String: String] ?? [:], result: result)
             
         case "send":
             guard let args = call.arguments as? [String: Any],
@@ -56,7 +58,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
         }
     }
     
-    private func connect(urlString: String, result: @escaping FlutterResult) {
+    private func connect(urlString: String, headers: [String: String], result: @escaping FlutterResult) {
         print("🔌 [Native] Connecting to: \(urlString)")
         
         guard let url = URL(string: urlString) else {
@@ -71,7 +73,9 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
         config.timeoutIntervalForResource = 300
         
         urlSession = URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue())
-        webSocketTask = urlSession?.webSocketTask(with: url)
+        var request = URLRequest(url: url)
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        webSocketTask = urlSession?.webSocketTask(with: request)
         
         receiveMessage()
         webSocketTask?.resume()
@@ -123,7 +127,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
                 case .success(let message):
                     switch message {
                     case .string(let text):
-                        print("📥 [Native] Received: \(text)")
+                        print("Native socket message received")
                         self?.eventSink?([
                             "type": "message",
                             "data": text,
@@ -210,10 +214,89 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
         }
     
     GeneratedPluginRegistrant.register(with: self)
+    if let registrar = self.registrar(forPlugin: "DriverLocationLabel") {
+      FlutterMethodChannel(name: "com.whizz.driver/location_label", binaryMessenger: registrar.messenger()).setMethodCallHandler { call, result in
+        guard call.method == "describe", let args = call.arguments as? [String: Double], let lat = args["latitude"], let lng = args["longitude"] else { result(FlutterMethodNotImplemented); return }
+        CLGeocoder().reverseGeocodeLocation(CLLocation(latitude:lat,longitude:lng),preferredLocale:Locale(identifier:"ar")) { marks, _ in
+          let p=marks?.first
+          let values=[p?.locality,p?.country].compactMap{$0}.filter{!$0.isEmpty}
+          var unique=[String]();for v in values {if !unique.contains(v){unique.append(v)}}
+          DispatchQueue.main.async {result(unique.isEmpty ? nil : unique.joined(separator:"، "))}
+        }
+      }
+    }
+    if let soundRegistrar = self.registrar(forPlugin: "NotificationSoundFiles") { NotificationSoundFiles.register(with: soundRegistrar) }
     
     // Register Native WebSocket plugin
     NativeWebSocketPlugin.register(with: self.registrar(forPlugin: "NativeWebSocketPlugin")!)
     
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
+}
+
+final class NotificationSoundFiles: NSObject, FlutterPlugin {
+ private var offerPlayer: AVAudioPlayer?
+ private static let offerCueFilePattern = #"^(driver_original|driver_offer|online_chime|soft_chime|merchant_bell|first_nitification_sound|custom_[a-f0-9]{64})\.wav$"#
+ private static let customSoundFilePattern = #"^custom_[a-f0-9]{64}\.wav$"#
+ static func register(with registrar: FlutterPluginRegistrar) {
+  let channel=FlutterMethodChannel(name:"wizz/notification-sound-files",binaryMessenger:registrar.messenger())
+  registrar.addMethodCallDelegate(NotificationSoundFiles(),channel:channel)
+ }
+ func handle(_ call: FlutterMethodCall,result: @escaping FlutterResult) {
+  if call.method == "playOfferCue" { playOfferCue(call,result:result);return }
+  guard call.method == "install" else { result(FlutterMethodNotImplemented);return }
+  guard let args=call.arguments as? [String:Any],let name=args["file"] as? String,name.range(of:Self.customSoundFilePattern,options:.regularExpression) != nil,let value=args["bytes"] as? FlutterStandardTypedData,value.data.count>=44,value.data.count<=256000 else {result(FlutterError(code:"INVALID_SOUND",message:nil,details:nil));return}
+  do {
+   let dir=FileManager.default.urls(for:.libraryDirectory,in:.userDomainMask)[0].appendingPathComponent("Sounds",isDirectory:true)
+   try FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true)
+   let file=dir.appendingPathComponent(name)
+   if !FileManager.default.fileExists(atPath:file.path){try value.data.write(to:file,options:.atomic)}
+   result(["path":file.path,"uri":file.absoluteString])
+  } catch {result(FlutterError(code:"SOUND_INSTALL_FAILED",message:nil,details:nil))}
+ }
+}
+
+
+extension NotificationSoundFiles {
+ private func playOfferCue(_ call: FlutterMethodCall,result: @escaping FlutterResult) {
+  guard UIApplication.shared.applicationState == .active else {
+   let status:[String:Any]=["playing":false,"reason":"APP_NOT_ACTIVE","recordedAt":ISO8601DateFormatter().string(from:Date())]
+   saveCueDiagnostic(status);result(status);return
+  }
+  guard let args=call.arguments as? [String:Any],let file=args["file"] as? String,
+        file.range(of:Self.offerCueFilePattern,options:.regularExpression) != nil else {
+   let status:[String:Any]=["playing":false,"reason":"INVALID_SOUND","recordedAt":ISO8601DateFormatter().string(from:Date())]
+   saveCueDiagnostic(status);result(status);return
+  }
+  do {
+   let session=AVAudioSession.sharedInstance()
+   try session.setCategory(.playback,mode:.default,options:[.mixWithOthers])
+   try session.setActive(true)
+   let library=FileManager.default.urls(for:.libraryDirectory,in:.userDomainMask)[0].appendingPathComponent("Sounds",isDirectory:true)
+   let custom=library.appendingPathComponent(file)
+   let selected=file.hasPrefix("custom_") && FileManager.default.fileExists(atPath:custom.path) ? custom : Bundle.main.url(forResource:URL(fileURLWithPath:file).deletingPathExtension().lastPathComponent,withExtension:"wav")
+   let fallback=Bundle.main.url(forResource:"driver_original",withExtension:"wav")
+   guard let url=selected ?? fallback else {throw NSError(domain:"OfferAudio",code:1)}
+   offerPlayer?.stop()
+   do {offerPlayer=try AVAudioPlayer(contentsOf:url)}
+   catch {guard let original=fallback else {throw error};offerPlayer=try AVAudioPlayer(contentsOf:original)}
+   offerPlayer?.volume=1
+   offerPlayer?.prepareToPlay()
+   let playing=offerPlayer?.play() == true
+   let status:[String:Any]=["playing":playing,"volume":session.outputVolume,"route":session.currentRoute.outputs.map{$0.portType.rawValue},"file":file,"recordedAt":ISO8601DateFormatter().string(from:Date())]
+   saveCueDiagnostic(status)
+   result(status)
+  }catch {
+   let error=error as NSError
+   let status:[String:Any]=["playing":false,"reason":"NATIVE_AUDIO_FAILED","domain":error.domain,"code":error.code,"recordedAt":ISO8601DateFormatter().string(from:Date())]
+   saveCueDiagnostic(status)
+   result(status)
+  }
+ }
+ private func saveCueDiagnostic(_ status:[String:Any]) {
+  guard let dir=FileManager.default.urls(for:.cachesDirectory,in:.userDomainMask).first,
+        let data=try? JSONSerialization.data(withJSONObject:status) else {return}
+  try? FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true)
+  try? data.write(to:dir.appendingPathComponent("driver-offer-audio-diagnostic.json"),options:.atomic)
+ }
 }

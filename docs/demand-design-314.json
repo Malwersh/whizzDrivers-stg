@@ -1,0 +1,85 @@
+{
+  "task": 314,
+  "name": "Regional demand forecast",
+  "stage": "staging",
+  "timezone": "Asia/Baghdad",
+  "schemaVersion": 1,
+  "algorithm": {
+    "trainingWindowDays": 56,
+    "sameWeekdayHour": true,
+    "weeklyRecencyDecay": 0.85,
+    "minimumCompleteMatchingDays": 3,
+    "minimumMatchingOrders": 20,
+    "partialFirstAndCurrentDayExcluded": true,
+    "collectorGapsOverHours": 2,
+    "gapDatesExcludedInsteadOfZero": true,
+    "normalization": "One maximum across seven forecast days for each source area",
+    "confidence": "HIGH after 6 matching complete days and 100 orders; otherwise MODERATE if thresholds met",
+    "notAnEarningsOrIndividualDriverOfferProbability": true
+  },
+  "geography": {
+    "serverScope": "active searching current_work_region_id; otherwise profile work_region_id/home_region_id",
+    "capture": "Pinned pickup region, falling back to branch region at first ingestion",
+    "fallback": "Parent district only, explicitly labeled, only when local data insufficient",
+    "noNationalAverage": true
+  },
+  "capture": {
+    "source": "DynamoDB stream on dispatch METADATA plus hourly reconciliation",
+    "timestamp": "Dispatch job createdAt",
+    "deduplication": "Conditional permanent dataset-scoped SHA256 order key, retained120 days; capture lookback60 days",
+    "retainedData": [
+      "hashed order key",
+      "regionId",
+      "districtId",
+      "occurredAt",
+      "dataset",
+      "expiry"
+    ],
+    "noCustomerData": true,
+    "noSourceRowsWritten": true
+  },
+  "operatingHours": {
+    "source": "WhizzMerchants_BusinessWorkingHours",
+    "onlyClosesSlotWhenAllEligibleBranchesKnownClosed": true,
+    "overnightAndPartialHoursSupported": true,
+    "unknownHoursNeverInventClosure": true
+  },
+  "datasets": {
+    "TEST": "Captured staging activity from deployment coverageStart onward",
+    "SIMULATION": "Synthetic history passed through same forecast function; separate snapshot keys and health; staging trialdriver allowlist only",
+    "LIVE": "Separate keys and production collector configuration required at launch; all staging records excluded"
+  },
+  "reliability": {
+    "completeScanBeforeAggregation": true,
+    "consistentReads": true,
+    "boundedScans": "2000 pages /250000 rows /180s per source scan; failure keeps old health, stale forecasts hidden",
+    "snapshotGenerationMustMatchCompletedManifest": true,
+    "staleAfterHours": 2,
+    "partialStreamBatchRetry": true,
+    "deadLetterQueue": true,
+    "cloudWatchAlarms": true,
+    "notificationDestination": "Not configured; CloudWatch alarms only"
+  },
+  "validation": {
+    "backendDemandTests": 6,
+    "workerTests": 7,
+    "flutterTests": 4,
+    "tripHistoryRegressionTests": 6,
+    "passed": true,
+    "analyzerErrors": 0,
+    "analyzerWarnings": 0,
+    "styleInfo": 4
+  },
+  "buildNumber": 254,
+  "deviceInstall": "Native profile254 installed successfully on existing test iPhone",
+  "launchRequirements": [
+    "Deploy equivalent isolated infrastructure in production with LIVE dataset and no simulation allowlist or region",
+    "Set coverageStart to real collection start; never import staging or simulation events",
+    "Expect insufficient-data state until thresholds met; synthetic tests establish implementation correctness, not real forecast accuracy",
+    "Configure operations alarm notification destination and monitor stream lag/failures",
+    "Review scan/index capacity before high traffic; bounded reconciler intentionally refuses partial totals",
+    "Track outages of upstream order placement separately if future operational incidents must be excluded beyond collector gaps",
+    "Evaluate accuracy against real demand before lowering confidence thresholds"
+  ],
+  "financialWrites": false
+}

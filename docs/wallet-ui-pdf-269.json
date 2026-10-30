@@ -1,0 +1,37 @@
+{
+  "build": 269,
+  "mode": "RELEASE",
+  "environment": "staging",
+  "testLocationPreserved": true,
+  "collateral": {
+    "bar": "AVAILABLE / (AVAILABLE + LOCKED)",
+    "explanationCollapsedInitially": true,
+    "eligibilityThresholdNotInvented": true
+  },
+  "monthPicker": {
+    "whiteSurface": true,
+    "darkText": true,
+    "whiteTextOnNavyConfirmation": true
+  },
+  "statementActions": {
+    "appBarVerticalEllipsis": true,
+    "bottomSheetAction": "تحميل الكشف",
+    "format": "PDF",
+    "csvButtonRemoved": true,
+    "embeddedOfflineArabicFont": "NotoSansArabic",
+    "fontLicenseIncluded": true,
+    "nativeSave": "existing file_picker saveFile"
+  },
+  "verification": {
+    "flutterTests": 10,
+    "multipagePdf": {
+      "fixtureRows": 120,
+      "renderedFirstPageReviewed": true,
+      "pages": 16
+    },
+    "analysis": "no errors or warnings; style info only",
+    "financialLogicChanged": false
+  },
+  "deviceInstall": "INSTALLED_LAUNCHED_VERIFIED_269",
+  "nativeSaveUserAcceptance": "PENDING"
+}

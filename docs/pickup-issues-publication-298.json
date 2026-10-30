@@ -1,0 +1,12 @@
+{
+  "function": "DriversApi-staging",
+  "beforeCodeSha256": "tOCVZUXsgAn0Ov2EPBFixhzNgAadHYc/Rc4zU7co0FY=",
+  "revisionId": "b5b396ee-c472-44b9-ac5a-0a872eecbe9f",
+  "candidateHexSha256": "8d5207c445c8d167023dc036f5bb4ff72d8d739a3246aaa5b9ed0cca8181f392",
+  "changedEntries": [
+    "lambda_driver_api_v2.js",
+    "driver-pickup-issues.js"
+  ],
+  "afterCodeSha256": "jVIHxEXI0WcCPcA29btP9y2Nc5oyRqqlue0MyoGB85I=",
+  "verifiedStatus": "Successful"
+}

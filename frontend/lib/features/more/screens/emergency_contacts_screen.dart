@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 
 import '../../../design_system/app_colors.dart';
@@ -84,7 +85,7 @@ class _EmergencyContactsScreenState extends State<EmergencyContactsScreen> {
                       Icon(
                         Icons.contact_emergency,
                         size: 48,
-                        color: AppColors.primary,
+                        color: const Color(0xFF00296B),
                       ),
                       SizedBox(height: 16),
                       Text(
@@ -131,16 +132,18 @@ class _EmergencyContactsScreenState extends State<EmergencyContactsScreen> {
                     child: ElevatedButton.icon(
                       onPressed: _showAddContactDialog,
                       style: ElevatedButton.styleFrom(
+                        foregroundColor: readableForeground(AppColors.primary),
                         backgroundColor: AppColors.primary,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(28),
                         ),
                       ),
-                      icon: const Icon(Icons.add, color: AppColors.white),
+                      icon:
+                          const Icon(Icons.add, color: const Color(0xFF00296B)),
                       label: const Text(
                         'Add Emergency Contact',
                         style: TextStyle(
-                          color: AppColors.white,
+                          color: const Color(0xFF00296B),
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),
@@ -218,14 +221,15 @@ class _EmergencyContactsScreenState extends State<EmergencyContactsScreen> {
             const SizedBox(height: 4),
             Text(
               contact.phone,
-              style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+              style:
+                  const TextStyle(fontSize: 14, color: AppColors.textSecondary),
             ),
             const SizedBox(height: 4),
             Text(
               contact.relationship,
               style: const TextStyle(
                 fontSize: 12,
-                color: AppColors.primary,
+                color: const Color(0xFF00296B),
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -478,8 +482,7 @@ class _EmergencyContactsScreenState extends State<EmergencyContactsScreen> {
                       if (!parentContext.mounted) return;
                       ScaffoldMessenger.of(parentContext).showSnackBar(
                         const SnackBar(
-                          content:
-                              Text('Failed to update emergency contact'),
+                          content: Text('Failed to update emergency contact'),
                           backgroundColor: AppColors.error,
                         ),
                       );
@@ -531,8 +534,7 @@ class _EmergencyContactsScreenState extends State<EmergencyContactsScreen> {
                   _loadEmergencyContacts();
                   ScaffoldMessenger.of(parentContext).showSnackBar(
                     const SnackBar(
-                      content:
-                          Text('Emergency contact deleted successfully'),
+                      content: Text('Emergency contact deleted successfully'),
                       backgroundColor: AppColors.success,
                     ),
                   );

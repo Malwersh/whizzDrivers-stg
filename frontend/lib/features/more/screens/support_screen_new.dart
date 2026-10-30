@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -13,7 +14,8 @@ class SupportScreen extends StatefulWidget {
   State<SupportScreen> createState() => _SupportScreenState();
 }
 
-class _SupportScreenState extends State<SupportScreen> with TickerProviderStateMixin {
+class _SupportScreenState extends State<SupportScreen>
+    with TickerProviderStateMixin {
   List<Map<String, dynamic>> _tickets = [];
   bool _isLoading = true;
   late AnimationController _animationController;
@@ -211,7 +213,7 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
                             Text(
                               'كيف يمكننا مساعدتك؟',
                               style: TextStyle(
-                                color: Colors.white,
+                                color: const Color(0xFF00296B),
                                 fontSize: 22,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -219,7 +221,7 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
                             Text(
                               'نحن هنا لدعمك على مدار الساعة',
                               style: TextStyle(
-                                color: Colors.white,
+                                color: const Color(0xFF00296B),
                                 fontSize: 16,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -258,20 +260,23 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
                           color: const Color(0xFF4CAF50),
                           onTap: () {
                             HapticFeedback.lightImpact();
-                            
+
                             debugPrint('🚀 Navigating to LiveChatScreen...');
-                            
+
                             Navigator.push(
                               context,
                               PageRouteBuilder(
-                                pageBuilder: (context, animation, secondaryAnimation) => 
-                                    const LiveChatScreen(),
-                                transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                                pageBuilder:
+                                    (context, animation, secondaryAnimation) =>
+                                        const LiveChatScreen(),
+                                transitionsBuilder: (context, animation,
+                                    secondaryAnimation, child) {
                                   const begin = Offset(1.0, 0.0);
                                   const end = Offset.zero;
                                   const curve = Curves.easeInOutCubic;
 
-                                  var tween = Tween(begin: begin, end: end).chain(
+                                  var tween =
+                                      Tween(begin: begin, end: end).chain(
                                     CurveTween(curve: curve),
                                   );
 
@@ -280,7 +285,8 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
                                     child: child,
                                   );
                                 },
-                                transitionDuration: const Duration(milliseconds: 300),
+                                transitionDuration:
+                                    const Duration(milliseconds: 300),
                               ),
                             );
                           },
@@ -361,7 +367,7 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
                         children: [
                           const Icon(
                             Icons.history,
-                            color: AppColors.primary,
+                            color: const Color(0xFF00296B),
                             size: 24,
                           ),
                           const SizedBox(width: 12),
@@ -375,7 +381,8 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
                           ),
                           const Spacer(),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
                             decoration: BoxDecoration(
                               color: AppColors.primary.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(20),
@@ -438,38 +445,38 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
               ),
             ],
           ),
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 24),
               ),
-              child: Icon(icon, color: color, size: 24),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textPrimary,
+              const SizedBox(height: 12),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+                textAlign: TextAlign.center,
               ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.textSecondary,
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
+                textAlign: TextAlign.center,
               ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -595,7 +602,8 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -684,7 +692,8 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
                       color: statusColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(12),
@@ -720,7 +729,8 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
               const SizedBox(height: 12),
               Row(
                 children: [
-                  const Icon(Icons.category_outlined, size: 16, color: AppColors.textSecondary),
+                  const Icon(Icons.category_outlined,
+                      size: 16, color: AppColors.textSecondary),
                   const SizedBox(width: 4),
                   Text(
                     ticket['category'] ?? 'عام',
@@ -730,7 +740,8 @@ class _SupportScreenState extends State<SupportScreen> with TickerProviderStateM
                     ),
                   ),
                   const Spacer(),
-                  const Icon(Icons.access_time, size: 16, color: AppColors.textSecondary),
+                  const Icon(Icons.access_time,
+                      size: 16, color: AppColors.textSecondary),
                   const SizedBox(width: 4),
                   Text(
                     ticket['created_at'] ?? 'تاريخ غير معروف',
@@ -765,9 +776,21 @@ class _CreateTicketSheetState extends State<CreateTicketSheet> {
 
   final List<Map<String, dynamic>> _categories = [
     {'value': 'account', 'label': 'مشاكل الحساب', 'icon': Icons.person_outline},
-    {'value': 'payment', 'label': 'مشاكل الدفع', 'icon': Icons.payment_outlined},
-    {'value': 'technical', 'label': 'دعم فني', 'icon': Icons.bug_report_outlined},
-    {'value': 'delivery', 'label': 'مشاكل التوصيل', 'icon': Icons.delivery_dining_outlined},
+    {
+      'value': 'payment',
+      'label': 'مشاكل الدفع',
+      'icon': Icons.payment_outlined
+    },
+    {
+      'value': 'technical',
+      'label': 'دعم فني',
+      'icon': Icons.bug_report_outlined
+    },
+    {
+      'value': 'delivery',
+      'label': 'مشاكل التوصيل',
+      'icon': Icons.delivery_dining_outlined
+    },
     {'value': 'other', 'label': 'أخرى', 'icon': Icons.help_outline},
   ];
 
@@ -913,7 +936,8 @@ class _CreateTicketSheetState extends State<CreateTicketSheet> {
                     value: category['value'],
                     child: Row(
                       children: [
-                        Icon(category['icon'], size: 20, color: AppColors.primary),
+                        Icon(category['icon'],
+                            size: 20, color: const Color(0xFF00296B)),
                         const SizedBox(width: 12),
                         Text(category['label']),
                       ],
@@ -982,6 +1006,7 @@ class _CreateTicketSheetState extends State<CreateTicketSheet> {
             child: ElevatedButton(
               onPressed: _isLoading ? null : _submitTicket,
               style: ElevatedButton.styleFrom(
+                foregroundColor: readableForeground(AppColors.primary),
                 backgroundColor: AppColors.primary,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
@@ -989,11 +1014,12 @@ class _CreateTicketSheetState extends State<CreateTicketSheet> {
                 elevation: 0,
               ),
               child: _isLoading
-                  ? const CircularProgressIndicator(color: Colors.white)
+                  ? const CircularProgressIndicator(
+                      color: const Color(0xFF00296B))
                   : const Text(
                       'إرسال التذكرة',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: const Color(0xFF00296B),
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),

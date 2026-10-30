@@ -1,0 +1,14 @@
+{
+  "function": "DriversApi-staging",
+  "beforeCodeSha256": "+o6DQnl6HoY/rnwmfPSUjzt5iBQvEwkip2IjnptjgO0=",
+  "revisionId": "52e1fee6-f760-4d73-b22a-902c23982a7e",
+  "candidateHexSha256": "fc06c32f7ba202ab9dd41c147e666e45fde98309abbcd2c5ea91b1440287e47e",
+  "changedEntries": [
+    "lambda_driver_api_v2.js",
+    "driver-trip-history.js"
+  ],
+  "scope": "Read-only trip history projection, filters and detail endpoint; all financial writers and prior route/proof modules preserved",
+  "afterCodeSha256": "/AbDL3uiAqud1BwUfmZuRf3pgwmrvNLF6pGxRAKH5H4=",
+  "verifiedStatus": "Successful",
+  "configurationChanges": []
+}

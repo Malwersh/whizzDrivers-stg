@@ -1,3 +1,4 @@
+import '../../../widgets/offer_display_receipt.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
@@ -28,26 +29,26 @@ class DashedCircularProgressPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width / 2 - 2;
-    
+
     // رسم الخلفية بالكامل
     final backgroundPaint = Paint()
       ..color = backgroundColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3.5
       ..strokeCap = StrokeCap.round;
-    
+
     canvas.drawCircle(center, radius, backgroundPaint);
-    
+
     // رسم التقدم
     final progressPaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3.5
       ..strokeCap = StrokeCap.round;
-    
+
     const startAngle = -math.pi / 2;
     final sweepAngle = 2 * math.pi * progress;
-    
+
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius),
       startAngle,
@@ -69,6 +70,7 @@ class OrderOfferCard extends ConsumerStatefulWidget {
   final VoidCallback onReject;
   final VoidCallback onTimeout; // ✅ جديد: معالج منفصل لانتهاء الوقت
   final VoidCallback onTap;
+  final Future<bool> Function()? onDisplayed;
 
   const OrderOfferCard({
     super.key,
@@ -77,15 +79,15 @@ class OrderOfferCard extends ConsumerStatefulWidget {
     required this.onReject,
     required this.onTimeout,
     required this.onTap,
+    this.onDisplayed,
   });
-  
+
   @override
   ConsumerState<OrderOfferCard> createState() => _OrderOfferCardState();
 }
 
 class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
     with SingleTickerProviderStateMixin {
-  
   late AnimationController _controller;
   late Animation<double> _animation;
   late Timer _tickTimer;
@@ -108,13 +110,12 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
     }
 
     // Calculate remaining seconds from expiresAt
-    _remainingSeconds = widget.offer.remainingSeconds;
-    if (_remainingSeconds <= 0 || _remainingSeconds > 90) {
-      _remainingSeconds = 90; // 90 ثانية = 1:30 دقيقة
-    }
+    _remainingSeconds =
+        widget.offer.remainingSeconds.clamp(0, widget.offer.durationSeconds);
 
     // Reset animation controller to match the new remaining duration
-    _controller.duration = Duration(seconds: _remainingSeconds);
+    _controller.duration =
+        Duration(milliseconds: math.max(1, _remainingSeconds * 1000));
     _controller.reset();
     _controller.forward();
 
@@ -142,21 +143,21 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
       }
     });
   }
-  
+
   @override
   void initState() {
     super.initState();
-    
+
     // تهيئة Animation Controller
     _controller = AnimationController(
       duration: Duration(seconds: _remainingSeconds),
       vsync: this,
     );
-    
+
     _animation = Tween<double>(begin: 1.0, end: 0.0).animate(
       CurvedAnimation(parent: _controller, curve: Curves.linear),
     );
-    
+
     // Start countdown using current offer
     _startOrRestartCountdown();
   }
@@ -172,7 +173,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
       _startOrRestartCountdown();
     }
   }
-  
+
   @override
   void dispose() {
     _tickTimer.cancel();
@@ -200,35 +201,40 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
         children: [
           // Wave Header with Timer
           _buildWaveHeader(),
-          
+
           // Main Card Content
           InkWell(
             onTap: widget.onTap,
-            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+            borderRadius:
+                const BorderRadius.vertical(bottom: Radius.circular(16)),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  
                   // Header with earnings
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      // Earnings
-                      Text(
-                        '${widget.offer.estimatedEarnings.toStringAsFixed(0)} ${widget.offer.currency}',
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black,
-                        ),
+                      // Driver compensation is separate from cash collection.
+                      const Text('أجرة التوصيل',
+                          style: TextStyle(
+                              fontSize: 14, color: AppColors.secondary)),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                            '${widget.offer.estimatedEarnings.toStringAsFixed(0)} ${widget.offer.currency}',
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black,
+                            )),
                       ),
                     ],
                   ),
-                  
+
                   const SizedBox(height: 4),
-                  
+
                   // Trip details
                   Text(
                     '${widget.offer.distance.toStringAsFixed(1)} كم • ${widget.offer.estimatedMinutes} دقيقة',
@@ -237,12 +243,13 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                       color: Colors.grey[600],
                     ),
                   ),
-                  
+
                   const SizedBox(height: 8),
-                  
+
                   // Order total (قيمة الطلب الإجمالي)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       color: AppColors.secondary.withOpacity(0.08),
                       borderRadius: BorderRadius.circular(6),
@@ -261,7 +268,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          'قيمة الطلب: ${_formatAmount(widget.offer.orderTotal)} ${widget.offer.currency}',
+                          'حصّل من الزبون: ${_formatAmount(widget.offer.orderTotal)} ${widget.offer.currency}',
                           style: const TextStyle(
                             fontSize: 13,
                             color: AppColors.secondary,
@@ -271,9 +278,20 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                       ],
                     ),
                   ),
-                  
+
                   const SizedBox(height: 12),
-                  
+
+                  if (widget.offer.financialTerms != null &&
+                      widget.offer.financialTerms?['schemaVersion'] != 3 &&
+                      widget.offer.holdRequiredAmount != null) ...[
+                    Text(
+                        'يُحجز عند القبول: ${_formatAmount(widget.offer.holdRequiredAmount!)} د.ع',
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.secondary)),
+                    const SizedBox(height: 12),
+                  ],
                   // Store pickup info
                   Row(
                     children: [
@@ -308,9 +326,9 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                       ),
                     ],
                   ),
-                  
+
                   const SizedBox(height: 12),
-                  
+
                   // Customer delivery info
                   Row(
                     children: [
@@ -320,8 +338,10 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
-                              'توصيل للزبون',
+                            Text(
+                              widget.offer.customerName.isEmpty
+                                  ? 'الزبون'
+                                  : widget.offer.customerName,
                               style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
@@ -329,7 +349,11 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                               ),
                             ),
                             Text(
-                              widget.offer.customerName,
+                              widget.offer.customerAddress.isEmpty
+                                  ? 'عنوان التوصيل غير متاح'
+                                  : widget.offer.customerAddress,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 13,
                                 color: Colors.grey[600],
@@ -341,7 +365,8 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                       GestureDetector(
                         onTap: () => _showOrderItems(context),
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: AppColors.secondary.withOpacity(0.1),
                             borderRadius: BorderRadius.circular(12),
@@ -350,7 +375,9 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                             ),
                           ),
                           child: Text(
-                            '${widget.offer.itemsCount} عنصر',
+                            widget.offer.items.isEmpty
+                                ? 'تفاصيل العناصر غير متاحة'
+                                : '${widget.offer.itemsCount} قطعة',
                             style: const TextStyle(
                               fontSize: 12,
                               color: AppColors.secondary,
@@ -361,7 +388,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                       ),
                     ],
                   ),
-                  
+
                   // Special instructions if available
                   if (widget.offer.specialInstructions != null) ...[
                     const SizedBox(height: 12),
@@ -393,73 +420,85 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                       ),
                     ),
                   ],
-                  
+
                   const SizedBox(height: 16),
-                  
+
                   // ⭐ Wallet balance indicator (SECURE)
                   _buildWalletBalanceIndicator(),
-                  
+
                   const SizedBox(height: 16),
-                  
+
                   // Accept and Reject buttons
-                  Row(
-                    children: [
-                      // Reject button
-                      Expanded(
-                        child: SizedBox(
-                          height: 48,
-                          child: TextButton(
-                            onPressed: () {
-                              print('🔴🔴🔴 REJECT BUTTON TAPPED IN ORDER_OFFER_CARD! 🔴🔴🔴');
-                              widget.onReject();
-                            },
-                            style: TextButton.styleFrom(
-                              foregroundColor: Colors.grey[700],
-                              backgroundColor: Colors.grey[200],
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(24),
+                  OfferDisplayReceipt(
+                    expiresAt: widget.offer.expiresAt,
+                    acknowledge:
+                        _isBalanceSufficient() ? widget.onDisplayed : null,
+                    child: Row(
+                      children: [
+                        // Reject button
+                        Expanded(
+                          child: SizedBox(
+                            height: 48,
+                            child: TextButton(
+                              onPressed: () {
+                                print(
+                                    '🔴🔴🔴 REJECT BUTTON TAPPED IN ORDER_OFFER_CARD! 🔴🔴🔴');
+                                widget.onReject();
+                              },
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.grey[700],
+                                backgroundColor: Colors.grey[200],
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                ),
                               ),
-                            ),
-                            child: const Text(
-                              'رفض',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      
-                      const SizedBox(width: 12),
-                      
-                      // Accept button
-                      Expanded(
-                        child: SizedBox(
-                          height: 48,
-                          child: ElevatedButton(
-                            onPressed: _isBalanceSufficient() ? widget.onAccept : null,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _isBalanceSufficient() ? AppColors.primary : Colors.grey[400],
-                              foregroundColor: _isBalanceSufficient() ? Colors.black87 : Colors.white,
-                              disabledBackgroundColor: Colors.grey[400],
-                              disabledForegroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(24),
-                              ),
-                              elevation: 0,
-                            ),
-                            child: const Text(
-                              'قبول',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
+                              child: const Text(
+                                'رفض',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+
+                        const SizedBox(width: 12),
+
+                        // Accept button
+                        Expanded(
+                          child: SizedBox(
+                            height: 48,
+                            child: ElevatedButton(
+                              onPressed: _isBalanceSufficient()
+                                  ? widget.onAccept
+                                  : null,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _isBalanceSufficient()
+                                    ? AppColors.primary
+                                    : Colors.grey[400],
+                                foregroundColor: _isBalanceSufficient()
+                                    ? Colors.black87
+                                    : Colors.white,
+                                disabledBackgroundColor: Colors.grey[400],
+                                disabledForegroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                ),
+                                elevation: 0,
+                              ),
+                              child: const Text(
+                                'قبول',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -469,19 +508,19 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
       ),
     );
   }
-  
+
   /// Wave Header مع المؤقت
   Widget _buildWaveHeader() {
     // حساب التقدم بناءً على الوقت الفعلي المتبقي
-    const totalSeconds = 90; // 90 ثانية = 1:30
+    final totalSeconds = widget.offer.durationSeconds;
     final progress = _remainingSeconds / totalSeconds;
     const color = AppColors.secondary;
-    
+
     // حساب الدقائق والثواني
     final minutes = (_remainingSeconds / 60).floor();
     final seconds = _remainingSeconds % 60;
     final timeText = '$minutes:${seconds.toString().padLeft(2, '0')}';
-    
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       decoration: BoxDecoration(
@@ -556,7 +595,8 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.emoji_events, color: AppColors.secondary, size: 16),
+                const Icon(Icons.emoji_events,
+                    color: AppColors.secondary, size: 16),
                 const SizedBox(width: 6),
                 Text(
                   'ترتيب ${widget.offer.rank}',
@@ -573,7 +613,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
       ),
     );
   }
-  
+
   /// العداد التنازلي - لم يعد مستخدماً (تم نقله للـ Header)
   Widget _buildCountdownTimer() {
     return const SizedBox.shrink();
@@ -589,7 +629,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
             : progress > 0.16
                 ? Colors.orange
                 : Colors.red;
-        
+
         return Container(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(
@@ -636,9 +676,12 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
 
   /// Build store icon with restaurant image or fallback icon
   Widget _buildStoreIcon() {
-    print('🖼️ OrderOfferCard - Restaurant Image URL: ${widget.offer.restaurantImageUrl}');
-    print('🖼️ OrderOfferCard - Restaurant Name: ${widget.offer.restaurantName}');
-    if (widget.offer.restaurantImageUrl != null && widget.offer.restaurantImageUrl!.isNotEmpty) {
+    print(
+        '🖼️ OrderOfferCard - Restaurant Image URL: ${widget.offer.restaurantImageUrl}');
+    print(
+        '🖼️ OrderOfferCard - Restaurant Name: ${widget.offer.restaurantName}');
+    if (widget.offer.restaurantImageUrl != null &&
+        widget.offer.restaurantImageUrl!.isNotEmpty) {
       return Container(
         width: 40,
         height: 40,
@@ -732,7 +775,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            
+
             // Header
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -754,9 +797,9 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                 ],
               ),
             ),
-            
+
             const Divider(height: 1),
-            
+
             // Items list
             Expanded(
               child: ListView.builder(
@@ -782,30 +825,31 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                             color: Colors.grey[300],
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: item.imageUrl != null && item.imageUrl!.isNotEmpty
-                            ? ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  item.imageUrl!,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) {
-                                    return Icon(
-                                      Icons.restaurant_menu,
-                                      color: Colors.grey[600],
-                                      size: 30,
-                                    );
-                                  },
+                          child: item.imageUrl != null &&
+                                  item.imageUrl!.isNotEmpty
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Image.network(
+                                    item.imageUrl!,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Icon(
+                                        Icons.restaurant_menu,
+                                        color: Colors.grey[600],
+                                        size: 30,
+                                      );
+                                    },
+                                  ),
+                                )
+                              : Icon(
+                                  Icons.restaurant_menu,
+                                  color: Colors.grey[600],
+                                  size: 30,
                                 ),
-                              )
-                            : Icon(
-                                Icons.restaurant_menu,
-                                color: Colors.grey[600],
-                                size: 30,
-                              ),
                         ),
-                        
+
                         const SizedBox(width: 12),
-                        
+
                         // Item details
                         Expanded(
                           child: Column(
@@ -833,7 +877,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
                             ],
                           ),
                         ),
-                        
+
                         // Quantity circle
                         Container(
                           width: 32,
@@ -868,8 +912,9 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
   /// Builds a circular avatar with the first letter of the customer name
   Widget _buildCustomerAvatar(String customerName) {
     // Get first letter of customer name, fallback to 'ز' if empty
-    String firstLetter = customerName.isNotEmpty ? customerName[0].toUpperCase() : 'ز';
-    
+    String firstLetter =
+        customerName.isNotEmpty ? customerName[0].toUpperCase() : 'ز';
+
     return Container(
       width: 40,
       height: 40,
@@ -894,7 +939,7 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
   /// Shows ONLY if driver does NOT have enough balance
   Widget _buildWalletBalanceIndicator() {
     final walletState = ref.watch(walletBalanceProvider);
-    
+
     return walletState.when(
       data: (wallet) {
         // SECURITY: Validate order total is positive
@@ -903,15 +948,15 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
         if (requiredAmount <= 0) {
           return const SizedBox.shrink();
         }
-        
+
         // SECURITY: Check if driver has enough balance
         final hasEnoughBalance = wallet.availableBalance >= requiredAmount;
-        
+
         // ✅ إخفاء المؤشر إذا الرصيد كافٍ
         if (hasEnoughBalance) {
           return const SizedBox.shrink();
         }
-        
+
         // ⚠️ عرض المؤشر الأحمر فقط عند عدم كفاية الرصيد
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -953,18 +998,19 @@ class _OrderOfferCardState extends ConsumerState<OrderOfferCard>
       },
     );
   }
-  
+
   /// 🔒 SECURE: Check if driver has sufficient wallet balance
   bool _isBalanceSufficient() {
     final walletState = ref.watch(walletBalanceProvider);
-    
+
     return walletState.maybeWhen(
       data: (wallet) {
         final requiredAmount = widget.offer.requiredBalanceAmount;
         if (requiredAmount <= 0) return true;
         return wallet.availableBalance >= requiredAmount;
       },
-      orElse: () => true, // Allow accept during loading/error (will fail on backend)
+      orElse: () =>
+          true, // Allow accept during loading/error (will fail on backend)
     );
   }
 }
