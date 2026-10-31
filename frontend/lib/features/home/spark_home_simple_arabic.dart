@@ -1,3 +1,6 @@
+import '../../services/map_data_failure.dart';
+import 'widgets/outside_coverage_sheet.dart';
+import '../../services/financial_offer_inbox.dart';
 import 'widgets/store_marker_halo.dart';
 import 'widgets/store_photo_marker.dart';
 import 'widgets/map_tools.dart';
@@ -166,6 +169,47 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   String?
       _currentRejectConfirmationOfferId; // معرّف العرض الذي يتم تأكيد رفضه حالياً
   StreamSubscription? _waveOfferSubscription;
+  StreamSubscription? _financialPushSubscription;
+  final Set<String> _pushHydrating={};
+  final Map<String,DateTime> _pushRetryAfter={};
+  bool _drainingFinancialPush=false;
+
+  Future<void> _drainFinancialPush() async {
+    if(!mounted||_drainingFinancialPush)return;
+    _drainingFinancialPush=true;
+    try{
+      final owner=await _bindOfferOwner();if(owner==null||!mounted)return;
+      for(final reference in await FinancialOfferInbox.pending(owner)){
+        if(!mounted)break;
+        await _receiveFinancialPush(reference);
+      }
+    } finally { _drainingFinancialPush=false; }
+  }
+
+  Future<void> _receiveFinancialPush(Map<String,dynamic> data)async{
+    final id=data['offerId']?.toString()??'';
+    if(id.isEmpty||_pushHydrating.contains(id)||(_pushRetryAfter[id]?.isAfter(DateTime.now())??false))return;
+    _pushHydrating.add(id);
+    final epoch=_offerAuthEpoch;
+    try{
+      final owner=await _bindOfferOwner();
+      if(owner==null||data['driverId']!=owner||!mounted||epoch!=_offerAuthEpoch)return;
+      if(_currentWaveOffers.any((o)=>o.offerId==id)){await PushNotificationsService.clearStashedFinancialOffer(data);return;}
+      final hydrated=await FinancialOfferReference.hydrate(data,owner);
+      if(!mounted||epoch!=_offerAuthEpoch||await _bindOfferOwner()!=owner)return;
+      final offer=WaveOffer.fromJson(hydrated);
+      if(!await _offerStillVisible(offer)){await PushNotificationsService.clearStashedFinancialOffer(data);return;}
+      if(!mounted||epoch!=_offerAuthEpoch)return;
+      await _handleWaveOffer(offer,fromSocket:false);
+      if(mounted&&epoch==_offerAuthEpoch&&_currentWaveOffers.any((o)=>o.offerId==id)){
+        await PushNotificationsService.clearStashedFinancialOffer(data);
+        _pushRetryAfter.remove(id);
+      }
+    } catch (_) {
+      // Keep the reference for a bounded retry until its original expiry.
+      _pushRetryAfter[id]=DateTime.now().add(const Duration(seconds:3));
+    } finally { _pushHydrating.remove(id); }
+  }
   StreamSubscription? _offerExpiredSubscription;
   StreamSubscription? _offerTakenSubscription;
   StreamSubscription<dynamic>? _offerAuthSubscription;
@@ -289,6 +333,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   MapDataResponse? _mapData;
   bool _isLoadingMapData = false;
+  bool _outsideCoverageNoticeShown = false;
+  bool _coverageSheetOpen = false;
+  bool _outsideCoverageConfirmed = false;
+  bool _checkingCoverageForStart = false;
 
   // 📊 Driver Performance Metrics
 
@@ -320,6 +368,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       if (event.eventName == 'SIGNED_OUT' || event.eventName == 'SIGNED_IN') {
         _offerAuthEpoch++;
         _performancePreview.clear();
+        _pushRetryAfter.clear();
         _offerClosureScope.bind(null);
         if (mounted)
           setState(() {
@@ -327,6 +376,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
             _currentWaveOffer = null;
           });
       }
+    });
+    _financialPushSubscription=FinancialOfferInbox.events.listen((data){
+      unawaited(_receiveFinancialPush(data));
     });
     _startLocationWaves();
     _searchPositionTimer = Timer.periodic(
@@ -559,9 +611,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       print('🔌 Reconnecting WebSocket...');
 
-      final prefs = await SharedPreferences.getInstance();
-      final driverId = prefs.getString('driver_id') ??
-          '74b83488-f041-70a4-52d7-d2370b7eec06';
+      final driverId = await _bindOfferOwner();
+      if (driverId == null) throw const DriverSearchStartException('أعد تسجيل الدخول.', code: 'AUTH_REQUIRED');
       final authToken = await CognitoTokenService.getIdToken();
       if (authToken == null)
         throw const DriverSearchStartException(
@@ -667,6 +718,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   Future<void> _consumeWaveOfferFromPushTap() async {
     print('🔍 [Consume] _consumeWaveOfferFromPushTap() called');
     await _refreshOfferClosures();
+    await _drainFinancialPush();
     try {
       final data =
           await PushNotificationsService.consumeStashedWaveOfferFromTap();
@@ -701,14 +753,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       }
 
       if (data['type'] == 'financial_wave_offer_available') {
-        final hydrated = await FinancialOfferReference.hydrate(data, owner);
-        if (!mounted || await _bindOfferOwner() != owner) return;
-        final offer = WaveOffer.fromJson(hydrated);
-        if (!await _offerStillVisible(offer) ||
-            !mounted ||
-            _currentWaveOffers.any((o) => o.offerId == offer.offerId)) return;
-        await _handleWaveOffer(offer, fromSocket: false);
-        await PushNotificationsService.clearStashedFinancialOffer(data);
+        await _receiveFinancialPush(data);
         return;
       }
 
@@ -855,6 +900,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
     _offerExpiryCleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
+      unawaited(_drainFinancialPush());
+      _pushRetryAfter.removeWhere((_,at)=>DateTime.now().difference(at).inMinutes>2);
 
       if (_currentWaveOffers.isNotEmpty) {
         unawaited(_refreshOfferClosures());
@@ -1070,31 +1117,74 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     }
   }
 
-  void _startSearchingForOffers() async {
-    try {
-      if (!mounted) {
-        print('⚠️ Widget not mounted, cannot start search');
-        return;
-      }
+  void _markOutsideCoverage() {
+    _stopStoresStatusAutoRefresh();
+    if (!mounted) return;
+    setState(() {
+      _outsideCoverageConfirmed = true;
+      _mapData = null; _readyPickups.clear(); ++_markerBuildVersion;
+      _markers.removeWhere((m) => m.markerId != const MarkerId('driver_location'));
+    });
+  }
 
+  Future<void> _showOutsideCoverage({bool force = false}) async {
+    if (!mounted || _coverageSheetOpen || (!force && _outsideCoverageNoticeShown)) return;
+    _outsideCoverageNoticeShown = true;
+    _coverageSheetOpen = true;
+    try {
+      await showModalBottomSheet<void>(
+        context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+        builder: (sheetContext) => OutsideCoverageSheet(latitude: _dispatchLat, longitude: _dispatchLng,
+          onRefresh: () {
+            Navigator.of(sheetContext).pop();
+            _outsideCoverageNoticeShown = false;
+            unawaited(_loadMapData());
+          }),
+      );
+    } finally { _coverageSheetOpen = false; }
+  }
+
+  Future<bool> _showCoverageFailure(Object error) async {
+    final outside = error is MapDataFailure && error.kind == MapDataFailureKind.outsideCoverage ||
+      error is DriverSearchStartException && error.code == 'OUTSIDE_SERVICE_AREA';
+    if (!outside || !mounted) return false;
+    _markOutsideCoverage();
+    await _showOutsideCoverage(force: true);
+    return true;
+  }
+
+  void _startSearchingForOffers() async {
+    if (!mounted || _checkingCoverageForStart || _isStartingOnline) return;
+    setState(() => _checkingCoverageForStart = true);
+    try {
       await DriverSearchApiService.checkSearchEligibility();
       if (!mounted) return;
-
-      print('📱 فتح نافذة اختيار وقت البحث...');
-
-      // إظهار modal اختيار الوقت أولاً مثل Spark
+      // Recheck a fresh GPS point before opening the time picker. A dismissed
+      // notice is not permission to search, and old coverage must not trap a
+      // driver who has since returned to a served area.
+      await _requireDispatchPosition();
+      if (!mounted) return;
+      final data = await MapDataService.fetchMapData(lat: _dispatchLat, lng: _dispatchLng);
+      if (!mounted) return;
+      setState(() {
+        _mapData = data;
+        _outsideCoverageConfirmed = false;
+        _outsideCoverageNoticeShown = false;
+      });
+      _updateMapMarkers();
+      _startStoresStatusAutoRefresh();
       _showSparkNowTimeSelection();
-    } catch (e, stackTrace) {
-      print('🚨 خطأ في بدء البحث: $e');
+    } catch (error) {
+      if (await _showCoverageFailure(error)) return;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e is DriverSearchStartException
-              ? e.message
-              : 'تعذر التحقق من حالة حسابك. حاول مرة أخرى.'),
+          content: Text(error is DriverSearchStartException ? error.message
+            : error is MapDataFailure ? error.toString()
+              : 'تعذر التحقق من الموقع أو حالة الحساب. أعد المحاولة.'),
         ));
       }
-
-      print('Stack trace: $stackTrace');
+    } finally {
+      if (mounted) setState(() => _checkingCoverageForStart = false);
     }
   }
 
@@ -1249,6 +1339,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       unawaited(_refreshSearchPosition());
       _startSearchTimer();
     } catch (error) {
+      if (mounted) setState(() => _onlineSheetOpacity = 1);
+      if (await _showCoverageFailure(error)) return;
       if (mounted) {
         setState(() => _onlineSheetOpacity = 1);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -1399,12 +1491,10 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       print('🔄 WebSocket disconnected - attempting reconnection...');
       print('📱 Reason: App crash, network loss, or connection timeout');
 
-      final prefs = await SharedPreferences.getInstance();
-      final driverId = prefs.getString('driver_id') ??
-          '74b83488-f041-70a4-52d7-d2370b7eec06'; // Mustafa - مركز المناذرة
-      final authToken = prefs.getString('auth_token') ??
-          prefs.getString('id_token') ??
-          'mock_token';
+      final driverId = await _bindOfferOwner();
+      if (driverId == null) throw const DriverSearchStartException('أعد تسجيل الدخول.', code: 'AUTH_REQUIRED');
+      final authToken = await CognitoTokenService.getIdToken();
+      if (authToken == null) throw const DriverSearchStartException('أعد تسجيل الدخول.', code: 'AUTH_REQUIRED');
 
       print('🚗 معرف السائق: $driverId');
 
@@ -2013,6 +2103,8 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       if (!mounted) return;
 
       setState(() {
+        _outsideCoverageNoticeShown = false;
+        _outsideCoverageConfirmed = false;
         _mapData = data;
         _updateMapMarkers();
         _isLoadingMapData = false;
@@ -2027,45 +2119,16 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         _isLoadingMapData = false;
       });
 
-      // 🔄 إعادة المحاولة مرة واحدة إذا كان الخطء Authentication
-      if (e.toString().contains('Authentication')) {
-        await Future.delayed(const Duration(seconds: 2));
-
-        if (!mounted) return;
-
-        try {
-          await _requireDispatchPosition();
-          final data = await MapDataService.fetchMapData(
-            lat: _dispatchLat,
-            lng: _dispatchLng,
-          );
-
-          if (!mounted) return;
-
-          setState(() {
-            _mapData = data;
-            _updateMapMarkers();
-          });
-
-          return; // نجحت إعادة المحاولة
-        } catch (retryError) {}
+      if (e is MapDataFailure && e.kind == MapDataFailureKind.outsideCoverage) {
+        _markOutsideCoverage();
+        await _showOutsideCoverage();
+        return;
       }
-
-      // عرض رسالة للمستخدم فقط إذا فشلت كل المحاولات
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              e.toString().contains('Authentication')
-                  ? 'خطأ في المصادقة - الرجاء إعادة تسجيل الدخول'
-                  : 'فشل تحميل المطاعم - تأكد من الاتصال بالإنترنت',
-              textAlign: TextAlign.center,
-            ),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e is MapDataFailure ? e.toString() : 'تعذر تحديد موقعك. تحقق من إذن الموقع وGPS ثم أعد المحاولة.'),
+        backgroundColor: AppColors.secondary,
+        action: SnackBarAction(label: 'إعادة المحاولة', textColor: Colors.white, onPressed: () => unawaited(_loadMapData())),
+      ));
     }
   }
 
@@ -3211,7 +3274,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               );
             },
             child: GoOnlineButton(
-              busy: _isStartingOnline || _isCheckingWalletBalance,
+              busy: _isStartingOnline || _isCheckingWalletBalance || _checkingCoverageForStart,
               onPressed: _startSearchingForOffers,
             ),
           ),
@@ -3441,7 +3504,9 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         const LocationPermissionNotice(),
 
         // Popular offer times section
-        const DemandCard(),
+        if (_outsideCoverageConfirmed)
+          const Padding(padding: EdgeInsets.all(20), child: Text('أنت خارج مناطق الخدمة حاليًا', style: TextStyle(color: AppColors.secondary)))
+        else const DemandCard(),
       ],
     );
   }
@@ -3460,6 +3525,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     _performancePreview.clear();
     _offerClosureScope.bind(null);
     _offerAuthSubscription?.cancel();
+    _financialPushSubscription?.cancel();
     try {
       print('🧹 Disposing SparkHomeSimpleArabic resources...');
 
@@ -3592,7 +3658,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   Widget _buildSparkNowModal(StateSetter setModalState) {
     final timeOptions = _timeOptions ?? <DateTime>[];
-    final busy = _isCheckingWalletBalance || _isStartingOnline;
+    final busy = _isCheckingWalletBalance || _isStartingOnline || _checkingCoverageForStart;
     final buttonShape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(14),
     );
@@ -3964,6 +4030,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
         _currentWaveOffers.add(waveOffer);
         _currentWaveOffer = waveOffer;
       });
+      ref.read(selectedTabProvider.notifier).state = 0;
       unawaited(_performancePreview.prefetch(owner));
       await DriverOfferAudio.play(waveOffer.offerId);
     } catch (_) {/* A failed scope check cannot display a stale offer. */}

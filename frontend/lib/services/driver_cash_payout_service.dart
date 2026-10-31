@@ -57,6 +57,9 @@ class DriverCashPayoutService {
   static String friendly(String? code) {
     if (code == 'DRIVER_PAYOUT_ACTIVE_REQUEST')
       return 'لديك طلب صرف قيد المتابعة. أكمله أو ألغِه قبل طلب جديد.';
+    if (code == 'DRIVER_PAYOUT_AMOUNT_LIMIT') {
+      return 'المبلغ يتجاوز حد طلب الصرف الحالي. حدّث البيانات وراجع المبلغ.';
+    }
     if (code == 'DRIVER_PAYOUT_NOT_ELIGIBLE')
       return 'المبلغ يتجاوز الرصيد المؤهل. حدّث البيانات وراجع المبلغ.';
     if (code == 'DRIVER_PAYOUT_STATE_CHANGED' ||

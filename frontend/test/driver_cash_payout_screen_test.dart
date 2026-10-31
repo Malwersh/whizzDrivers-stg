@@ -5,8 +5,10 @@ import 'package:wizz_driver/features/wallet/screens/driver_cash_payout_screen.da
 
 class FakePayoutApi extends DriverCashPayoutService {
   FakePayoutApi(
-      {this.eligibility = const {'status': 'VERIFIED', 'eligibleIqd': 5000}});
+      {this.eligibility = const {'status': 'VERIFIED', 'eligibleIqd': 5000},
+      this.maximum});
   final Map<String, dynamic> eligibility;
+  final int? maximum;
   final mutations = <Map<String, dynamic>>[];
   @override
   Future<void> retryPending() async {}
@@ -17,6 +19,7 @@ class FakePayoutApi extends DriverCashPayoutService {
     return {
       'success': true,
       'enabled': true,
+      if (maximum != null) 'limits': {'maximumPerRequestIqd': maximum},
       'eligibility': eligibility,
       'items': [
         {
@@ -33,6 +36,23 @@ class FakePayoutApi extends DriverCashPayoutService {
 }
 
 void main() {
+  testWidgets(
+      'server request cap is visible and blocks amount below eligibility but above request cap',
+      (t) async {
+    final api = FakePayoutApi(maximum: 2500);
+    await t.pumpWidget(MaterialApp(home: DriverCashPayoutScreen(service: api)));
+    await t.pumpAndSettle();
+    expect(find.textContaining('الحد الأعلى لطلب الصرف: 2500'), findsOneWidget);
+    await t.enterText(find.byType(TextField), '3000');
+    await t.ensureVisible(find.text('طلب صرف نقدي'));
+    await t.tap(find.text('طلب صرف نقدي'));
+    await t.pumpAndSettle();
+    expect(api.mutations, isEmpty);
+    await t.drag(find.byType(ListView), const Offset(0, 600));
+    await t.pumpAndSettle();
+    expect(find.text('الحد الأعلى لطلب الصرف 2500 د.ع.'), findsOneWidget);
+  });
+
   testWidgets('unverified wallet explains the reason and keeps amount disabled',
       (t) async {
     final api = FakePayoutApi(eligibility: {

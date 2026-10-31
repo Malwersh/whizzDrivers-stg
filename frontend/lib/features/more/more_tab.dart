@@ -1,3 +1,4 @@
+import '../../legal/application_legal_screen.dart';
 import '../../providers/riverpod/tab_provider.dart';
 import 'screens/offer_sound_test_sheet.dart';
 import 'screens/driver_quality_screen.dart';
@@ -367,34 +368,40 @@ class _MoreTabState extends ConsumerState<MoreTab> {
                       title: localizations.legal,
                       items: [
                         _buildMenuItem(
+                            icon: Icons.policy_outlined,
+                            title: 'سياسة الاستخدام',
+                            onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) =>
+                                        const ApplicationLegalScreen(
+                                            documentId: 'USAGE')))),
+                        _buildMenuItem(
+                            icon: Icons.assignment_return_outlined,
+                            title: 'التعذر والعودة والسلامة',
+                            onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) =>
+                                        const ApplicationLegalScreen(
+                                            documentId: 'CANCELLATION')))),
+                        _buildMenuItem(
                           icon: Icons.description_outlined,
                           title: localizations.termsOfService,
-                          enabled: false,
-                          iconColor:
-                              HadhirColors.darkGray, // Dark gray for sub-items
-                          onTap: () {
-                            _showTermsDialog();
-                          },
+                          onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const ApplicationLegalScreen(
+                                      documentId: 'TERMS'))),
                         ),
                         _buildMenuItem(
                           icon: Icons.privacy_tip_outlined,
                           title: localizations.privacyPolicy,
-                          enabled: false,
-                          iconColor:
-                              HadhirColors.darkGray, // Dark gray for sub-items
-                          onTap: () {
-                            _showPrivacyDialog();
-                          },
-                        ),
-                        _buildMenuItem(
-                          icon: Icons.gavel_outlined,
-                          title: localizations.occupationalAccidentPolicy,
-                          enabled: false,
-                          iconColor:
-                              HadhirColors.darkGray, // Dark gray for sub-items
-                          onTap: () {
-                            _showAccidentPolicyDialog();
-                          },
+                          onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const ApplicationLegalScreen(
+                                      documentId: 'PRIVACY'))),
                         ),
                       ],
                     ),
@@ -889,72 +896,6 @@ class _MoreTabState extends ConsumerState<MoreTab> {
               },
             ),
           ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(localizations.close),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showTermsDialog() {
-    final localizations = AppLocalizations.of(context)!;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(localizations.termsOfService),
-        content: const SingleChildScrollView(
-          child: Text(
-            'Here would be the Terms of Service content...\n\n'
-            'This would contain the full legal terms and conditions for using the Hadhir Driver app.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(localizations.close),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showPrivacyDialog() {
-    final localizations = AppLocalizations.of(context)!;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(localizations.privacyPolicy),
-        content: const SingleChildScrollView(
-          child: Text(
-            'Here would be the Privacy Policy content...\n\n'
-            'This would contain information about how user data is collected, used, and protected.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(localizations.close),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAccidentPolicyDialog() {
-    final localizations = AppLocalizations.of(context)!;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(localizations.occupationalAccidentPolicy),
-        content: const SingleChildScrollView(
-          child: Text(
-            'Here would be the Occupational Accident Policy content...\n\n'
-            'This would contain information about accident coverage and procedures.',
-          ),
         ),
         actions: [
           TextButton(

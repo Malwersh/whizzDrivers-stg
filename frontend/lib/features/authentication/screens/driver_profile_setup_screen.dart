@@ -1,3 +1,5 @@
+import '../../../legal/application_legal_bundle.dart';
+import '../../../legal/application_legal_consent.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,6 +30,8 @@ class _DriverProfileSetupScreenState
   Map<String, dynamic>? _options;
   String? _governorate, _region, _error, _vehicleType;
   bool _loading = true, _saving = false;
+  ApplicationLegalBundle? _legalConsent;
+  int _legalEpoch = 0;
   static const _documents = {
     'registration_paper': 'سنوية المركبة',
     'driving_license': 'إجازة السوق / رخصة القيادة',
@@ -82,6 +86,11 @@ class _DriverProfileSetupScreenState
   }
 
   Future<void> _submit() async {
+    if (_legalConsent == null) {
+      setState(() =>
+          _error = 'راجع السياسات المنشورة ووافق عليها قبل إرسال بياناتك.');
+      return;
+    }
     if (_saving || !_form.currentState!.validate()) return;
     if (_documents.keys.any((type) => !_files.containsKey(type))) {
       setState(() => _error = 'أرفق صور الوثائق الثلاث لإرسال طلبك');
@@ -111,6 +120,8 @@ class _DriverProfileSetupScreenState
               headers: await _headers(),
               body: jsonEncode({
                 'profileSchemaVersion': 2,
+                'legalAccepted': true,
+                'legalAcceptance': _legalConsent!.pin,
                 'name': _name.text.trim(),
                 'vehicleType': _vehicleType,
                 'vehiclePlate': _plate.text.trim(),
@@ -123,6 +134,15 @@ class _DriverProfileSetupScreenState
               }))
           .timeout(const Duration(seconds: 25));
       if (response.statusCode != 200) {
+        final error = jsonDecode(response.body);
+        if (['LEGAL_VERSION_CHANGED', 'LEGAL_ACCEPTANCE_REQUIRED']
+            .contains(error['code'] ?? error['error'])) {
+          setState(() {
+            _legalConsent = null;
+            _legalEpoch++;
+          });
+          throw StateError('تحدثت السياسات؛ راجع النص الجديد ووافق عليه.');
+        }
         throw StateError(
             'تعذر حفظ الملف. تأكد من أن منطقة العمل ما زالت مفتوحة.');
       }
@@ -297,6 +317,11 @@ class _DriverProfileSetupScreenState
                                               _files.remove(entry.key);
                                               _urls.remove(entry.key);
                                             })))),
+                                ApplicationLegalConsent(
+                                    key: ValueKey('driver-legal-$_legalEpoch'),
+                                    enabled: !_saving,
+                                    onChanged: (b) =>
+                                        setState(() => _legalConsent = b)),
                                 if (_error != null)
                                   Padding(
                                       padding: const EdgeInsets.symmetric(

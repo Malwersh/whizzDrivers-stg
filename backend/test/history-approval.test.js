@@ -89,17 +89,26 @@ test('forged JWT cannot impersonate an approved driver or read their history', a
 
 test('simplified profile submits three documents and enters review without ID numbers', async () => {
   const rows=[{regionId:'iq',name_ar:'العراق',level:0,effective_is_active:1},{regionId:'g',name_ar:'محافظة',level:1,parent_id:'iq',effective_is_active:1},{regionId:'district',level:2,parent_id:'g',effective_is_active:1},{regionId:'work',name_ar:'منطقة',level:3,parent_id:'district',effective_is_active:1}];
+  const legal=require('../customer-legal-contract-344'),values=legal.defaults('DRIVER');const row={pk:legal.pkFor('DRIVER'),sk:'CURRENT',status:'PUBLISHED',version:1,publishedAt:'2026-10-28T00:00:00.000Z',values};row.digest=legal.hash({schemaVersion:1,revision:1,publishedAt:row.publishedAt,...values});
   const calls=[];
-  const api=loadApi(async command=>{calls.push(command);if(command.constructor.name==='ScanCommand')return {Items:rows};if(command.constructor.name==='UpdateCommand')return {Attributes:{driverId:'d',status:'PENDING_REVIEW'}};return {Item:{driverId:'d',status:'PENDING_PROFILE'}};});
+  const api=loadApi(async command=>{calls.push(command);if(command.input.TableName==='legal')return {Item:row};if(command.constructor.name==='ScanCommand')return {Items:rows};if(command.constructor.name==='UpdateCommand')return {Attributes:{driverId:'d',status:'PENDING_REVIEW'}};return {Item:{driverId:'d',status:'PENDING_PROFILE'}};},{env:{LEGAL_SETTINGS_TABLE:'legal'}});
   const prefix='s3://DRIVER_DOCUMENTS_BUCKET/drivers/d/';
-  const body={profileSchemaVersion:2,vehicleType:'motorcycle',name:'سائق اختبار',governorate_id:'g',work_region_id:'work',home_address_text:'قرب المدرسة',drivingLicenseUrl:prefix+'driving_license/photo.jpg',registrationPaperUrl:prefix+'registration_paper/photo.jpg',nationalIdUrl:prefix+'national_id/photo.jpg'};
+  const body={profileSchemaVersion:2,legalAccepted:true,legalAcceptance:legal.pin(legal.readPublished(row)),vehicleType:'motorcycle',name:'سائق اختبار',governorate_id:'g',work_region_id:'work',home_address_text:'قرب المدرسة',drivingLicenseUrl:prefix+'driving_license/photo.jpg',registrationPaperUrl:prefix+'registration_paper/photo.jpg',nationalIdUrl:prefix+'national_id/photo.jpg'};
   const response=await api.updateDriverProfile('d',[],'token',body,{});
   assert.equal(response.statusCode,200);
   const transaction=calls.find(c=>c.constructor.name==='TransactWriteCommand');
   const update=transaction.input.TransactItems.find(item=>item.Update).Update;
   assert.equal(transaction.input.TransactItems[0].ConditionCheck.Key.pk,'ACCOUNT_LIFECYCLE#DRIVER#d');
+  assert.ok(transaction.input.TransactItems.some(o=>o.ConditionCheck?.Key.pk===legal.pkFor('DRIVER')));
+  assert.equal(update.ExpressionAttributeValues[':legalAcceptance'].subjectId,'d');
   assert.equal(update.ExpressionAttributeValues[':pendingReview'],'PENDING_REVIEW');
   assert.equal(Object.values(update.ExpressionAttributeNames).includes('licenseNumber'),false);
+  calls.length=0;
+  assert.equal((await api.updateDriverProfile('d',[],'token',{...body,legalAccepted:false},{})).statusCode,409);
+  assert.equal(calls.some(c=>c.constructor.name==='TransactWriteCommand'),false);
+  calls.length=0;
+  assert.equal((await api.updateDriverProfile('d',[],'token',{...body,legalAcceptance:{revision:99,digest:'0'.repeat(64)}},{})).statusCode,409);
+  assert.equal(calls.some(c=>c.constructor.name==='TransactWriteCommand'),false);
   calls.length=0;
   assert.equal((await api.updateDriverProfile('d',[],'token',{...body,governorate_id:'other'},{})).statusCode,400);
   assert.equal(calls.some(c=>['UpdateCommand','TransactWriteCommand'].includes(c.constructor.name)),false);

@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/order_persistence_service.dart';
@@ -18,11 +19,11 @@ class OrderRestoreHelper {
   ) async {
     try {
       debugPrint('🔍 Checking for active order from server...');
-      
+
       // ✅ استدعاء API مباشرة - الحقيقة الوحيدة هي السيرفر
       final activeOrderService = ActiveOrderService();
       final activeOrder = await activeOrderService.getActiveOrder();
-      
+
       if (activeOrder == null) {
         debugPrint('ℹ️ No active order from server');
         // مسح أي بيانات محلية قديمة
@@ -30,11 +31,12 @@ class OrderRestoreHelper {
         return;
       }
 
-      debugPrint('✅ Active order found: ${activeOrder.orderId} (status: ${activeOrder.status})');
-      
+      debugPrint(
+          '✅ Active order found: ${activeOrder.orderId} (status: ${activeOrder.status})');
+
       // ✅ عرض BottomSheet للسائق
       if (!context.mounted) return;
-      
+
       final shouldContinue = await showActiveOrderBottomSheet(
         context: context,
         order: activeOrder,
@@ -46,7 +48,7 @@ class OrderRestoreHelper {
         // ✅ السائق اختار المتابعة - الانتقال للشاشة المناسبة
         debugPrint('✅ Driver chose to continue active order');
         await _navigateToOrderScreen(context, activeOrder);
-        
+
         // ✅ حفظ محلياً كـ backup فقط
         await OrderPersistenceService.saveActiveOrder(
           orderId: activeOrder.orderId,
@@ -59,7 +61,6 @@ class OrderRestoreHelper {
         await OrderPersistenceService.clearActiveOrder();
         // TODO: يمكن إضافة API call لإلغاء الطلب من السيرفر
       }
-
     } catch (e) {
       debugPrint('❌ Error checking active order: $e');
       // في حالة الخطأ، مسح البيانات المحلية
@@ -75,7 +76,7 @@ class OrderRestoreHelper {
     if (!context.mounted) return;
 
     Widget screen;
-    
+
     switch (order.status) {
       case 'ready_for_pickup':
       case 'accepted':
@@ -83,22 +84,22 @@ class OrderRestoreHelper {
       case 'heading_to_store':
         screen = HeadingToRestaurantScreen(order: order);
         break;
-        
+
       case 'at_store':
       case 'arrived_at_store':
         screen = AtRestaurantScreen(order: order);
         break;
-        
+
       case 'picked_up':
       case 'heading_to_customer':
         screen = HeadingToCustomerScreen(order: order);
         break;
-        
+
       case 'at_customer':
       case 'arrived_at_customer':
         screen = AtCustomerScreen(order: order);
         break;
-        
+
       case 'returning':
       case 'return_arrived':
         screen = ReturnOrderScreen(order: order);
@@ -110,7 +111,7 @@ class OrderRestoreHelper {
         await OrderPersistenceService.clearActiveOrder();
         debugPrint('ℹ️ Order already completed');
         return;
-        
+
       default:
         // حالة غير معروفة
         debugPrint('⚠️ Unknown order status: ${order.status}');
@@ -163,7 +164,7 @@ class OrderRestoreHelper {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 12),
-              
+
               // معلومات الطلب
               Container(
                 padding: const EdgeInsets.all(16),
@@ -177,12 +178,13 @@ class OrderRestoreHelper {
                     const Divider(height: 16),
                     _buildInfoRow('المطعم', order.restaurantName),
                     const Divider(height: 16),
-                    _buildInfoRow('رقم الطلب', '#${order.orderId.substring(0, 8)}'),
+                    _buildInfoRow(
+                        'رقم الطلب', '#${order.orderId.substring(0, 8)}'),
                   ],
                 ),
               ),
               const SizedBox(height: 24),
-              
+
               // الرسالة
               Text(
                 'هل تريد متابعة رحلة هذا الطلب؟',
@@ -193,7 +195,7 @@ class OrderRestoreHelper {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
-              
+
               // الأزرار
               Row(
                 children: [
@@ -222,6 +224,8 @@ class OrderRestoreHelper {
                     child: ElevatedButton(
                       onPressed: () => Navigator.pop(context, true),
                       style: ElevatedButton.styleFrom(
+                        foregroundColor:
+                            readableForeground(const Color(0xFFFFD700)),
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         backgroundColor: const Color(0xFFFFD700),
                         shape: RoundedRectangleBorder(

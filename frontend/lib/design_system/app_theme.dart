@@ -13,7 +13,7 @@ class AppTheme {
       useMaterial3: true,
       colorScheme: HadhirColors.lightColorScheme,
       fontFamily: 'Tajawal',
-      
+
       // Monochrome theme extensions
       extensions: const <ThemeExtension<dynamic>>[ArcticCyanColors.light],
 
@@ -59,6 +59,13 @@ class AppTheme {
         ),
       ),
 
+      textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(foregroundColor: HadhirColors.secondary)),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+              foregroundColor: HadhirColors.secondary)),
+      progressIndicatorTheme:
+          const ProgressIndicatorThemeData(color: HadhirColors.secondary),
       // Input Theme - New color system focus styling
       inputDecorationTheme: InputDecorationTheme(
         border: OutlineInputBorder(
@@ -107,7 +114,7 @@ class AppTheme {
       useMaterial3: true,
       colorScheme: HadhirColors.darkColorScheme,
       fontFamily: 'Tajawal',
-      
+
       // Arctic Cyan theme extensions
       extensions: const <ThemeExtension<dynamic>>[ArcticCyanColors.dark],
 
@@ -178,7 +185,7 @@ class AppTheme {
           borderRadius: BorderRadius.circular(DesignTokens.radiusMedium),
         ),
       ),
-      
+
       // Floating Action Button Theme
       floatingActionButtonTheme: FloatingActionButtonThemeData(
         backgroundColor: HadhirColors.arcticCyan,

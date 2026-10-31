@@ -106,6 +106,7 @@ Resources:
       Description: Drivers backend API
       Environment:
         Variables:
+          LEGAL_SETTINGS_TABLE: staging-PlatformStaff
           DRIVER_TABLE: !ImportValue
             Fn::Sub: 'Drivers-Tables-${Environment}-DriversTableName'
           DRIVER_LIVE_STATE_TABLE: !ImportValue
@@ -136,6 +137,13 @@ Resources:
           WAVESYSTEM_HANDLE_DRIVER_REJECT_FUNCTION_NAME: !Ref WaveSystemHandleDriverRejectFunctionName
           DRIVER_DOCUMENTS_BUCKET: !Ref DriversDocumentsBucket
       Policies:
+        - Statement:
+            Effect: Allow
+            Action: [dynamodb:GetItem, dynamodb:ConditionCheckItem]
+            Resource: arn:aws:dynamodb:us-east-1:699561669180:table/staging-PlatformStaff
+            Condition:
+              ForAllValues:StringEquals:
+                dynamodb:LeadingKeys: ["OPERATIONAL_SETTINGS#DRIVER_LEGAL"]
         - !If
           - IsPinnedDispatchStaging
           - Statement:

@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import '../../more/screens/vehicle_info_screen.dart';
 // Account Status Screen
 // Shown when account is suspended or rejected
@@ -165,6 +166,7 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen> {
                     }
                   },
                   style: ElevatedButton.styleFrom(
+                    foregroundColor: readableForeground(Colors.red.shade600),
                     backgroundColor: Colors.red.shade600,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 48,

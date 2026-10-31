@@ -201,7 +201,7 @@ class _PhoneOnlyRegistrationScreenState
                       ),
                       prefixIcon: const Icon(
                         Icons.phone,
-                        color: AppColors.primary,
+                        color: const Color(0xFF00296B),
                       ),
                       filled: true,
                       fillColor: AppColors.surface,
@@ -227,9 +227,9 @@ class _PhoneOnlyRegistrationScreenState
                       }
                       // Clean input for validation
                       String cleanValue = value.trim().replaceAll(
-                        RegExp(r'[\s\-]'),
-                        '',
-                      );
+                            RegExp(r'[\s\-]'),
+                            '',
+                          );
                       // Iraqi phone format: 07XXXXXXXXX (11 digits) or +9647XXXXXXXXX (13 chars)
                       if (!RegExp(
                         r'^(07[0-9]{9}|\+9647[0-9]{9})$',
@@ -251,7 +251,7 @@ class _PhoneOnlyRegistrationScreenState
                       hintText: 'أدخل كلمة مرور قوية',
                       prefixIcon: const Icon(
                         Icons.lock,
-                        color: AppColors.primary,
+                        color: const Color(0xFF00296B),
                       ),
                       suffixIcon: IconButton(
                         icon: Icon(
@@ -311,7 +311,7 @@ class _PhoneOnlyRegistrationScreenState
                       hintText: 'أعد إدخال كلمة المرور',
                       prefixIcon: const Icon(
                         Icons.lock_outline,
-                        color: AppColors.primary,
+                        color: const Color(0xFF00296B),
                       ),
                       suffixIcon: IconButton(
                         icon: Icon(
@@ -472,7 +472,7 @@ class _PhoneOnlyRegistrationScreenState
                         child: const Text(
                           'سجل الدخول',
                           style: TextStyle(
-                            color: AppColors.primary,
+                            color: const Color(0xFF00296B),
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                           ),
