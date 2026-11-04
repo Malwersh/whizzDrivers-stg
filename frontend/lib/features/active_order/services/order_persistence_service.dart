@@ -71,11 +71,12 @@ class OrderPersistenceService {
   }
 
   /// مسح الطلب النشط
-  static Future<void> clearActiveOrder() async {
+  static Future<void> clearActiveOrder({String? expectedOrderId}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       
       final orderId = prefs.getString(_activeOrderKey);
+      if (expectedOrderId != null && orderId != expectedOrderId) return;
       
       await prefs.remove(_activeOrderKey);
       await prefs.remove(_orderStateKey);

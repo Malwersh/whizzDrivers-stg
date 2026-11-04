@@ -26,7 +26,7 @@ async function send(phone,ip,key){
  const id=crypto.randomUUID(),code=String(crypto.randomInt(0,1000000)).padStart(6,'0');
  const item={id,phone,username:phone,purpose:'registration-otp',expiresAt:time+300,attempts:0,used:false,digest:digest(key.hmacKey,id,phone,code)};
  await db.send(new TransactWriteCommand({TransactItems:[{Put:{TableName:table,Item:item,ConditionExpression:'attribute_not_exists(id)'}},{Put:{TableName:table,Item:{id:`ACTIVE#${phone}`,sessionId:id,expiresAt:time+300}}}]}));
- const response=await fetch('https://api.otpiq.com/api/sms',{method:'POST',headers:{Authorization:`Bearer ${key.apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({phoneNumber:phone.slice(1),smsType:'verification',provider:'whatsapp-sms',verificationCode:code}),signal:AbortSignal.timeout(10000)});
+ const response=await fetch('https://api.otpiq.com/api/sms',{method:'POST',headers:{Authorization:`Bearer ${key.apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({phoneNumber:phone.slice(1),smsType:'verification',provider:'whatsapp-telegram-sms',verificationCode:code}),signal:AbortSignal.timeout(10000)});
  if(!response.ok)return reply(503,{message:'تعذر إرسال رمز التحقق، حاول لاحقًا'});
  return reply(200,{sessionId:id,expiresIn:300,resendAfter:60});
 }

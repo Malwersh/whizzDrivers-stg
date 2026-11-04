@@ -1,3 +1,4 @@
+import 'readable_colors.dart';
 import 'package:flutter/material.dart';
 
 import '../design_system/app_colors.dart';
@@ -61,6 +62,7 @@ class ErrorHandler {
               ElevatedButton(
                 onPressed: onRetry,
                 style: ElevatedButton.styleFrom(
+                  foregroundColor: readableForeground(AppColors.primary),
                   backgroundColor: AppColors.primary,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),

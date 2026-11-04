@@ -1,3 +1,4 @@
+import '../utils/readable_colors.dart';
 import 'dart:async';
 import 'dart:math';
 import 'dart:ui';
@@ -143,7 +144,7 @@ class _InnovativeOrderNotificationDialogState
     Navigator.of(context).pop();
     widget.onAccept();
     HapticFeedback.lightImpact();
-    
+
     // Placeholder: Navigation to be implemented
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -174,16 +175,15 @@ class _InnovativeOrderNotificationDialogState
           _buildAnimatedBackground(),
           Center(
             child: SlideTransition(
-              position:
-                  Tween<Offset>(
-                    begin: const Offset(0, 1),
-                    end: Offset.zero,
-                  ).animate(
-                    CurvedAnimation(
-                      parent: _slideController,
-                      curve: Curves.elasticOut,
-                    ),
-                  ),
+              position: Tween<Offset>(
+                begin: const Offset(0, 1),
+                end: Offset.zero,
+              ).animate(
+                CurvedAnimation(
+                  parent: _slideController,
+                  curve: Curves.elasticOut,
+                ),
+              ),
               child: ScaleTransition(
                 scale: Tween<double>(begin: 0.8, end: 1.0).animate(
                   CurvedAnimation(
@@ -402,7 +402,8 @@ class _InnovativeOrderNotificationDialogState
                   child: CircularProgressIndicator(
                     value: 1.0 - _progressController.value,
                     backgroundColor: Colors.white.withAlpha(77),
-                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                    valueColor:
+                        const AlwaysStoppedAnimation<Color>(Colors.white),
                     strokeWidth: 3,
                   ),
                 ),
@@ -492,7 +493,7 @@ class _InnovativeOrderNotificationDialogState
                   ),
                   child: const Icon(
                     Icons.monetization_on,
-                    color: Colors.white,
+                    color: const Color(0xFF00296B),
                     size: 24,
                   ),
                 ),
@@ -834,7 +835,10 @@ class _InnovativeOrderNotificationDialogState
                 ),
                 child: const Text(
                   'رفض',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white),
                 ),
               ),
             ),
@@ -852,9 +856,11 @@ class _InnovativeOrderNotificationDialogState
                     child: ElevatedButton(
                       onPressed: _acceptOrder,
                       style: ElevatedButton.styleFrom(
+                        foregroundColor: readableForeground(AppColors.success),
                         padding: const EdgeInsets.symmetric(vertical: 18),
                         backgroundColor: AppColors.success,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24)),
                         elevation: 15,
                         shadowColor: AppColors.success.withAlpha(128),
                       ),
@@ -863,7 +869,8 @@ class _InnovativeOrderNotificationDialogState
                         children: [
                           Container(
                             padding: const EdgeInsets.all(8),
-                            decoration: const BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
+                            decoration: const BoxDecoration(
+                                color: Colors.white24, shape: BoxShape.circle),
                             child: const Icon(Icons.check_circle, size: 24),
                           ),
                           const SizedBox(width: 12),

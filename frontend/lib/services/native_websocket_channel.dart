@@ -30,7 +30,7 @@ class NativeWebSocketChannel {
   bool get isConnected => _isConnected;
   
   /// Connect to WebSocket
-  Future<void> connect(String url) async {
+  Future<void> connect(String url, {Map<String, String> headers = const {}}) async {
     try {
       print('🔌 [Native Channel] Connecting to: $url');
       
@@ -44,7 +44,7 @@ class NativeWebSocketChannel {
       _eventSubscription = _eventChannel.receiveBroadcastStream().listen(
         (event) {
           print('📨 [Native Channel] Event received: ${event.runtimeType}');
-          print('📨 [Native Channel] Event data: $event');
+          print('Native socket event received');
           
           if (event is Map) {
             final type = event['type'] as String?;
@@ -100,7 +100,7 @@ class NativeWebSocketChannel {
       );
       
       // Call native connect method
-      final result = await _methodChannel.invokeMethod('connect', {'url': url});
+      final result = await _methodChannel.invokeMethod('connect', {'url': url, 'headers': headers});
       
       if (result == true) {
         print('✅ [Native Channel] Connect method returned success');
@@ -122,7 +122,7 @@ class NativeWebSocketChannel {
     }
     
     try {
-      print('📤 [Native Channel] Sending: $message');
+      print('Native socket message sent');
       await _methodChannel.invokeMethod('send', {'message': message});
       print('✅ [Native Channel] Message sent');
     } catch (e) {

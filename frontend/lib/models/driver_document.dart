@@ -23,10 +23,16 @@ class DriverDocument {
   factory DriverDocument.fromProfile(Map<String, dynamic> json, String type) {
     final prefix = _getFieldPrefix(type);
     return DriverDocument(
-      url: json['${prefix}Url'],
+      url: (type == 'vehicleRegistration'
+              ? json['registrationPaperUrl']
+              : null) ??
+          json['${prefix}Url'],
       fileId: json['${prefix}FileId'],
       docId: json['${prefix}DocId'],
-      status: json['${prefix}Status'],
+      status: (type == 'vehicleRegistration'
+              ? json['registrationPaperStatus']
+              : null) ??
+          json['${prefix}Status'],
       type: type,
     );
   }
@@ -58,9 +64,10 @@ class DriverDocument {
   }
 
   String get statusText {
+    if (!hasDocument) return 'غير مرفوع';
     if (isVerified) return 'موثق';
     if (isPending) return 'قيد المراجعة';
     if (isRejected) return 'مرفوض';
-    return 'غير مرفوع';
+    return 'مرفوع · لم تُسجّل نتيجة المراجعة';
   }
 }

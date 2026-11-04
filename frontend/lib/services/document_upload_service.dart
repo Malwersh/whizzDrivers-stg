@@ -9,7 +9,7 @@ import '../config/environment.dart';
 /// Service for handling document uploads for driver registration
 class DocumentUploadService {
   static const String _baseUrl = Environment.documentUploadApiBaseUrl;
-  
+
   /// Upload a single document file
   Future<Map<String, dynamic>> uploadDocument({
     required File file,
@@ -18,29 +18,31 @@ class DocumentUploadService {
   }) async {
     try {
       debugPrint('📤 DocumentUploadService: Uploading $documentType');
-      
+
       // Create multipart request
-      final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl/upload'));
-      
+      final request =
+          http.MultipartRequest('POST', Uri.parse('$_baseUrl/upload'));
+
       // Add file to request
       final fileBytes = await file.readAsBytes();
       final multipartFile = http.MultipartFile.fromBytes(
         'file',
         fileBytes,
-        filename: '${documentType}_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        filename:
+            '${documentType}_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
       request.files.add(multipartFile);
-      
+
       // Add metadata
       request.fields['documentType'] = documentType;
       if (userId != null) {
         request.fields['userId'] = userId;
       }
-      
+
       // Send request
       final response = await request.send();
       final responseData = await response.stream.bytesToString();
-      
+
       if (response.statusCode == 200) {
         final result = jsonDecode(responseData);
         debugPrint('✅ Document upload successful: $documentType');
@@ -64,43 +66,43 @@ class DocumentUploadService {
       };
     }
   }
-  
+
   /// Upload multiple documents at once
   Future<Map<String, dynamic>> uploadMultipleDocuments({
     required Map<String, File> documents,
     String? userId,
   }) async {
     try {
-      debugPrint('📤 DocumentUploadService: Uploading ${documents.length} documents');
-      
+      debugPrint(
+          '📤 DocumentUploadService: Uploading ${documents.length} documents');
+
       final results = <String, dynamic>{};
       bool allSuccessful = true;
-      
+
       for (final entry in documents.entries) {
         final documentType = entry.key;
         final file = entry.value;
-        
+
         final result = await uploadDocument(
           file: file,
           documentType: documentType,
           userId: userId,
         );
-        
+
         results[documentType] = result;
-        
+
         if (result['success'] != true) {
           allSuccessful = false;
         }
       }
-      
+
       return {
         'success': allSuccessful,
         'results': results,
-        'message': allSuccessful 
-          ? 'تم رفع جميع المستندات بنجاح'
-          : 'فشل في رفع بعض المستندات',
+        'message': allSuccessful
+            ? 'تم رفع جميع المستندات بنجاح'
+            : 'فشل في رفع بعض المستندات',
       };
-      
     } catch (e) {
       debugPrint('❌ Multiple documents upload error: $e');
       return {
@@ -109,7 +111,7 @@ class DocumentUploadService {
       };
     }
   }
-  
+
   /// Convert Uint8List to temporary file for upload (web support)
   Future<Map<String, dynamic>> uploadFromBytes({
     required Uint8List bytes,
@@ -118,11 +120,13 @@ class DocumentUploadService {
     String? userId,
   }) async {
     try {
-      debugPrint('📤 DocumentUploadService: Uploading $documentType from bytes');
-      
+      debugPrint(
+          '📤 DocumentUploadService: Uploading $documentType from bytes');
+
       // Create multipart request
-      final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl/upload'));
-      
+      final request =
+          http.MultipartRequest('POST', Uri.parse('$_baseUrl/upload'));
+
       // Add file from bytes
       final multipartFile = http.MultipartFile.fromBytes(
         'file',
@@ -130,17 +134,17 @@ class DocumentUploadService {
         filename: fileName,
       );
       request.files.add(multipartFile);
-      
+
       // Add metadata
       request.fields['documentType'] = documentType;
       if (userId != null) {
         request.fields['userId'] = userId;
       }
-      
+
       // Send request
       final response = await request.send();
       final responseData = await response.stream.bytesToString();
-      
+
       if (response.statusCode == 200) {
         final result = jsonDecode(responseData);
         debugPrint('✅ Document upload from bytes successful: $documentType');
@@ -150,7 +154,8 @@ class DocumentUploadService {
           'documentId': result['id'],
         };
       } else {
-        debugPrint('❌ Document upload from bytes failed: ${response.statusCode}');
+        debugPrint(
+            '❌ Document upload from bytes failed: ${response.statusCode}');
         return {
           'success': false,
           'error': 'فشل في رفع المستند',
@@ -164,20 +169,23 @@ class DocumentUploadService {
       };
     }
   }
-  
+
   /// Mock upload for testing (when backend is not available)
   Future<Map<String, dynamic>> mockUploadDocument({
     required String documentType,
     String? userId,
   }) async {
-    await Future.delayed(const Duration(milliseconds: 800)); // Simulate network delay
-    
+    await Future.delayed(
+        const Duration(milliseconds: 800)); // Simulate network delay
+
     debugPrint('🧪 Mock upload: $documentType');
-    
+
     return {
       'success': true,
-      'url': 'https://mock-storage.example.com/${documentType}_${DateTime.now().millisecondsSinceEpoch}.jpg',
-      'documentId': 'mock_${documentType}_${DateTime.now().millisecondsSinceEpoch}',
+      'url':
+          'https://mock-storage.example.com/${documentType}_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      'documentId':
+          'mock_${documentType}_${DateTime.now().millisecondsSinceEpoch}',
     };
   }
 
@@ -186,14 +194,17 @@ class DocumentUploadService {
     required String documentType,
     String? userId,
   }) async {
-    await Future.delayed(const Duration(milliseconds: 800)); // Simulate network delay
-    
+    await Future.delayed(
+        const Duration(milliseconds: 800)); // Simulate network delay
+
     debugPrint('🧪 Mock upload: $documentType');
-    
+
     return {
       'success': true,
-      'url': 'https://mock-storage.example.com/${documentType}_${DateTime.now().millisecondsSinceEpoch}.jpg',
-      'documentId': 'mock_${documentType}_${DateTime.now().millisecondsSinceEpoch}',
+      'url':
+          'https://mock-storage.example.com/${documentType}_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      'documentId':
+          'mock_${documentType}_${DateTime.now().millisecondsSinceEpoch}',
     };
   }
 
@@ -204,6 +215,7 @@ class DocumentUploadService {
     required String base64Content,
     required String documentType, // 'driving_license' or 'registration_paper'
     required String phoneNumber,
+    String? vehicleId,
   }) async {
     try {
       // Get the auth token
@@ -234,6 +246,7 @@ class DocumentUploadService {
               'fileName': fileName,
               'contentType': contentType,
               'fileData': base64Content,
+              if (vehicleId != null) 'vehicleId': vehicleId,
             }),
           )
           .timeout(const Duration(seconds: 30));

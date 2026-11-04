@@ -1,3 +1,4 @@
+const {cleanupFinishedOrder}=require('./order-live-cleanup');
 const { registrationOptions, validateRegistration } = require('./registration-regions');
 /**
  * Enhanced Driver API Lambda Function
@@ -16,13 +17,15 @@ const { registrationOptions, validateRegistration } = require('./registration-re
 const { isDriverApproved } = require('./driver_eligibility');
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, ScanCommand, QueryCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, ScanCommand, QueryCommand, DeleteCommand, TransactWriteCommand } = require('@aws-sdk/lib-dynamodb');
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const h3 = require('h3-js');
 const axios = require('axios');
 
 const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
-const dynamodb = DynamoDBDocumentClient.from(client);
+const {driverRequestContext,driverLifecycleClient,beginDriverUpload}=require('./driver-lifecycle');
+const rawDynamodb = DynamoDBDocumentClient.from(client);
+const dynamodb = driverLifecycleClient(rawDynamodb);
 const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 
 const DRIVERS_TABLE = process.env.DRIVER_TABLE;
@@ -75,7 +78,7 @@ async function callOrderService(orderId, canceledBy, reason, requestedBy) {
       reason,
       requestedBy
     }, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer '+await getServiceToken() },
       timeout: 10000
     });
     
@@ -111,7 +114,7 @@ async function callOrderServiceUnassign(orderId, driverId, reason, requestedBy) 
       reason,
       requestedBy
     }, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer '+await getServiceToken() },
       timeout: 10000
     });
     
@@ -150,7 +153,7 @@ async function getDriverInfo(driverId) {
       driverName: driver.name || null,
       driverPhone: driver.phoneNumber || driver.phone || null,
       vehicleType: driver.vehicleType || null,
-      vehiclePlate: driver.licenseNumber || driver.vehiclePlate || null
+      vehiclePlate: driver.vehiclePlate || driver.vehicleInfo?.plateNumber || null
     };
   } catch (error) {
     console.error(`❌ Error fetching driver info for ${driverId}:`, error);
@@ -290,6 +293,15 @@ function normalizeMoneyToIqd(rawAmount, referenceAmount = null) {
 }
 
 function normalizeOrderPricingToIqd(order) {
+  // This writer has a verified fixed scale. Never infer its unit from magnitude.
+  if (order?.currency === 'IQD' && order?.createdBy === 'wizzuser_app' && order?.pricing) {
+    return {
+      goodsSubtotal: order.pricing.goodsSubtotal != null ? toNumber(order.pricing.goodsSubtotal) / 1000 : toNumber(order.subtotal),
+      deliveryFee: order.pricing.deliveryFee != null ? toNumber(order.pricing.deliveryFee) / 1000 : toNumber(order.deliveryFee),
+      tip: toNumber(order.pricing.tip) / 1000,
+      total: order.pricing.total != null ? toNumber(order.pricing.total) / 1000 : toNumber(order.total ?? order.totalAmount),
+    };
+  }
   const rawOrderTotal = toNumber(order?.total ?? order?.totalAmount ?? 0, 0);
 
   const goodsSubtotal = normalizeMoneyToIqd(
@@ -508,7 +520,7 @@ async function getServiceToken() {
  * @param {number} assignmentAttempt - Wave number for reassignment scenarios
  * @returns {Promise<{holdId: string, status: string, amount: number}>}
  */
-async function createWalletHold(driverId, amount, orderId, assignmentAttempt) {
+async function createWalletHold(driverId, amount, orderId, assignmentAttempt, pinnedDispatchAttemptId) {
   try {
     console.log('💰 Creating wallet Hold:');
     console.log('   - Driver ID:', driverId);
@@ -543,7 +555,8 @@ async function createWalletHold(driverId, amount, orderId, assignmentAttempt) {
         metadata: {
           source: 'driver-api',
           timestamp: new Date().toISOString(),
-          waveNumber: assignmentAttempt
+          waveNumber: assignmentAttempt,
+          ...(pinnedDispatchAttemptId?{pinnedDispatchAttemptId}:{})
         }
       })
     });
@@ -590,13 +603,22 @@ async function createWalletHold(driverId, amount, orderId, assignmentAttempt) {
  * @param {string} orderId - Order ID for idempotency
  * @returns {Promise<{success: boolean, message: string}>}
  */
-async function releaseWalletHold(holdId, reason, orderId) {
+async function releaseWalletHold(holdId, reason, orderId, sourceDriverId) {
   try {
     console.log('🔓 Releasing wallet Hold:');
     console.log('   - Hold ID:', holdId);
     console.log('   - Reason:', reason);
     console.log('   - Order ID:', orderId);
     
+    if(reason==='WAVE_ACCEPT_FAILED'){
+      const {Item:order}=await dynamodb.send(new GetCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},ConsistentRead:true}));
+      if(!order)throw new Error('ORDER_NOT_FOUND_FOR_RELEASE_REVIEW');
+      if(order.driverId===sourceDriverId)throw new Error('ASSIGNMENT_CONFIRMED_RELEASE_REQUIRES_REVIEW');
+      await dynamodb.send(new UpdateCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},UpdateExpression:'SET walletReleaseIntents = if_not_exists(walletReleaseIntents, :empty)',ConditionExpression:'attribute_exists(PK)',ExpressionAttributeValues:{':empty':{}}}));
+      await dynamodb.send(new UpdateCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},UpdateExpression:'SET walletReleaseIntents.#hold = :intent',ConditionExpression:'#status = :status AND '+(order.driverId?'driverId = :driver':'attribute_not_exists(driverId)'),ExpressionAttributeNames:{'#hold':holdId,'#status':'status'},ExpressionAttributeValues:{':intent':{reason,requestedAt:new Date().toISOString()},':status':order.status,...(order.driverId?{':driver':order.driverId}:{})}}));
+      // Worker releases with an atomic order snapshot guard, so a late successful assignment is not charged/refunded incorrectly.
+      throw new Error('HOLD_RELEASE_QUEUED');
+    }
     // Get service authentication token
     const token = await getServiceToken();
     
@@ -814,8 +836,18 @@ async function proxyWalletRequest(event, httpMethod, walletPath, corsHeaders) {
 /**
  * Main Lambda handler
  */
-exports.handler = async (event) => {
-  console.log('📨 Driver API v2 - Event:', JSON.stringify(event, null, 2));
+exports.handler = event => driverRequestContext.run({}, async () => {
+  const response = await handleRequest(event);
+  if (typeof response?.body === 'string') {
+    try {
+      const privateFields = new Set(['financeRollout','financialSnapshot','commercialPricing','financialAcceptance']);
+      response.body = JSON.stringify(JSON.parse(response.body), (key,value) => privateFields.has(key) ? undefined : value);
+    } catch (_) { /* Preserve non-JSON responses. */ }
+  }
+  return response;
+});
+const handleRequest = async (event) => {
+  console.log('📨 Driver API v2 - Request:', {path:event.path||event.rawPath,method:event.httpMethod||event.requestContext?.http?.method,requestId:event.requestContext?.requestId});
 
   const httpMethod = event.httpMethod || event.requestContext?.http?.method;
   const path = event.path || event.rawPath || '';
@@ -841,6 +873,7 @@ exports.handler = async (event) => {
 
   // Primary stable driver identity is Cognito `sub`
   let cognitoUsername = jwtClaims?.sub;
+  driverRequestContext.getStore().sub = cognitoUsername;
   const driverIdFallbacks = buildDriverIdFallbacks(jwtClaims);
 
   console.log('🧩 Driver identity:', {
@@ -893,6 +926,17 @@ exports.handler = async (event) => {
       return await getDriverTrips(cognitoUsername, event.queryStringParameters || {}, corsHeaders);
     }
 
+    if (path.endsWith('/driver/vehicles') && ['GET','POST'].includes(httpMethod)) {
+      try {
+        const result = await require('./driver-vehicles-308').operation({db:dynamodb,GetCommand,TransactWriteCommand,
+          driversTable:DRIVERS_TABLE,liveTable:DRIVER_LIVE_STATE_TABLE,bucket:DRIVER_DOCUMENTS_BUCKET},
+          {driverId:cognitoUsername,actorId:cognitoUsername,body:httpMethod==='POST'?JSON.parse(event.body||'{}'):null});
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(error) {
+        return {statusCode:error.statusCode||error.status||500,headers:corsHeaders,body:JSON.stringify({error:error.code||'VEHICLE_OPERATION_FAILED'})};
+      }
+    }
+
     // Route handling
     if (path.endsWith('/driver/registration-options') && httpMethod === 'GET') {
       return {statusCode:200,headers:corsHeaders,body:JSON.stringify(await loadRegistrationOptions())};
@@ -940,11 +984,30 @@ exports.handler = async (event) => {
       }
     }
 
+    if ((path === '/driver/financial-wave-offer' || path.endsWith('/driver/financial-wave-offer')) && httpMethod === 'POST') {
+      try {
+        const result = await require('./financial-accept-client').invokeFinancialOfferRead(JSON.parse(event.body || '{}'), bearerToken);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch (_) { return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_OFFER_NOT_AVAILABLE'})}; }
+    }
+
     // ✨ NEW: Accept Wave Offer endpoint
     if (path === '/driver/accept-wave-offer' || path.endsWith('/driver/accept-wave-offer')) {
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
-        return await acceptWaveOffer(cognitoUsername, body, corsHeaders);
+        if (String(body.offerId || '').startsWith('FINO:')) {
+          try {
+            const {invokeFinancialAcceptance} = require('./financial-accept-client');
+            const accepted = await invokeFinancialAcceptance(body, bearerToken);
+            return {statusCode:200,headers:corsHeaders,body:JSON.stringify(accepted)};
+          } catch (error) {
+            const candidate = error.code || error.message;
+            const code = ['UNAUTHORIZED','FINANCIAL_DISPATCH_DISABLED','INVALID_FINANCIAL_ACCEPTANCE','FINANCIAL_ACCEPTANCE_CONFLICT','INSUFFICIENT_BALANCE','DRIVER_WALLET_UNAVAILABLE'].includes(candidate) ? candidate : 'FINANCIAL_ACCEPTANCE_UNAVAILABLE';
+            return {statusCode:code === 'UNAUTHORIZED' ? 401 : 409,headers:corsHeaders,
+              body:JSON.stringify({success:false,code,message:'تعذر تأكيد القبول؛ حدّث الطلب وأعد المحاولة'})};
+          }
+        }
+        return await acceptWaveOffer(cognitoUsername, body, corsHeaders, bearerToken);
       }
     }
 
@@ -952,7 +1015,16 @@ exports.handler = async (event) => {
     if (path === '/driver/reject-wave-offer' || path.endsWith('/driver/reject-wave-offer')) {
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
-        return await rejectWaveOffer(cognitoUsername, body, corsHeaders);
+        if (String(body.offerId || '').startsWith('FINO:')) {
+          try {
+            const {invokeFinancialAcceptance} = require('./financial-accept-client');
+            const declined = await invokeFinancialAcceptance({offerId:body.offerId,orderId:body.orderId,waveNumber:body.waveNumber,driverId:body.driverId},bearerToken,true);
+            return {statusCode:200,headers:corsHeaders,body:JSON.stringify(declined)};
+          } catch (_) {
+            return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_DECLINE_UNAVAILABLE'})};
+          }
+        }
+        return await rejectWaveOffer(cognitoUsername, body, corsHeaders, bearerToken);
       }
     }
 
@@ -972,6 +1044,58 @@ exports.handler = async (event) => {
       }
     }
 
+    if ((path === '/driver/map-activity' || path.endsWith('/driver/map-activity')) && httpMethod === 'POST') {
+      try {
+        const result=await require('./driver-map-activity').readActivity({db:dynamodb,GetCommand,QueryCommand,driverId:cognitoUsername,input:JSON.parse(event.body||'{}'),tables:{drivers:DRIVERS_TABLE,orders:ORDERS_TABLE,businesses:'WhizzMerchants_Businesses'},regionAccess:require('./driver-work-region-311').create({db:dynamodb,GetCommand})});
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(e) {return {statusCode:e.code==='MAP_ACTIVITY_INVALID_REQUEST'?400:e.code==='MAP_ACTIVITY_DRIVER_UNAVAILABLE'?403:503,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:false,code:e.code||'MAP_ACTIVITY_UNAVAILABLE'})};}
+    }
+
+    if ((path === '/driver/demand-forecast' || path.endsWith('/driver/demand-forecast')) && httpMethod === 'GET') {
+      const response = await require('./driver-demand').readDemand({db:dynamodb,GetCommand,driverId:cognitoUsername,
+        tables:{drivers:DRIVERS_TABLE,live:DRIVER_LIVE_STATE_TABLE,regions:REGIONS_TABLE,demand:process.env.DEMAND_TABLE,dataset:process.env.DEMAND_DATASET},
+        simulationDrivers:process.env.DEMAND_DATASET==='TEST' ? (process.env.DEMAND_SIMULATION_DRIVERS||'').split(',').filter(Boolean) : []});
+      return {statusCode:response.statusCode,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(response.result)};
+    }
+
+    if ((path === '/driver/offers/displayed' || path.endsWith('/driver/offers/displayed')) && httpMethod === 'POST') {
+      try {
+        const result=await require('./driver-offer-display-receipt').acknowledgeDisplayedOffer({db:dynamodb,GetCommand,QueryCommand,TransactWriteCommand,driverId:cognitoUsername,value:JSON.parse(event.body||'{}')});
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(error) {
+        const status=error instanceof SyntaxError||error.code==='INVALID_OFFER_RECEIPT'?400:error.code==='OFFER_RECEIPT_FORBIDDEN'?403:error.code==='OFFER_RECEIPT_UNAVAILABLE'?503:null;
+        if(!status)throw error;
+        return {statusCode:status,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:false,code:error.code||'INVALID_OFFER_RECEIPT'})};
+      }
+    }
+
+    if ((path === '/driver/cash-payouts' || path.endsWith('/driver/cash-payouts')) && httpMethod === 'POST') {
+      try {const result=await require('./financial-accept-client').invokeFinancialOperation(JSON.parse(event.body||'{}'),bearerToken,'driver_cash_payout');
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(error) {return {statusCode:[400,401,403,409,503].includes(error.statusCode)?error.statusCode:503,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:false,code:error.code||'DRIVER_PAYOUT_UNAVAILABLE'})};}
+    }
+
+    if ((path === '/driver/quality-incidents' || path.endsWith('/driver/quality-incidents')) && httpMethod === 'GET') {
+      const result=await require('./driver-quality-incidents-290').readIncidents({db:dynamodb,GetCommand,QueryCommand,driverId:cognitoUsername});
+      return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+    }
+    if ((path === '/driver/quality-incidents/appeal' || path.endsWith('/driver/quality-incidents/appeal')) && httpMethod === 'POST') {
+      try {const result=await require('./financial-accept-client').invokeFinancialOperation(JSON.parse(event.body||'{}'),bearerToken,'driver_quality_case');
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+      } catch(error) {const codes=['UNAUTHORIZED','INVALID_DRIVER_QUALITY_REVIEW','DRIVER_QUALITY_REVIEW_CONFLICT','DRIVER_QUALITY_CASE_UNAVAILABLE','DRIVER_QUALITY_APPEAL_CONFLICT','DRIVER_QUALITY_REVIEW_LIMIT'];const code=codes.includes(error.code||error.message)?error.code||error.message:'QUALITY_APPEAL_UNAVAILABLE';
+        return {statusCode:code==='UNAUTHORIZED'?403:409,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:false,code})};}
+    }
+
+    if ((path === '/driver/performance' || path.endsWith('/driver/performance')) && httpMethod === 'GET') {
+      if(process.env.DRIVER_PERFORMANCE_SNAPSHOT_READS_ENABLED==='true'){
+        const snapshot=await require('./driver-performance-snapshot').readSnapshot({db:dynamodb,GetCommand,driverId:cognitoUsername});
+        return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(require('./driver-performance-snapshot').viewForRules(snapshot,event.queryStringParameters?.rules==='4'?4:event.queryStringParameters?.rules==='3'?3:event.queryStringParameters?.rules==='2'?2:1))};
+      }
+      const result = await require('./driver-performance').readPerformance({db:dynamodb,GetCommand,QueryCommand,driverId:cognitoUsername,
+        tables:{offers:'WaveOffers_staging',orders:ORDERS_TABLE,holds:process.env.WALLET_HOLDS_TABLE,drivers:DRIVERS_TABLE,ratings:'whizz-order-ratings-staging',ratingIndex:'DriverRatingChronology281'},rulesVersion:event.queryStringParameters?.rules==='4'?4:event.queryStringParameters?.rules==='3'?3:event.queryStringParameters?.rules==='2'?2:1});
+      return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(result)};
+    }
+
     // 📊 NEW: Get driver performance metrics
     if (path === '/driver/metrics' || path.endsWith('/driver/metrics')) {
       if (httpMethod === 'GET') {
@@ -981,6 +1105,30 @@ exports.handler = async (event) => {
 
     // 🚗 ACTIVE ORDER APIs
     
+    const tripDetailPath=path.match(/\/driver\/trips\/([^/]+)$/);
+    if(tripDetailPath&&httpMethod==='GET') {
+      const order=(await dynamodb.send(new GetCommand({TableName:ORDERS_TABLE,Key:{PK:'ORDER#'+tripDetailPath[1],SK:'META'},ConsistentRead:true}))).Item;
+      if(!order||order.driverId!==cognitoUsername||!require('./driver-trip-history').terminal.includes(order.status))return {statusCode:404,headers:corsHeaders,body:JSON.stringify({success:false,message:'Trip unavailable'})};
+      return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({success:true,trip:await require('./driver-trip-history').tripWithSettlement(order,normalizeOrderPricingToIqd,toNumber,readTripSettlement)})};
+    }
+
+    const proofPath=path.match(/\/driver\/orders\/([^/]+)\/delivery-proof(?:\/([^/]+))?$/);
+    if(proofPath && (httpMethod==='POST'&&!proofPath[2] || httpMethod==='GET')) {
+      let body;
+      if(httpMethod==='POST') {
+        try {const raw=event.isBase64Encoded?Buffer.from(event.body||'','base64').toString('utf8'):(event.body||'{}');if(raw.length>2100000)throw Error('too large');body=JSON.parse(raw);}
+        catch {return {statusCode:400,headers:corsHeaders,body:JSON.stringify({success:false,code:'INVALID_PHOTO_BODY'})};}
+      }
+      const response=await require('./driver-delivery-proof').deliveryProof({db:dynamodb,s3,GetCommand,UpdateCommand,PutObjectCommand,GetObjectCommand,table:ORDERS_TABLE,bucket:DRIVER_DOCUMENTS_BUCKET,driverId:cognitoUsername,orderId:proofPath[1],body,proofId:httpMethod==='GET'?(proofPath[2]||'list'):undefined,beginUpload:()=>beginDriverUpload(rawDynamodb,cognitoUsername)});
+      return {statusCode:response.statusCode,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify(response.result)};
+    }
+
+    const tripRoutePath=path.match(/\/driver\/orders\/([^/]+)\/route$/);
+    if(tripRoutePath&&httpMethod==='GET') {
+      const response=await require('./driver-trip-route').readDriverTripRoute({db:dynamodb,GetCommand,table:ORDERS_TABLE,driverId:cognitoUsername,orderId:tripRoutePath[1]});
+      return {statusCode:response.statusCode,headers:corsHeaders,body:JSON.stringify(response.result)};
+    }
+
     // Get specific order by ID
     if (path.match(/^\/driver\/orders\/[^/]+$/) || path.match(/\/driver\/orders\/[^/]+$/)) {
       const orderId = path.split('/').pop();
@@ -1047,12 +1195,65 @@ exports.handler = async (event) => {
       }
     }
 
+    const financialUnassignPath=path.match(/\/driver\/orders\/([^/]+)\/financial-unassign$/);
+    if(financialUnassignPath&&httpMethod==='POST') {
+      try {
+        const body=JSON.parse(event.body||'{}');
+        if(!body||Array.isArray(body)||typeof body!=='object'||Object.keys(body).some(k=>!['offerId','attempt','cashCollected','reason'].includes(k)))throw Error('INVALID_COD_ASSIGNMENT');
+        const {invokeFinancialUnassign}=require('./financial-accept-client');
+        const result=await invokeFinancialUnassign({...body,orderId:financialUnassignPath[1]},bearerToken);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_ASSIGNMENT_UNAVAILABLE',message:'تعذر تأكيد فك الإسناد؛ حدّث الطلب قبل إعادة المحاولة'})};}
+    }
+
+    const attemptPath=path.match(/\/driver\/orders\/([^/]+)\/delivery-attempt(\/contact)?$/);
+    if(attemptPath&&['GET','POST'].includes(httpMethod)) {
+      try {
+        const contact=!!attemptPath[2];if(contact&&httpMethod!=='POST')throw Error('INVALID_DELIVERY_ATTEMPT');
+        const input=httpMethod==='GET'?event.queryStringParameters||{}:JSON.parse(event.body||'{}');
+        const fields=httpMethod==='GET'?['offerId','attempt']:contact?['offerId','attempt','eventId','channel']:['offerId','attempt','position'];
+        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).sort().join(',')!==fields.sort().join(','))throw Error('INVALID_DELIVERY_ATTEMPT');
+        const body={...input,attempt:httpMethod==='GET'?Number(input.attempt):input.attempt,orderId:attemptPath[1]};
+        const result=await require('./financial-accept-client').invokeFinancialOperation(body,bearerToken,httpMethod==='GET'?'read_delivery_attempt':contact?'record_contact_attempt':'start_delivery_attempt');
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch(e) {
+        const safe=['INVALID_DELIVERY_ATTEMPT','DELIVERY_ATTEMPT_CONFLICT','ORDER_EXCEPTION_POLICY_REQUIRED','ARRIVAL_LOCATION_REQUIRED','ARRIVAL_LOCATION_STALE','ARRIVAL_OUTSIDE_RADIUS','CONTACT_ATTEMPT_TOO_SOON','NO_RESPONSE_REQUIREMENTS_NOT_MET','EXCEPTION_SETTINGS_UNAVAILABLE','UNAUTHORIZED'];
+        return {statusCode:e.code==='UNAUTHORIZED'?401:409,headers:corsHeaders,body:JSON.stringify({success:false,code:safe.includes(e.code||e.message)?e.code||e.message:'DELIVERY_ATTEMPT_UNAVAILABLE'})};
+      }
+    }
+
+    const cashReviewPath=path.match(/\/driver\/orders\/([^/]+)\/cash-review$/);
+    if(cashReviewPath&&httpMethod==='POST'){
+      try{const input=JSON.parse(event.body||'{}');if(!input||typeof input!=='object'||Array.isArray(input)||!['READ_CUSTOMER_CASH_CASE','REPORT_CASH_PAYMENT','EXECUTE_CUSTOMER_REFUND'].includes(input.action)||Object.prototype.hasOwnProperty.call(input,'orderId'))throw Error('INVALID_CASH_REVIEW');
+       const result=await require('./financial-accept-client').invokeFinancialOperation({...input,orderId:cashReviewPath[1]},bearerToken,'driver_cash_case');return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      }catch(e){const code=e.code||e.message,safe=['UNAUTHORIZED','CASH_REVIEW_FORBIDDEN','CASH_REVIEW_CONFLICT','INVALID_CASH_REVIEW','CASH_REVIEW_UNAVAILABLE','CASH_REVIEW_CLOSED','CASH_REVIEW_PROOF_REQUIRED','REFUND_CUSTODIAN_REQUIRED','REFUND_STATE_CONFLICT','REFUND_SOURCE_PROOF_CHANGED'];return {statusCode:code==='UNAUTHORIZED'?401:409,headers:corsHeaders,body:JSON.stringify({success:false,code:safe.includes(code)?code:'CASH_REVIEW_UNAVAILABLE'})};}
+    }
+
+    const continuationPath=path.match(/\/driver\/orders\/([^/]+)\/return-case$/);
+    if(continuationPath&&httpMethod==='POST'){
+      try{const input=JSON.parse(event.body||'{}');if(!input||typeof input!=='object'||Array.isArray(input)||!['READ_RETURN_CONTINUATION','RECORD_RETURN_HANDOVER','OPEN_CASE_APPEAL'].includes(input.action)||Object.prototype.hasOwnProperty.call(input,'orderId'))throw Error('INVALID_RETURN_CONTINUATION');
+       const result=await require('./financial-accept-client').invokeFinancialOperation({...input,orderId:continuationPath[1]},bearerToken,'return_case_driver');return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      }catch(e){const code=e.code||e.message,safe=['UNAUTHORIZED','FORBIDDEN','RETURN_CONTINUATION_CONFLICT','INVALID_RETURN_CONTINUATION','RETURN_RECIPIENT_UNAVAILABLE','CASE_APPEAL_ALREADY_OPEN','CASE_APPEAL_WINDOW_EXPIRED','EXCEPTION_CASE_UNAVAILABLE'];return {statusCode:code==='UNAUTHORIZED'?401:409,headers:corsHeaders,body:JSON.stringify({success:false,code:safe.includes(code)?code:'RETURN_CONTINUATION_UNAVAILABLE'})};}
+    }
+
+    // Financial return: original credential is verified again by the sole money writer.
+    const returnPath=path.match(/\/driver\/orders\/([^/]+)\/(request-return|arrive-return|report-return-obstacle)$/);
+    if(returnPath&&httpMethod==='POST') {
+      try {
+        const body=JSON.parse(event.body||'{}');
+        if(!body||Array.isArray(body)||typeof body!=='object'||Object.keys(body).some(k=>!['offerId','attempt','reason','cashCollected','returnId','position','issueId','note'].includes(k)))throw Error('INVALID_COD_RETURN');
+        const {invokeFinancialReturn}=require('./financial-accept-client');
+        const result=await invokeFinancialReturn({...body,orderId:returnPath[1]},bearerToken,returnPath[2]==='request-return'?'request_return':returnPath[2]==='report-return-obstacle'?'report_return_obstacle':'arrive_return');
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_RETURN_UNAVAILABLE',message:'تعذر تأكيد حالة العودة؛ حدّث الطلب قبل إعادة المحاولة'})};}
+    }
+
     // Deliver order
     if (path.match(/^\/driver\/orders\/[^/]+\/deliver$/) || path.match(/\/driver\/orders\/[^/]+\/deliver$/)) {
       const orderId = path.split('/').slice(-2)[0];
       if (httpMethod === 'POST') {
         const body = JSON.parse(event.body || '{}');
-        return await deliverOrder(cognitoUsername, orderId, body, corsHeaders);
+        return await deliverOrder(cognitoUsername, orderId, body, corsHeaders, bearerToken);
       }
     }
 
@@ -1121,10 +1322,18 @@ async function getDriverProfile(username, fallbackDriverIds, accessToken, header
       };
     }
 
+    const performance=process.env.DRIVER_PERFORMANCE_SNAPSHOT_READS_ENABLED==='true'?await require('./driver-performance-snapshot').readSnapshot({db:dynamodb,GetCommand,driverId:username,includeDetails:false}):null;
+    const view=performance?{...profile,customerRating:performance.ratingAllTime?.average??null,customerRatingCount:performance.ratingAllTime?.count??0,performanceProjection:performance.projection}:profile;
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ data: { ...profile, isVerified: isDriverApproved(profile) } }),
+      body: JSON.stringify({ data: { ...view,
+        ...(profile.vehicleRegistry?{
+          drivingLicenseStatus:require('./driver-vehicles-308').documentStatus(profile.personalDocumentReview?.drivingLicense,profile.drivingLicenseUrl),
+          nationalIdStatus:require('./driver-vehicles-308').documentStatus(profile.personalDocumentReview?.nationalId,profile.nationalIdUrl),
+          registrationPaperStatus:profile.vehicleRegistry.items?.[profile.vehicleRegistry.activeId]?require('./driver-vehicles-308').vehicleStatus(profile.vehicleRegistry.items[profile.vehicleRegistry.activeId]):'PENDING_REVIEW',
+          vehicleEligibility:require('./driver-vehicles-308').eligibility(profile),
+        }:{}), isVerified: isDriverApproved(profile) } }),
     };
   } catch (error) {
     console.error('Error getting profile:', error);
@@ -1241,6 +1450,7 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     // Ensure profile exists (migrate from old key, or create skeleton) so profile setup can proceed.
     await ensureProfileExists(username, fallbackDriverIds, accessToken);
     const existingProfile = await getDriverProfileItem(username);
+    let registrationLegal=null;
 
     console.log('📝 Update profile received body:', JSON.stringify(body, null, 2));
     
@@ -1256,6 +1466,25 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
       }
       catch (_) { return {statusCode:400,headers,body:JSON.stringify({message:'اختر نوع مركبة ومحافظة ومنطقة عمل مفتوحة مرتبطة بها'})}; }
     }
+    if(!existingProfile?.legalAcceptance && (body.profileSchemaVersion===2 || (!isProfileComplete(existingProfile) && isProfileComplete({...existingProfile,...body})))){
+      if(body.legalAccepted!==true||!body.legalAcceptance)throw Object.assign(Error('LEGAL_ACCEPTANCE_REQUIRED'),{statusCode:409});
+      registrationLegal=await require('./customer-legal-contract-344').consent(dynamodb,GetCommand,process.env.LEGAL_SETTINGS_TABLE,body.legalAcceptance,'DRIVER');
+    }
+    const vehicleFields=['vehicleType','registrationPaperUrl','vehiclePlate','vehicleInfo','vehicleRegistry','vehicleOperational','personalDocumentReview'];
+    if (existingProfile?.vehicleRegistry && vehicleFields.some(k => body[k] !== undefined)) {
+      return {statusCode:409,headers,body:JSON.stringify({error:'USE_VEHICLE_MANAGEMENT',message:'استخدم صفحة مركباتي لتعديل المركبة ووثائقها.'})};
+    }
+    if (isDriverApproved(existingProfile) && ['vehicleType','registrationPaperUrl','home_region_id','work_region_id','governorate_id'].some(k=>body[k]!==undefined&&body[k]!==existingProfile[k])) {
+      return {statusCode:409,headers,body:JSON.stringify({error:'USE_VEHICLE_MANAGEMENT',message:'تغيير المركبة أو منطقة العمل يتطلب مراجعة الإدارة.'})};
+    }
+    for (const k of ['drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']) {
+      if (body[k] !== undefined && !require('./driver-vehicles-308').owns(body[k],username,DRIVER_DOCUMENTS_BUCKET)) {
+        return {statusCode:400,headers,body:JSON.stringify({error:'DOCUMENT_OWNERSHIP_INVALID'})};
+      }
+    }
+    if (body.vehiclePlate !== undefined && (typeof body.vehiclePlate !== 'string' || !body.vehiclePlate.trim() || body.vehiclePlate.length > 40)) {
+      return {statusCode:400,headers,body:JSON.stringify({error:'INVALID_VEHICLE_PLATE'})};
+    }
     // Build update expression dynamically
     const updates = [];
     const expressionAttributeNames = {};
@@ -1263,7 +1492,7 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     
     // Fields that can be updated
     const updatableFields = [
-      'name', 'city', 'vehicleType', 'licenseNumber', 'nationalId',
+      'name', 'city', 'vehicleType', 'vehiclePlate', 'licenseNumber', 'nationalId',
       'phoneNumber', 'email', 'registrationMethod',
       'drivingLicenseUrl', 'registrationPaperUrl', 'nationalIdUrl',
       'profileSchemaVersion', 'country_id', 'country_code', 'country_name', 'work_region_id', 'work_region_name',
@@ -1285,6 +1514,8 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
         fieldCount++;
       }
     }
+
+    if(registrationLegal){updates.push('#legalAcceptance = :legalAcceptance');expressionAttributeNames['#legalAcceptance']='legalAcceptance';expressionAttributeValues[':legalAcceptance']={schemaVersion:1,subjectId:username,acceptedAt:now,...require('./customer-legal-contract-344').pin(registrationLegal.bundle),documentSnapshot:registrationLegal.bundle};}
 
     // Always update updatedAt
     updates.push('#updatedAt = :updatedAt');
@@ -1317,14 +1548,18 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     console.log('🔄 Attribute names:', expressionAttributeNames);
     console.log('🔄 Attribute values:', expressionAttributeValues);
 
-    const result = await dynamodb.send(new UpdateCommand({
+    const updateInput = {
       TableName: DRIVERS_TABLE,
       Key: { driverId: username },
       UpdateExpression: updateExpression,
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
-      ReturnValues: 'ALL_NEW',
-    }));
+    };
+    let result;
+    if(registrationLegal){
+      await dynamodb.send(new TransactWriteCommand({TransactItems:[registrationLegal.condition,{Update:updateInput}]}));
+      result={Attributes:(await dynamodb.send(new GetCommand({TableName:DRIVERS_TABLE,Key:{driverId:username},ConsistentRead:true}))).Item};
+    }else result=await dynamodb.send(new UpdateCommand({...updateInput,ReturnValues:'ALL_NEW'}));
 
     console.log('✅ Profile updated:', result.Attributes);
 
@@ -1338,6 +1573,7 @@ async function updateDriverProfile(username, fallbackDriverIds, accessToken, bod
     };
   } catch (error) {
     console.error('Error updating profile:', error);
+    if(['LEGAL_ACCEPTANCE_REQUIRED','LEGAL_VERSION_CHANGED','LEGAL_DOCUMENTS_UNAVAILABLE'].includes(error.code||error.message))return {statusCode:error.statusCode||409,headers,body:JSON.stringify({code:error.code||error.message,message:'راجع السياسات المنشورة ووافق عليها قبل إرسال بياناتك'})};
     return {
       statusCode: 500,
       headers,
@@ -1376,8 +1612,8 @@ async function getProfileStatus(username, fallbackDriverIds, accessToken, header
 
     const missingFields = [];
     
-    if (profile.profileSchemaVersion === 2) {
-      for (const field of ['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']) {
+    if (profile.profileSchemaVersion === 2 || profile.vehicleRegistry?.schemaVersion === 1) {
+      for (const field of (profile.vehicleRegistry?.schemaVersion===1?['name','work_region_id','drivingLicenseUrl','nationalIdUrl']:['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl'])) {
         if (!profile[field]) missingFields.push(field);
       }
     } else {
@@ -1423,8 +1659,8 @@ async function getProfileStatus(username, fallbackDriverIds, accessToken, header
  * Check if profile has all required fields
  */
 function isProfileComplete(profile) {
-  if (profile.profileSchemaVersion === 2) {
-    return ['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl'].every(field=>typeof profile[field]==='string'&&profile[field].trim().length>0);
+  if (profile.profileSchemaVersion === 2 || profile.vehicleRegistry?.schemaVersion === 1) {
+    return (profile.vehicleRegistry?.schemaVersion===1?['name','work_region_id','drivingLicenseUrl','nationalIdUrl']:['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']).every(field=>typeof profile[field]==='string'&&profile[field].trim().length>0);
   }
   const requiredFields = ['name', 'city', 'vehicleType', 'licenseNumber', 'nationalId', 'drivingLicenseUrl'];
   
@@ -1447,6 +1683,7 @@ function isProfileComplete(profile) {
  * Body: { documentType, fileName, contentType, fileData, phoneNumber? }
  */
 async function uploadDriverDocument(username, fallbackDriverIds, accessToken, body, headers) {
+  let finishUpload;
   if (!username) {
     return {
       statusCode: 401,
@@ -1480,9 +1717,21 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
     // Ensure profile exists so subsequent PUT /driver/me doesn't 404.
     await ensureProfileExists(username, fallbackDriverIds, accessToken);
 
+    finishUpload = await beginDriverUpload(rawDynamodb, username);
+
     const now = new Date().toISOString();
     const safeFileName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const key = `drivers/${username}/${documentType}/${now}_${safeFileName}`;
+    if (!['driving_license','registration_paper','national_id'].includes(documentType)) throw new Error('Invalid document type');
+    if (body.vehicleId !== undefined && (documentType !== 'registration_paper' || typeof body.vehicleId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(body.vehicleId))) {
+      return {statusCode:400,headers,body:JSON.stringify({error:'VEHICLE_DATA_INVALID'})};
+    }
+    const ownerProfile = await getDriverProfileItem(username);
+    if (documentType === 'registration_paper' && ownerProfile?.vehicleRegistry && !body.vehicleId) {
+      return {statusCode:409,headers,body:JSON.stringify({error:'USE_VEHICLE_MANAGEMENT'})};
+    }
+    const key = body.vehicleId
+      ? `drivers/${username}/vehicles/${body.vehicleId}/${now}_${safeFileName}`
+      : `drivers/${username}/${documentType}/${now}_${safeFileName}`;
     const buffer = Buffer.from(String(fileData), 'base64');
 
     await s3.send(new PutObjectCommand({
@@ -1501,7 +1750,7 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
         ? 'registrationPaperUrl'
         : documentType === 'national_id' ? 'nationalIdUrl' : null;
 
-    if (urlField) {
+    if (urlField && !body.vehicleId) {
       await dynamodb.send(new UpdateCommand({
         TableName: DRIVERS_TABLE,
         Key: { driverId: username },
@@ -1533,6 +1782,11 @@ async function uploadDriverDocument(username, fallbackDriverIds, accessToken, bo
       headers,
       body: JSON.stringify({ success: false, message: 'فشل رفع المستند', error: error.message }),
     };
+  } finally {
+    if (finishUpload) {
+      try { await finishUpload(); }
+      catch (_) { console.error('Document upload operation requires reconciliation'); }
+    }
   }
 }
 
@@ -1579,6 +1833,12 @@ async function startSearching(driverId, body, headers) {
 
     const driver = driverResult.Item;
 
+    const vehiclesModule=require('./driver-vehicles-308');
+    if(vehiclesModule.enforce(driver)){
+      const eligibility=vehiclesModule.eligibility(driver);
+      if(!eligibility.eligible)return {statusCode:403,headers,body:JSON.stringify({success:false,code:eligibility.code,
+        message:'تحتاج المركبة أو وثائقك إلى مراجعة. افتح المزيد ← مركباتي للاطلاع على الحالة.'})};
+    }
     // فحص الحالة
     if (!isDriverApproved(driver)) {
       return {
@@ -1602,6 +1862,17 @@ async function startSearching(driverId, body, headers) {
         })
       };
     }
+
+    const guardedSearchWrite = async command => {
+      const name=command.constructor.name;
+      if(!['PutCommand','UpdateCommand'].includes(name)||command.input.TableName!==DRIVER_LIVE_STATE_TABLE)return dynamodb.send(command);
+      const operation={...command.input};delete operation.ReturnValues;
+      return dynamodb.send(new TransactWriteCommand({TransactItems:[
+        require('./driver-vehicles-308').fence(DRIVERS_TABLE,{driverId},driver),
+        ...permission.guards,
+        {[name==='PutCommand'?'Put':'Update']:operation},
+      ]}));
+    };
 
     // ============================================
     // الخطوة 2: تحديد المنطقة الحالية
@@ -1652,17 +1923,7 @@ async function startSearching(driverId, body, headers) {
     console.log(`   - target governorate_id: ${governorate_id}`);
     console.log(`   - driver level: ${driver.level || 'Bronze (default)'}`);
     
-    const permission = await checkDriverRegionPermission(
-      driverId, 
-      driver.home_region_id,
-      driver.home_region_level || 3,
-      region_id,
-      regionInfo.region_level || 3,
-      governorate_id,
-      driver.governorate_id,
-      driver.level
-    );
-
+    const permission = await checkDriverRegionPermission(driver, region_id, {lat,lng});
     console.log(`✅ نتيجة فحص الصلاحيات: allowed=${permission.allowed}`);
 
     if (!permission.allowed) {
@@ -1795,7 +2056,7 @@ async function startSearching(driverId, body, headers) {
     if (existingCurrentOrderId) {
       console.log(`🔄 Using UpdateCommand to preserve active order ${existingCurrentOrderId}`);
       
-      await dynamodb.send(new UpdateCommand({
+      await guardedSearchWrite(new UpdateCommand({
         TableName: DRIVER_LIVE_STATE_TABLE,
         Key: { driverId },
         UpdateExpression: `
@@ -1862,7 +2123,7 @@ async function startSearching(driverId, body, headers) {
       // السائق ليس لديه طلب نشط - يمكن استخدام PutCommand بأمان
       console.log(`✅ No active order - using PutCommand for fresh state`);
       
-      await dynamodb.send(new PutCommand({
+      await guardedSearchWrite(new PutCommand({
         TableName: DRIVER_LIVE_STATE_TABLE,
         Item: {
           driverId: driverId,
@@ -1975,7 +2236,7 @@ async function stopSearching(driverId, body, headers) {
     // ============================================
     const liveStateResult = await dynamodb.send(new GetCommand({
       TableName: DRIVER_LIVE_STATE_TABLE,
-      Key: { driverId }
+      Key: { driverId }, ConsistentRead: true
     }));
 
     if (!liveStateResult.Item) {
@@ -1995,7 +2256,7 @@ async function stopSearching(driverId, body, headers) {
     // ============================================
     // الخطوة 2: التحقق من وجود طلب نشط
     // ============================================
-    if (currentState.currentOrderId) {
+    if (currentState.currentOrderId || (currentState.activeOrdersCount ?? 0) !== 0) {
       console.warn(`⚠️ Driver ${driverId} has active order ${currentState.currentOrderId}`);
       return {
         statusCode: 400,
@@ -2007,6 +2268,14 @@ async function stopSearching(driverId, body, headers) {
         })
       };
     }
+
+    const guardedStopWrite = command => {
+      const guard=require('./driver-vehicles-308').fence(DRIVER_LIVE_STATE_TABLE,{driverId},currentState,
+        ['driverId','status','isActive','isSearching','currentOrderId','activeOrdersCount','currentWaveOfferId']).ConditionCheck;
+      return dynamodb.send(new UpdateCommand({...command.input,ConditionExpression:guard.ConditionExpression,
+        ExpressionAttributeNames:{...command.input.ExpressionAttributeNames,...guard.ExpressionAttributeNames},
+        ExpressionAttributeValues:{...command.input.ExpressionAttributeValues,...guard.ExpressionAttributeValues}}));
+    };
 
     // ============================================
     // الخطوة 3: معالجة العرض المعلق (إن وجد)
@@ -2028,7 +2297,7 @@ async function stopSearching(driverId, body, headers) {
     // ============================================
     const now = new Date().toISOString();
     
-    await dynamodb.send(new UpdateCommand({
+    await guardedStopWrite(new UpdateCommand({
       TableName: DRIVER_LIVE_STATE_TABLE,
       Key: { driverId },
       UpdateExpression: `
@@ -2078,6 +2347,9 @@ async function stopSearching(driverId, body, headers) {
     };
 
   } catch (error) {
+    if (['TransactionCanceledException','ConditionalCheckFailedException'].includes(error.name)) {
+      return {statusCode:409,headers,body:JSON.stringify({success:false,message:'تغيرت حالة الطلب أثناء الإيقاف. حدّث الحالة وحاول مجددًا.'})};
+    }
     console.error('❌ Error in stop-searching:', error);
     return {
       statusCode: 500,
@@ -2100,424 +2372,59 @@ async function stopSearching(driverId, body, headers) {
  * يعيد حساب current_work_region_id إذا انتقل السائق لمنطقة جديدة
  */
 async function updateLocation(driverId, body, headers) {
-  try {
-    const { lat, lng } = body;
-
-    if (!lat || !lng) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: 'الإحداثيات مطلوبة (lat, lng)' 
-        })
-      };
+ try {
+  const {lat,lng}=body||{};
+  if(typeof lat!=='number'||!Number.isFinite(lat)||Math.abs(lat)>90||typeof lng!=='number'||!Number.isFinite(lng)||Math.abs(lng)>180)return {statusCode:400,headers,body:JSON.stringify({success:false,message:'إحداثيات الموقع غير صالحة'})};
+  const [liveResult,profileResult]=await Promise.all([
+   dynamodb.send(new GetCommand({TableName:DRIVER_LIVE_STATE_TABLE,Key:{driverId},ConsistentRead:true})),
+   dynamodb.send(new GetCommand({TableName:DRIVERS_TABLE,Key:{driverId},ConsistentRead:true}))
+  ]);
+  const live=liveResult.Item,driver=profileResult.Item;
+  if(!live||!driver)return {statusCode:404,headers,body:JSON.stringify({success:false,message:'لم تُعثر على حالة السائق'})};
+  const busy=live.currentOrderId!=null||(live.activeOrdersCount??0)!==0||live.status==='busy';
+  const now=new Date().toISOString(),vehicles=require('./driver-vehicles-308');
+  const guard=vehicles.fence(DRIVER_LIVE_STATE_TABLE,{driverId},live,['driverId','status','isActive','isSearching','currentOrderId','activeOrdersCount']).ConditionCheck;
+  const names={...guard.ExpressionAttributeNames,'#lat':'lat','#lng':'lng','#observed':'locationUpdatedAt','#updated':'lastUpdated'},values={...guard.ExpressionAttributeValues,':lat':lat,':lng':lng,':now':now};
+  const sets=['#lat=:lat','#lng=:lng','#observed=:now','#updated=:now'];
+  let region=null,scope=null,stopped=false;
+  if(!busy){
+   region=await determineRegionFromCoordinates(lat,lng,driver);
+   scope=region?await checkDriverRegionPermission(driver,region.region_id,{lat,lng}):{allowed:false,code:'DRIVER_REGION_POSITION_MISMATCH',guards:[]};
+   const allowed=scope.allowed;
+   for(const [key,value]of Object.entries({current_work_region_id:region?.region_id??null,allowed_region_ids:allowed?[region.region_id]:[],allowed_region_ids_priority0:allowed?[region.region_id]:[],allowed_region_ids_priority1:[]})){
+    names['#r'+key]=key;values[':r'+key]=value;sets.push('#r'+key+'=:r'+key);
+   }
+   if(!allowed&&(live.isSearching===true||live.status==='available')){
+    stopped=true;
+    for(const [key,value]of Object.entries({isSearching:false,isActive:false,status:'offline',searchStoppedAt:now,stopReason:scope.code})){
+     names['#stop'+key]=key;values[':stop'+key]=value;sets.push('#stop'+key+'=:stop'+key);
     }
-
-    console.log(`📍 Driver ${driverId} updating location to (${lat}, ${lng})`);
-
-    // ============================================
-    // الخطوة 1: جلب حالة السائق الحالية
-    // ============================================
-    const liveStateResult = await dynamodb.send(new GetCommand({
-      TableName: DRIVER_LIVE_STATE_TABLE,
-      Key: { driverId }
-    }));
-
-    if (!liveStateResult.Item) {
-      return {
-        statusCode: 404,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: 'حالة السائق غير موجودة. قم بتفعيل البحث أولاً' 
-        })
-      };
-    }
-
-    const currentState = liveStateResult.Item;
-
-    // التحقق من أن السائق في حالة بحث
-    if (!currentState.isSearching) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: 'السائق ليس في حالة بحث عن الطلبات' 
-        })
-      };
-    }
-
-    // ============================================
-    // الخطوة 2: جلب بيانات السائق الأساسية
-    // ============================================
-    const driverResult = await dynamodb.send(new GetCommand({
-      TableName: DRIVERS_TABLE,
-      Key: { driverId }
-    }));
-
-    if (!driverResult.Item) {
-      return {
-        statusCode: 404,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: 'السائق غير موجود' 
-        })
-      };
-    }
-
-    const driver = driverResult.Item;
-
-    // ============================================
-    // الخطوة 3: تحديد المنطقة الجديدة من الموقع
-    // ============================================
-    const regionInfo = await determineRegionFromCoordinates(lat, lng, driver);
-
-    if (!regionInfo) {
-      console.warn(`⚠️ Could not determine region for location (${lat}, ${lng})`);
-      // نستمر بتحديث الإحداثيات حتى لو لم نستطع تحديد المنطقة
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: `
-          SET lat = :lat,
-              lng = :lng,
-              locationUpdatedAt = :now,
-              lastUpdated = :now
-        `,
-        ExpressionAttributeValues: {
-          ':lat': lat,
-          ':lng': lng,
-          ':now': new Date().toISOString()
-        }
-      }));
-
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({
-          success: true,
-          location_updated: true,
-          region_changed: false,
-          message: 'تم تحديث الموقع (منطقة غير محددة)'
-        })
-      };
-    }
-
-    const { region_id, region_name, district_id, district_name, governorate_id, governorate_name, is_active } = regionInfo;
-
-    // فحص: هل المنطقة الجديدة نشطة؟
-    if (!is_active) {
-      return {
-        statusCode: 403,
-        headers,
-        body: JSON.stringify({ 
-          success: false, 
-          message: `خدمة التوصيل غير متوفرة في منطقة ${region_name}` 
-        })
-      };
-    }
-
-    // ============================================
-    // الخطوة 4: مقارنة المنطقة الحالية مع السابقة
-    // ============================================
-    const previousRegionId = currentState.current_work_region_id;
-    const regionChanged = previousRegionId !== region_id;
-
-    console.log(`📊 Region comparison: ${previousRegionId} → ${region_id} (changed: ${regionChanged})`);
-
-    // إذا تغيرت المنطقة، نفحص الصلاحيات
-    if (regionChanged) {
-      const permission = await checkDriverRegionPermission(
-        driverId, 
-        driver.home_region_id, 
-        region_id, 
-        governorate_id,
-        driver.governorate_id,
-        driver.level
-      );
-
-      if (!permission.allowed) {
-        // السائق دخل منطقة غير مسموح له بالعمل فيها
-        console.warn(`⚠️ Driver ${driverId} entered unauthorized region ${region_name}`);
-        
-        // إيقاف البحث تلقائياً
-        await dynamodb.send(new UpdateCommand({
-          TableName: DRIVER_LIVE_STATE_TABLE,
-          Key: { driverId },
-          UpdateExpression: `
-            SET isSearching = :false,
-                #status = :offline,
-                lat = :lat,
-                lng = :lng,
-                locationUpdatedAt = :now,
-                searchStoppedAt = :now,
-                lastUpdated = :now,
-                stopReason = :reason
-          `,
-          ExpressionAttributeNames: {
-            '#status': 'status'
-          },
-          ExpressionAttributeValues: {
-            ':false': false,
-            ':offline': 'offline',
-            ':lat': lat,
-            ':lng': lng,
-            ':now': new Date().toISOString(),
-            ':reason': `دخول منطقة غير مصرح بها: ${region_name}`
-          }
-        }));
-
-        return {
-          statusCode: 403,
-          headers,
-          body: JSON.stringify({ 
-            success: false, 
-            searching_stopped: true,
-            message: `لا يمكنك العمل في ${region_name}. ${permission.suggestion}`,
-            data: {
-              unauthorized_region: region_name,
-              current_level: driver.level || 'Bronze'
-            }
-          })
-        };
-      }
-    }
-
-    // ============================================
-    // الخطوة 5: تحديث WizzDriverLiveState
-    // ============================================
-    const now = new Date().toISOString();
-
-    // 🌊 Wave System: إذا تغيرت المنطقة، نعيد حساب allowed_region_ids
-    if (regionChanged) {
-      console.log('🌊 Wave System: Region changed, recalculating allowed_region_ids...');
-      
-      const allowedRegions = await calculateAllowedRegions(region_id);
-
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: `
-          SET lat = :lat,
-              lng = :lng,
-              current_work_region_id = :regionId,
-              parent_district_id = :districtId,
-              governorate_id = :governorateId,
-              region_mode = :regionMode,
-              allowed_region_ids = :allowedAll,
-              allowed_region_ids_priority0 = :allowedP0,
-              allowed_region_ids_priority1 = :allowedP1,
-              locationUpdatedAt = :now,
-              lastUpdated = :now
-        `,
-        ExpressionAttributeValues: {
-          ':lat': lat,
-          ':lng': lng,
-          ':regionId': region_id,
-          ':districtId': district_id,
-          ':governorateId': governorate_id,
-          ':regionMode': region_id === driver.home_region_id ? 'home' : 'custom',
-          ':allowedAll': allowedRegions.all,
-          ':allowedP0': allowedRegions.priority0,
-          ':allowedP1': allowedRegions.priority1,
-          ':now': now
-        }
-      }));
-
-      console.log(`✅ Driver ${driverId} location & allowed_region_ids updated for ${region_name}`);
-    } else {
-      // 🌊 Wave System: المنطقة لم تتغير، فقط نحدث lat/lng (98% من الحالات)
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: `
-          SET lat = :lat,
-              lng = :lng,
-              current_work_region_id = :regionId,
-              parent_district_id = :districtId,
-              governorate_id = :governorateId,
-              region_mode = :regionMode,
-              locationUpdatedAt = :now,
-              lastUpdated = :now
-        `,
-        ExpressionAttributeValues: {
-          ':lat': lat,
-          ':lng': lng,
-          ':regionId': region_id,
-          ':districtId': district_id,
-          ':governorateId': governorate_id,
-          ':regionMode': region_id === driver.home_region_id ? 'home' : 'custom',
-          ':now': now
-        }
-      }));
-
-      console.log(`✅ Driver ${driverId} location updated (same region: ${region_name})`);
-    }
-
-    // ============================================
-    // الخطوة 6: الرد للتطبيق
-    // ============================================
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        success: true,
-        location_updated: true,
-        region_changed: regionChanged,
-        message: regionChanged 
-          ? `انتقلت إلى منطقة: ${region_name}` 
-          : 'تم تحديث الموقع',
-        data: {
-          current_work_region: {
-            id: region_id,
-            name: region_name,
-            district_name: district_name,
-            governorate_name: governorate_name
-          },
-          previous_region_id: previousRegionId,
-          region_mode: region_id === driver.home_region_id ? 'home' : 'custom'
-        }
-      })
-    };
-
-  } catch (error) {
-    console.error('❌ Error in update-location:', error);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ 
-        success: false, 
-        message: 'حدث خطأ في تحديث الموقع',
-        error: error.message 
-      })
-    };
+   }
   }
+  const transaction=[...(!busy?[vehicles.fence(DRIVERS_TABLE,{driverId},driver),...(scope?.allowed?scope.guards:[])]:[]),
+   {Update:{...guard,UpdateExpression:'SET '+sets.join(','),ExpressionAttributeNames:names,ExpressionAttributeValues:values}}];
+  await dynamodb.send(new TransactWriteCommand({TransactItems:transaction}));
+  return {statusCode:stopped?403:200,headers,body:JSON.stringify({success:!stopped,location_updated:true,region_changed:!busy&&live.current_work_region_id!==region?.region_id,searching_stopped:stopped,
+   ...(stopped?{code:scope.code}:{}),message:busy?'تم تحديث موقع الطلب الجاري':stopped?'أُوقف استقبال الطلبات الجديدة لأن الموقع خارج نطاق العمل المسموح أو المنطقة غير متاحة':'تم تحديث الموقع',
+   data:{current_work_region:region?{id:region.region_id,name:region.region_name}:null}})};
+ } catch(error){
+  const conflict=['TransactionCanceledException','ConditionalCheckFailedException'].includes(error.name);
+  return {statusCode:conflict?409:503,headers,body:JSON.stringify({success:false,message:conflict?'تغيرت حالة السائق أثناء تحديث الموقع. ستُعاد المحاولة.':'تعذر التحقق من نطاق العمل الآن. حاول مجددًا.'})};
+ }
 }
 
 /**
  * 🗺️ تحديد المنطقة من الإحداثيات باستخدام H3 Geospatial Index
  */
 async function determineRegionFromCoordinates(lat, lng, driver) {
-  if (!lat || !lng) {
-    console.error('❌ Missing coordinates');
-    return null;
-  }
-  
-  try {
-    const latitude = parseFloat(lat);
-    const longitude = parseFloat(lng);
-    
-    console.log(`📍 Finding region for coordinates: (${latitude}, ${longitude})`);
-    console.log(`📊 Using tables: RegionIndex=${REGION_INDEX_TABLE}, Regions=${REGIONS_TABLE}`);
-    
-    // توليد H3 cell عند الدقة 9 (نفس دقة تطبيق المستخدم)
-    const h3Cell = h3.latLngToCell(latitude, longitude, H3_RESOLUTION);
-    console.log(`🔷 Generated H3 cell: ${h3Cell} (resolution ${H3_RESOLUTION})`);
-    console.log(`🔷 H3 cell details: lat=${latitude}, lng=${longitude}, resolution=${H3_RESOLUTION}`);
-    
-    // ✅ محاولة مطابقة دقيقة - البحث عن جميع المطابقات واختيار Level 3 أولاً
-    console.log(`🔍 Searching in ${REGION_INDEX_TABLE} for cell: ${h3Cell}`);
-    
-    // Query بدلاً من Get للحصول على جميع المطابقات
-    const allMatches = await dynamodb.send(new QueryCommand({
-      TableName: REGION_INDEX_TABLE,
-      KeyConditionExpression: 'index_cell_id = :cellId',
-      ExpressionAttributeValues: {
-        ':cellId': h3Cell
-      }
-    }));
-    
-    if (allMatches.Items && allMatches.Items.length > 0) {
-      console.log(`✅ Found ${allMatches.Items.length} matches for H3 cell ${h3Cell}`);
-      
-      // ⭐ ترتيب حسب Level: نفضل Level 3 (child) على Level 2 (parent)
-      const sortedMatches = allMatches.Items.sort((a, b) => {
-        const levelA = parseInt(a.level) || 0;
-        const levelB = parseInt(b.level) || 0;
-        return levelB - levelA; // Level 3 أولاً، ثم 2، ثم 1
-      });
-      
-      const bestMatch = sortedMatches[0];
-      console.log(`🎯 BEST MATCH SELECTED!`);
-      console.log(`   Region ID: ${bestMatch.regionId}`);
-      console.log(`   Region Name: ${bestMatch.region_name}`);
-      console.log(`   Level: ${bestMatch.level} ⭐ (highest level from ${allMatches.Items.length} matches)`);
-      console.log(`   Center: (${bestMatch.center_lat}, ${bestMatch.center_lng})`);
-      
-      if (allMatches.Items.length > 1) {
-        console.log(`   ℹ️ Other matches found:`);
-        sortedMatches.slice(1).forEach((item, index) => {
-          console.log(`      [${index + 1}] ${item.region_name} (Level ${item.level}) - IGNORED`);
-        });
-      }
-      
-      // جلب معلومات التسلسل الهرمي الكاملة
-      const hierarchy = await getRegionFullHierarchy(bestMatch.regionId);
-      
-      if (hierarchy) {
-        console.log(`✅ Hierarchy retrieved successfully`);
-        console.log(`   Region: ${hierarchy.region_name} (${hierarchy.region_id})`);
-        console.log(`   District: ${hierarchy.district_name} (${hierarchy.district_id})`);
-        console.log(`   Governorate: ${hierarchy.governorate_name} (${hierarchy.governorate_id})`);
-        return hierarchy;
-      } else {
-        console.log(`⚠️ Failed to get hierarchy for region ${bestMatch.regionId}`);
-      }
-    } else {
-      console.log(`❌ NO EXACT MATCH - cell ${h3Cell} not found in RegionIndex`);
-    }
-    
-    // Fallback: البحث في parent cells (دقة أقل)
-    console.log('⚠️ No exact match, trying parent cells (lower resolution)...');
-    for (let resolution = H3_RESOLUTION - 1; resolution >= 6; resolution--) {
-      const parentCell = h3.cellToParent(h3Cell, resolution);
-      console.log(`   🔍 Trying resolution ${resolution}: cell=${parentCell}`);
-      
-      const parentMatch = await dynamodb.send(new GetCommand({
-        TableName: REGION_INDEX_TABLE,
-        Key: { index_cell_id: parentCell }
-      }));
-      
-      if (parentMatch.Item) {
-        console.log(`✅ PARENT MATCH FOUND at resolution ${resolution}!`);
-        console.log(`   Region ID: ${parentMatch.Item.regionId}`);
-        console.log(`   Region Name: ${parentMatch.Item.region_name}`);
-        console.log(`   Level: ${parentMatch.Item.level}`);
-        
-        // جلب معلومات التسلسل الهرمي الكاملة
-        const hierarchy = await getRegionFullHierarchy(parentMatch.Item.regionId);
-        
-        if (hierarchy) {
-          console.log(`✅ Hierarchy from parent cell:`);
-          console.log(`   Region: ${hierarchy.region_name} (${hierarchy.region_id})`);
-          console.log(`   District: ${hierarchy.district_name} (${hierarchy.district_id})`);
-          console.log(`   Governorate: ${hierarchy.governorate_name} (${hierarchy.governorate_id})`);
-          return hierarchy;
-        }
-      } else {
-        console.log(`   ❌ No match at resolution ${resolution}`);
-      }
-    }
-    
-    console.warn(`⚠️⚠️⚠️ NO H3 MATCH FOUND - trying FALLBACK: nearest region by distance...`);
-    
-    // Fallback: البحث عن أقرب منطقة بالمسافة
-    const nearestRegion = await findNearestRegionByDistance(latitude, longitude);
-    if (nearestRegion) {
-      console.log(`✅ FALLBACK SUCCESS: Using nearest region`);
-      return nearestRegion;
-    }
-    
-    console.warn(`⚠️ No region found for coordinates (${latitude}, ${longitude})`);
-    return null;
-    
-  } catch (error) {
-    console.error('❌ Error in determineRegionFromCoordinates:', error);
-    return null;
-  }
+ if(typeof lat!=='number'||!Number.isFinite(lat)||typeof lng!=='number'||!Number.isFinite(lng))return null;
+ const locate=require('./driver-region-locator-311').createDriverRegionLocator311({db:dynamodb,GetCommand,QueryCommand,
+  tables:{regions:process.env.REGIONS_BASE_TABLE||'WizzCentral_Regions',derived:REGIONS_TABLE,index:REGION_INDEX_TABLE}});
+ const match=await locate({latitude:lat,longitude:lng});
+ if(!match)return null;
+ const hierarchy=await getRegionFullHierarchy(match.regionId);
+ if(!hierarchy||hierarchy.region_level!==3)return null;
+ return {...hierarchy,is_active:true};
 }
 
 /**
@@ -2724,118 +2631,10 @@ async function getRegionHierarchy(districtId) {
 /**
  * 🔐 فحص صلاحية السائق للعمل في المنطقة
  */
-async function checkDriverRegionPermission(driverId, homeRegionId, homeRegionLevel, targetRegionId, targetRegionLevel, targetGovernorateId, homeGovernorateId, driverLevel) {
-  console.log(`🔐 فحص صلاحيات السائق ${driverId}:`);
-  console.log(`   homeRegionId: ${homeRegionId} (Level ${homeRegionLevel})`);
-  console.log(`   targetRegionId: ${targetRegionId} (Level ${targetRegionLevel})`);
-  console.log(`   homeGovernorateId: ${homeGovernorateId}`);
-  console.log(`   targetGovernorateId: ${targetGovernorateId}`);
-  console.log(`   driverLevel: ${driverLevel || 'Bronze (default)'}`);
-  
-  // 1. نفس المنطقة الأساسية → مسموح دائماً
-  if (homeRegionId === targetRegionId) {
-    console.log(`✅ نفس المنطقة الأصلية - مسموح`);
-    return { allowed: true };
-  }
-
-  // ============================================
-  // 🎯 المنطق الجديد: حسب Level
-  // ============================================
-
-  // 2. إذا كانت home_region هي Level 2 (بدون أطفال Level 3)
-  if (homeRegionLevel === 2) {
-    console.log(`⚠️ home_region هي Level 2 - نسمح فقط بنفس المنطقة`);
-    console.log(`❌ غير مسموح - السائق في Level 2 يعمل فقط في منطقته`);
-    return { 
-      allowed: false, 
-      suggestion: 'يمكنك العمل فقط في منطقتك الحالية' 
-    };
-  }
-
-  // 3. إذا كانت home_region هي Level 3 → نتحقق من الجيران Priority 0/1 فقط
-  if (homeRegionLevel === 3) {
-    console.log(`✅ home_region هي Level 3 - نفحص الجيران Priority 0/1 فقط`);
-    
-    try {
-      console.log(`🔍 فحص جدول RegionNeighbors لـ ${homeRegionId}...`);
-      
-      // Query RegionNeighbors للحصول على الجيران
-      const result = await dynamodb.send(new QueryCommand({
-        TableName: REGION_NEIGHBORS_TABLE,
-        IndexName: 'source-region-index',
-        KeyConditionExpression: 'source_region_id = :regionId',
-        ExpressionAttributeValues: {
-          ':regionId': homeRegionId
-        }
-      }));
-
-      const neighbors = result.Items || [];
-      console.log(`   ✅ Found ${neighbors.length} neighbor entries for home_region`);
-
-      // ❌ لا نفحص parent - نفحص فقط Priority 0 & 1
-      const priority0and1 = neighbors.filter(n => n.expansion_priority === 0 || n.expansion_priority === 1);
-      const allowedNeighborIds = priority0and1.map(n => n.target_region_id);
-      
-      console.log(`   📊 المناطق المجاورة المسموحة (Priority 0 & 1 فقط):`);
-      console.log(`      - Priority 0: ${neighbors.filter(n => n.expansion_priority === 0).length} مناطق`);
-      console.log(`      - Priority 1: ${neighbors.filter(n => n.expansion_priority === 1).length} مناطق`);
-      console.log(`      - Priority 2 (مستبعدة): ${neighbors.filter(n => n.expansion_priority === 2).length} مناطق`);
-      console.log(`      - Total allowed neighbors: ${allowedNeighborIds.length} مناطق`);
-      
-      if (allowedNeighborIds.includes(targetRegionId)) {
-        console.log(`✅ المنطقة المستهدفة ضمن المناطق المجاورة (Priority 0 أو 1) - مسموح`);
-        return { allowed: true };
-      }
-      
-      console.log(`⚠️ المنطقة المستهدفة ليست ضمن:`);
-      console.log(`   - home_region (${homeRegionId})`);
-      console.log(`   - neighbors Priority 0/1 (${allowedNeighborIds.length} مناطق)`);
-      
-    } catch (error) {
-      console.error('❌ خطأ في فحص RegionNeighbors:', error);
-      // في حالة الخطأ، نكمل بفحص المحافظات
-    }
-  }
-
-  // 4. فحص مستوى السائق
-  const level = driverLevel || 'Bronze';
-
-  // Gold: أي محافظة
-  if (level === 'Gold') {
-    console.log(`✅ مستوى Gold - مسموح في كل المحافظات`);
-    return { allowed: true };
-  }
-
-  // Silver: نفس المحافظة
-  if (level === 'Silver' && homeGovernorateId === targetGovernorateId) {
-    console.log(`✅ مستوى Silver ونفس المحافظة - مسموح`);
-    return { allowed: true };
-  }
-
-  // Bronze: نفس المحافظة فقط (لأن Bronze يعمل في نفس المحافظة)
-  if (level === 'Bronze' && homeGovernorateId === targetGovernorateId) {
-    console.log(`✅ مستوى Bronze ونفس المحافظة - مسموح`);
-    return { allowed: true };
-  }
-
-  // غير مسموح
-  console.log(`❌ غير مسموح - مستوى ${level} ومحافظة مختلفة`);
-  
-  // رسائل مخصصة حسب السبب
-  let suggestion = 'المنطقة المطلوبة خارج نطاق عملك الحالي';
-  
-  if (homeRegionLevel === 3) {
-    // Level 3: يمكنه العمل في الجيران Priority 0/1
-    suggestion = 'يمكنك العمل فقط في منطقتك والمناطق المجاورة القريبة';
-  } else if (homeRegionLevel === 2) {
-    // Level 2: فقط في نفس المنطقة
-    suggestion = 'يمكنك العمل فقط في منطقتك الحالية';
-  }
-  
-  return { 
-    allowed: false, 
-    suggestion: suggestion
-  };
+async function checkDriverRegionPermission(driver, targetRegionId, point) {
+ const access=require('./driver-work-region-311').create({db:dynamodb,GetCommand});
+ const scope=await access.check(driver,targetRegionId,targetRegionId,1,point);
+ return {...scope,suggestion:'يمكنك العمل في منطقة عملك المعتمدة والمناطق المجاورة المسموحة والمفتوحة فقط'};
 }
 
 /**
@@ -2951,11 +2750,13 @@ async function getMapData(driverId, queryParams, headers) {
     console.log(`   🏪 Found ${stores.length} stores`);
 
     // 6️⃣ Calculate hot scores (simple version - count waiting orders)
-    await enrichStoresWithHotScores(stores);
+    // Live pickup activity is fetched separately through authenticated map-activity.
+    for (const store of stores) {store.is_hot=false;store.hot_score=0;store.waiting_orders_count=null;}
 
     // 7️⃣ Build response
     const response = {
       success: true,
+      map_tools: await require('./driver-map-settings-329').readPolicy(dynamodb,GetCommand).catch(()=>null),
       timestamp: new Date().toISOString(),
       processing_time_ms: Date.now() - startTime,
       current_work_region: {
@@ -3155,7 +2956,8 @@ async function getDriverMetricsSnapshot(driverId) {
 
     const snapshot = {
       acceptanceRate: metrics.acceptanceRate || 0,
-      completionRate: metrics.completionRate || 0,
+      completionRate: metrics.completionRateStatus && metrics.completionRateStatus !== 'AVAILABLE' ? null : (metrics.completionRate || 0),
+      completionRateStatus: metrics.completionRateStatus || null,
       responseRate: metrics.responseRate || 0,
       consecutiveRejections: metrics.consecutiveRejections || 0,
       totalOffersWindow: metrics.totalOffersLast100 || 0,
@@ -3739,7 +3541,7 @@ function calculateRegionCoverageKm(stores, centerLat, centerLng) {
  * 🌊 Accept Wave Offer
  * Proxy request to WaveSystem_HandleDriverAccept Lambda
  */
-async function acceptWaveOffer(driverId, body, corsHeaders) {
+async function acceptWaveOffer(driverId, body, corsHeaders, accessToken) {
   console.log('🌊 Accept Wave Offer called');
   console.log('Driver ID from token:', driverId);
   console.log('Request body:', JSON.stringify(body, null, 2));
@@ -3799,7 +3601,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     }
     
     const approval = await getDriverProfileItem(finalDriverId);
-    if (!isDriverApproved(approval)) {
+    if (!isDriverApproved(approval) || (require('./driver-vehicles-308').enforce(approval) && !require('./driver-vehicles-308').eligibility(approval).eligible)) {
       return { statusCode: 403, headers: corsHeaders, body: JSON.stringify({
         success: false, code: 'DRIVER_NOT_VERIFIED',
         message: 'حسابك بانتظار تحقق الإدارة. لا يمكنك قبول الطلبات قبل الموافقة.'
@@ -3810,6 +3612,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     console.log('📦 Fetching order details for Hold calculation...');
     const orderResult = await dynamodb.send(new GetCommand({
       TableName: ORDERS_TABLE,
+      ConsistentRead: true,
       Key: {
         PK: `ORDER#${orderId}`,
         SK: 'META'
@@ -3828,7 +3631,20 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     }
     
     const order = orderResult.Item;
-    const normalizedPricing = normalizeOrderPricingToIqd(order);
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(order,k))) {
+      return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,
+        code:'FINANCIAL_OFFER_REQUIRED',message:'يحتاج هذا الطلب إلى عرضه المالي المعتمد'})};
+    }
+    // Pinned cycles must not enter the old pre-hold/automatic-release wrapper.
+    const pinnedJob=await dynamodb.send(new GetCommand({TableName:'WizzDispatchJobs_staging',Key:{orderId,SK:'METADATA'},ConsistentRead:true}));
+    if(pinnedJob.Item&&Object.prototype.hasOwnProperty.call(pinnedJob.Item,'dispatchCycle')){
+      if(process.env.DISPATCH_CYCLE_MODE!=='LEGACY_RESPONSES')return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'PINNED_LEGACY_ACCEPTANCE_REQUIRES_COORDINATED_RELEASE',message:'هذا العرض يحتاج مسار القبول المنسق'})};
+      const wave=String(offerId).match(/_W([1-9][0-9]{0,3})$/);if(!wave||Number(wave[1])>1000)return {statusCode:400,headers:corsHeaders,body:JSON.stringify({success:false,code:'INVALID_PINNED_OFFER'})};
+      const result=await require('./pinned-legacy-runtime').acceptPinnedLegacyFromDriver({orderId,offerId,waveNumber:Number(wave[1])},accessToken,finalDriverId,request=>createWalletHold(request.driverId,request.amount,request.orderId,request.assignmentAttempt,request.attemptId));
+      return {statusCode:result.success?200:result.pending?202:409,headers:corsHeaders,body:JSON.stringify(result)};
+    }
+    const financialPricing = Object.prototype.hasOwnProperty.call(order,'financialSnapshot') ? require('./financial-order-view').financialOrderPricing(order) : null;
+    const normalizedPricing = financialPricing || normalizeOrderPricingToIqd(order);
 
     // ✅ استخراج holdAmount من goodsSubtotal (قيمة الطلب فقط - بدون رسوم التوصيل والتِب)
     // holdAmount = قيمة المنتجات فقط (للمنصة)
@@ -3843,6 +3659,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     
     // ✅ نثبت: هل الطلب ثابت؟ Hold التحقق الثنائي
     if (order.holdId && order.holdStatus === 'ACTIVE') {
+      if(order.driverId===finalDriverId&&['accepted','heading_to_store','arrived_at_store','picked_up','heading_to_customer','arrived_at_customer'].includes(order.status))return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,message:'تم قبول الطلب مسبقًا',data:{orderId,driverId:finalDriverId,holdId:order.holdId,holdStatus:order.holdStatus,holdAmount:order.holdAmount}})};
       console.error('❌ Order already has active holdId:', order.holdId);
       console.error('   holdStatus:', order.holdStatus);
       console.error('   holdAmount:', order.holdAmount);
@@ -4037,7 +3854,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
       // IMPORTANT: release hold to avoid orphan ACTIVE hold when accept fails
       let holdReleased = false;
       try {
-        await releaseWalletHold(holdInfo.holdId, 'WAVE_ACCEPT_FAILED', orderId);
+        await releaseWalletHold(holdInfo.holdId, 'WAVE_ACCEPT_FAILED', orderId, finalDriverId);
         holdReleased = true;
       } catch (releaseErr) {
         console.error('⚠️ Failed to release hold after WaveSystem invocation failure:', releaseErr?.message || releaseErr);
@@ -4076,9 +3893,14 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
           PK: `ORDER#${orderId}`,
           SK: 'META'
         },
-        UpdateExpression: 'SET holdId = :holdId, holdStatus = :holdStatus, holdAmount = :holdAmount, pricingFrozen = :frozen, updatedAt = :now',
+        UpdateExpression: 'SET holdId = :holdId, holdStatus = :holdStatus, holdAmount = :holdAmount, pricingFrozen = :frozen, walletFinancialStatus = :holdStatus, updatedAt = :now',
+        ConditionExpression:'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :assignedDriver AND #orderStatus <> :delivered AND #orderStatus <> :completed',
+        ExpressionAttributeNames:{'#orderStatus':'status'},
         ExpressionAttributeValues: {
           ':holdId': holdInfo.holdId,
+          ':assignedDriver': finalDriverId,
+          ':delivered':'delivered',
+          ':completed':'completed',
           ':holdStatus': holdInfo.status,
           ':holdAmount': Number(holdInfo.amount),  // ✅ تأكد من تحويله لرقم
           ':frozen': true,
@@ -4120,7 +3942,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
     if (!waveSuccess || waveStatusCode >= 400) {
       let holdReleased = false;
       try {
-        await releaseWalletHold(holdInfo.holdId, 'WAVE_ACCEPT_FAILED', orderId);
+        await releaseWalletHold(holdInfo.holdId, 'WAVE_ACCEPT_FAILED', orderId, finalDriverId);
         holdReleased = true;
       } catch (releaseErr) {
         console.error('⚠️ Failed to release hold after WaveSystem non-success response:', releaseErr?.message || releaseErr);
@@ -4178,7 +4000,7 @@ async function acceptWaveOffer(driverId, body, corsHeaders) {
  * 🚫 Reject Wave Offer
  * Proxy request to WaveSystem_HandleDriverReject Lambda
  */
-async function rejectWaveOffer(driverId, body, corsHeaders) {
+async function rejectWaveOffer(driverId, body, corsHeaders, accessToken) {
   console.log('🚫 Reject Wave Offer called');
   console.log('Driver ID from token:', driverId);
   console.log('Request body:', JSON.stringify(body, null, 2));
@@ -4232,6 +4054,7 @@ async function rejectWaveOffer(driverId, body, corsHeaders) {
     const lambda = new LambdaClient({ region: 'us-east-1' });
     
     const payload = {
+      ...(typeof accessToken === 'string' && accessToken ? {headers:{Authorization:'Bearer '+accessToken}} : {}),
       body: JSON.stringify({
         offerId,
         driverId: finalDriverId,
@@ -4278,6 +4101,7 @@ async function rejectWaveOffer(driverId, body, corsHeaders) {
  */
 async function getDriverMetrics(driverId, corsHeaders) {
   try {
+    if(process.env.DRIVER_PERFORMANCE_SNAPSHOT_READS_ENABLED==='true'){const p=await require('./driver-performance-snapshot').readSnapshot({db:dynamodb,GetCommand,driverId,includeDetails:false});return {statusCode:200,headers:{...corsHeaders,'Cache-Control':'no-store'},body:JSON.stringify({...p,totalAccepted:p.acceptance?.accepted??0,totalRejected:p.acceptance?.declined??0,totalExpired:p.acceptance?.expiredDelivered??0,responseRate:p.acceptance?.sampleSize?(p.acceptance.accepted+p.acceptance.declined)/p.acceptance.sampleSize:null,totalOffersReceived:p.acceptance?.sampleSize??0,consecutiveRejections:p.rejections?.consecutive??null,rating:p.customerRating,totalTrips:p.completion?p.completion.completed+p.completion.returned:null})};}
     console.log(`📊 Fetching metrics for driver: ${driverId}`);
     
     // جلب metrics من WizzDriverPerformanceMetrics
@@ -4318,7 +4142,8 @@ async function getDriverMetrics(driverId, corsHeaders) {
       body: JSON.stringify({
         acceptanceRate: metrics.acceptanceRate || 0,
         responseRate: metrics.responseRate || 0,
-        completionRate: metrics.completionRate || 0,
+        completionRate: metrics.completionRateStatus && metrics.completionRateStatus !== 'AVAILABLE' ? null : (metrics.completionRate || 0),
+      completionRateStatus: metrics.completionRateStatus || null,
         totalAccepted: metrics.totalAccepted || 0,
         totalRejected: metrics.totalRejected || 0,
         totalExpired: metrics.totalExpired || 0,
@@ -4390,19 +4215,17 @@ async function getOrderById(driverId, orderId, corsHeaders) {
     }
     
     // Format response to match ActiveOrder model
-    const normalizedPricing = normalizeOrderPricingToIqd(order);
+    const financialPricing = Object.prototype.hasOwnProperty.call(order,'financialSnapshot') ? require('./financial-order-view').financialOrderPricing(order) : null;
+    const normalizedPricing = financialPricing || normalizeOrderPricingToIqd(order);
 
     const response = {
       orderId: order.orderId,
       status: order.status || 'accepted',
       
-      // Restaurant info
-      restaurantId: order.restaurantId || order.businessId,
-      restaurantName: order.restaurantName || order.businessName,
-      restaurantAddress: order.restaurantAddress || order.pickupAddress,
+      // Pickup data supports current store fields and legacy order aliases.
+      ...require('./driver-trip-route').pickupView(order),
       restaurantLat: order.restaurantLat || order.pickupLatitude,
       restaurantLng: order.restaurantLng || order.pickupLongitude,
-      restaurantPhone: order.restaurantPhone || order.businessPhone,
       
       // Customer info
       customerId: order.customerId || order.userId,
@@ -4422,8 +4245,10 @@ async function getOrderById(driverId, orderId, corsHeaders) {
       items: order.items || [],
       specialInstructions: order.specialInstructions || order.notes,
       
+      ...(financialPricing ? {financialAssignment:{offerId:order.financialAcceptance.offerId,attempt:order.assignmentAttemptCounter,...(order.exceptionPolicy?{exceptionPolicyVersion:order.exceptionPolicy.version}:{}),returnId:order.returnCaseId||null,returnStatus:order.returnStatus||null,serverNow:new Date().toISOString(),returnHandover:order.returnHandover||null,returnInstructions:order.returnInstructions||null},driverEarnings:financialPricing.driverEarnings,holdId:order.holdId,holdStatus:order.holdStatus,holdAmount:financialPricing.holdRequiredAmount} : {}),
       // Pricing breakdown (NEW - for frontend display)
       pricing: {
+        ...(financialPricing || {}),
         goodsSubtotal: normalizedPricing.goodsSubtotal,
         deliveryFee: normalizedPricing.deliveryFee,
         tip: normalizedPricing.tip,
@@ -4493,19 +4318,11 @@ async function getActiveOrder(driverId, corsHeaders) {
     // Fetch order details
     const orderResponse = await getOrderById(driverId, currentOrderId, corsHeaders);
     
-    // Check if order fetch was successful
+    // A failed read must remain an error; it does not mean the assignment vanished.
     if (orderResponse.statusCode !== 200) {
-      console.error(`❌ Failed to fetch order ${currentOrderId}:`, orderResponse);
-      return {
-        statusCode: 200,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          hasActiveOrder: false,
-          order: null
-        })
-      };
+      return orderResponse;
     }
-    
+
     // Parse order data
     const orderData = JSON.parse(orderResponse.body);
     
@@ -4604,6 +4421,7 @@ async function unassignActiveOrder(driverId, body, corsHeaders) {
     
     const order = orderResult.Item;
     
+    if(!order.driverId&&order.status==='reassigning'&&(order.driverHistory||[]).some(row=>row.driverId===driverId)){await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,orderId,message:'تم فك ارتباط السائق مسبقًا',holdReleased:order.holdStatus==='RELEASED'})};}
     // Verify this order belongs to the driver
     if (order.driverId !== driverId) {
       return {
@@ -4633,32 +4451,18 @@ async function unassignActiveOrder(driverId, body, corsHeaders) {
     
     // ===== STEP 3: Call Order Service (handles Hold release + DB update + WebSocket) =====
     try {
-      const orderServiceResult = await callOrderServiceUnassign(
-        orderId,
-        driverId,
-        reason,
-        driverId
-      );
+      let orderServiceResult;
+      try{orderServiceResult=await callOrderServiceUnassign(orderId,driverId,reason,driverId);}catch(error){
+        const {Item:latest}=await dynamodb.send(new GetCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},ConsistentRead:true}));
+        if(!latest||latest.driverId||latest.status!=='reassigning'||!(latest.driverHistory||[]).some(row=>row.driverId===driverId))throw error;
+        orderServiceResult={success:true,newStatus:'reassigning',holdReleased:latest.holdStatus==='RELEASED'};
+      }
       
       console.log('✅ Order Service Unassign completed:', orderServiceResult);
       
       // ===== STEP 4: Update WizzDriverLiveState - Make driver available again =====
       console.log(`📊 Updating WizzDriverLiveState for driver ${driverId}`);
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: 'REMOVE currentOrderId, currentWaveOfferId SET #status = :status, isSearching = :searching, activeOrdersCount = if_not_exists(activeOrdersCount, :one) - :one, lastUpdated = :now',
-        ExpressionAttributeNames: {
-          '#status': 'status'
-        },
-        ConditionExpression: 'attribute_exists(driverId)',
-        ExpressionAttributeValues: {
-          ':status': 'available',
-          ':searching': true,
-          ':one': 1,
-          ':now': now
-        }
-      }));
+      await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);
       console.log('✅ Driver live state updated - Driver is now available for new orders');
       
       // ===== STEP 5: Update driver metrics (unassignment tracking) =====
@@ -4730,6 +4534,7 @@ async function unassignActiveOrder(driverId, body, corsHeaders) {
  */
 async function startHeadingToStore(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('heading_to_store');
     console.log(`🚗 Driver ${driverId} started heading to store for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4750,9 +4555,10 @@ async function startHeadingToStore(driverId, orderId, corsHeaders) {
         ':startedAt': now,
         ':updatedAt': now,
         ':updatedBy': 'driver_app',
-        ':driverId': driverId
+        ':driverId': driverId,
+        ...financeFence.values
       },
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     console.log(`✅ Order ${orderId} status updated to heading_to_store`);
@@ -4763,7 +4569,7 @@ async function startHeadingToStore(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating start heading to store:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -4779,6 +4585,7 @@ async function startHeadingToStore(driverId, orderId, corsHeaders) {
  */
 async function arriveAtStore(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('arrived_at_store');
     console.log(`🏪 Driver ${driverId} arrived at store for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4788,14 +4595,15 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
     
     // Update order status with driver info
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt';
+      ? 'SET #status = :status, orderStatus = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, orderStatus = :status, arrivedAtStoreAt = :arrivedAt, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'arrived_at_store',
       ':arrivedAt': now,
       ':updatedAt': now,
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -4807,7 +4615,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
       });
     }
     
-    await dynamodb.send(new UpdateCommand({
+    await dynamodb.send(new UpdateCommand(await require('./driver-performance-progress').bindPerformanceProgress({db:dynamodb,GetCommand,driverId,orderId,eventField:'arrivedAtStoreAt',operation:{
       TableName: ORDERS_TABLE,
       Key: {
         PK: `ORDER#${orderId}`,
@@ -4818,8 +4626,8 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
-    }));
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
+    }})));
     
     // Get updated order
     return await getOrderById(driverId, orderId, corsHeaders);
@@ -4827,7 +4635,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating arrived at store:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -4843,6 +4651,7 @@ async function arriveAtStore(driverId, orderId, corsHeaders) {
  */
 async function pickupOrder(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('picked_up');
     console.log(`📦 Driver ${driverId} picked up order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4852,14 +4661,15 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
     
     // Update order status with driver info
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt';
+      ? 'SET #status = :status, orderStatus = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, orderStatus = :status, pickedUpAt = :pickedUpAt, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'picked_up',
       ':pickedUpAt': now,
       ':updatedAt': now,
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -4871,7 +4681,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
       });
     }
     
-    await dynamodb.send(new UpdateCommand({
+    await dynamodb.send(new UpdateCommand(await require('./driver-performance-progress').bindPerformanceProgress({db:dynamodb,GetCommand,driverId,orderId,eventField:'pickedUpAt',operation:{
       TableName: ORDERS_TABLE,
       Key: {
         PK: `ORDER#${orderId}`,
@@ -4882,8 +4692,8 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
-    }));
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
+    }})));
     
     // Get updated order
     return await getOrderById(driverId, orderId, corsHeaders);
@@ -4891,7 +4701,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating pickup:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update pickup status',
@@ -4907,6 +4717,7 @@ async function pickupOrder(driverId, orderId, corsHeaders) {
  */
 async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('heading_to_customer');
     console.log(`🚗 Driver ${driverId} started heading to customer for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4924,7 +4735,8 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
       ':startedAt': now,
       ':updatedAt': now,
       ':updatedBy': 'driver_app',
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -4947,7 +4759,7 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
     }));
     
     console.log(`✅ Order ${orderId} status updated to heading_to_customer`);
@@ -4958,7 +4770,7 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating start heading to customer:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -4974,6 +4786,7 @@ async function startHeadingToCustomer(driverId, orderId, corsHeaders) {
  */
 async function arriveAtCustomer(driverId, orderId, corsHeaders) {
   try {
+    const financeFence=require('./legacy-order-policy').driverProgressFence('arrived_at_customer');
     console.log(`🏠 Driver ${driverId} arrived at customer for order ${orderId}`);
     
     const now = new Date().toISOString();
@@ -4983,14 +4796,15 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
     
     // Update order status with driver info
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt';
+      ? 'SET #status = :status, orderStatus = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, orderStatus = :status, arrivedAtCustomerAt = :arrivedAt, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'arrived_at_customer',
       ':arrivedAt': now,
       ':updatedAt': now,
-      ':driverId': driverId
+      ':driverId': driverId,
+        ...financeFence.values
     };
     
     if (driverInfo) {
@@ -5002,7 +4816,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
       });
     }
     
-    await dynamodb.send(new UpdateCommand({
+    await dynamodb.send(new UpdateCommand(await require('./driver-performance-progress').bindPerformanceProgress({db:dynamodb,GetCommand,driverId,orderId,eventField:'arrivedAtCustomerAt',operation:{
       TableName: ORDERS_TABLE,
       Key: {
         PK: `ORDER#${orderId}`,
@@ -5013,8 +4827,8 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
-    }));
+      ConditionExpression: 'driverId = :driverId AND ('+financeFence.condition+')'
+    }})));
     
     // Get updated order
     return await getOrderById(driverId, orderId, corsHeaders);
@@ -5022,7 +4836,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
   } catch (error) {
     console.error('❌ Error updating arrived at customer:', error);
     return {
-      statusCode: 500,
+      statusCode: error.name==='ConditionalCheckFailedException'?409:500,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to update status',
@@ -5037,7 +4851,7 @@ async function arriveAtCustomer(driverId, orderId, corsHeaders) {
  * POST /driver/orders/:orderId/deliver
  * Body: { cashCollected?: number, deliveryNotes?: string }
  */
-async function deliverOrder(driverId, orderId, body, corsHeaders) {
+async function deliverOrder(driverId, orderId, body, corsHeaders, accessToken) {
   try {
     console.log(`✅ Driver ${driverId} delivering order ${orderId}`, body);
     
@@ -5049,6 +4863,7 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
     // 🔍 GET ORDER FIRST to check holdId and holdAmount
     const getOrderResult = await dynamodb.send(new GetCommand({
       TableName: ORDERS_TABLE,
+      ConsistentRead: true,
       Key: {
         PK: `ORDER#${orderId}`,
         SK: 'META'
@@ -5060,32 +4875,20 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
       throw new Error(`Order ${orderId} not found`);
     }
     
-    // 💰 CAPTURE HOLD if exists and is ACTIVE
-    let captureResult = null;
-    if (order.holdId && order.holdStatus === 'ACTIVE') {
-      console.log(`💰 Order has active hold: ${order.holdId}, capturing...`);
-      console.log(`💰 Hold Amount to capture: ${order.holdAmount} IQD`);
-      
-      captureResult = await captureWalletHold(
-        order.holdId,
-        order.holdAmount, // Capture the full hold amount (goodsSubtotal only)
-        'Order delivered successfully',
-        orderId
-      );
-      
-      if (!captureResult.success) {
-        console.error(`❌ WARNING: Failed to capture hold for order ${orderId}:`, captureResult.error);
-        // ⚠️ Continue anyway - don't block delivery, but log for manual intervention
-        // The driver delivered the order physically, we can't rollback that
-      } else {
-        console.log(`✅ Hold captured successfully: ${captureResult.capturedAmount} IQD`);
-      }
-    } else {
-      console.log(`ℹ️ No active hold to capture for order ${orderId}`);
-      console.log(`   - holdId: ${order.holdId || 'null'}`);
-      console.log(`   - holdStatus: ${order.holdStatus || 'null'}`);
+    if (order.driverId !== driverId) return {statusCode:403,headers:corsHeaders,body:JSON.stringify({success:false,message:'الطلب غير مسند لهذا السائق'})};
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(order,k))) {
+      try {
+        const pricing=require('./financial-order-view').financialOrderPricing(order);
+        if(body.cashAmount!==undefined&&body.cashAmount!==pricing.total)throw Error('COD_CASH_CONFIRMATION_MISMATCH');
+        const {invokeFinancialCompletion}=require('./financial-accept-client');
+        const result=await invokeFinancialCompletion({orderId,driverId,cashCollected:body.cashCollected===true},accessToken);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify(result)};
+      } catch {return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'COD_COMPLETION_UNAVAILABLE',message:'تعذر تأكيد التسليم والتسوية؛ حدّث الطلب قبل إعادة المحاولة'})};}
     }
-    
+
+    if (['delivered','completed'].includes(order.status)) {await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,message:'تم تسجيل التوصيل مسبقًا',data:{orderId,holdCaptured:order.holdStatus==='CAPTURED'}})};}
+    if (!['picked_up','heading_to_customer','arrived_at_customer'].includes(order.status)) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,message:'حالة الطلب لا تسمح بإكمال التوصيل'})};
+    let captureResult=null;
     // ✅ Get cashCollected checkbox value from request body
     const cashCollected = body.cashCollected === true; // boolean
     const cashCollectedAmount = body.cashAmount || body.cashCollected || null; // المبلغ الفعلي
@@ -5096,8 +4899,8 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
     
     // Update order status with driver info AND hold status AND cashCollected
     const updateExpression = driverInfo 
-      ? 'SET #status = :status, deliveredAt = :deliveredAt, cashCollected = :cashCollected, cashCollectedAmount = :cashAmount, deliveryNotes = :deliveryNotes, holdStatus = :holdStatus, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
-      : 'SET #status = :status, deliveredAt = :deliveredAt, cashCollected = :cashCollected, cashCollectedAmount = :cashAmount, deliveryNotes = :deliveryNotes, holdStatus = :holdStatus, updatedAt = :updatedAt';
+      ? 'SET #status = :status, deliveredAt = :deliveredAt, cashCollected = :cashCollected, cashCollectedAmount = :cashAmount, deliveryNotes = :deliveryNotes, holdStatus = :holdStatus, walletFinancialStatus = :financialStatus, updatedAt = :updatedAt, driverName = :driverName, driverPhone = :driverPhone, vehicleType = :vehicleType, vehiclePlate = :vehiclePlate'
+      : 'SET #status = :status, deliveredAt = :deliveredAt, cashCollected = :cashCollected, cashCollectedAmount = :cashAmount, deliveryNotes = :deliveryNotes, holdStatus = :holdStatus, walletFinancialStatus = :financialStatus, updatedAt = :updatedAt';
     
     const expressionValues = {
       ':status': 'delivered',
@@ -5105,7 +4908,9 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
       ':cashCollected': cashCollected, // ← من checkbox
       ':cashAmount': cashCollectedAmount, // ← المبلغ الفعلي المستلم
       ':deliveryNotes': body.deliveryNotes || null,
-      ':holdStatus': captureResult?.success ? 'CAPTURED' : order.holdStatus, // Update hold status
+      ':holdStatus': order.holdStatus || 'NONE',
+      ':financialStatus': order.holdId && order.holdStatus==='ACTIVE'?'PENDING_CAPTURE':(order.holdStatus||'NONE'),
+      ':originalStatus': order.status,
       ':updatedAt': now,
       ':driverId': driverId
     };
@@ -5130,27 +4935,38 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
         '#status': 'status'
       },
       ExpressionAttributeValues: expressionValues,
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :driverId AND #status = :originalStatus'
     }));
-    
-    // Update driver live state - make driver available again
-    await dynamodb.send(new UpdateCommand({
-      TableName: DRIVER_LIVE_STATE_TABLE,
-      Key: { driverId },
-      UpdateExpression: 'REMOVE currentOrderId, currentDeliveryJob SET #status = :status, isAvailable = :available, isSearching = :searching, activeOrdersCount = if_not_exists(activeOrdersCount, :one) - :one, lastOnlineAt = :now, updatedAt = :now',
-      ExpressionAttributeNames: {
-        '#status': 'status'
-      },
-      ConditionExpression: 'attribute_exists(driverId) AND activeOrdersCount > :zero',
-      ExpressionAttributeValues: {
-        ':status': 'available',
-        ':available': true,
-        ':searching': true,
-        ':zero': 0,
-        ':one': 1,
-        ':now': now
+    await cleanupFinishedOrder(dynamodb,DRIVER_LIVE_STATE_TABLE,driverId,orderId);
+    // 💰 CAPTURE HOLD if exists and is ACTIVE
+    if (order.holdId && order.holdStatus === 'ACTIVE') {
+      console.log(`💰 Order has active hold: ${order.holdId}, capturing...`);
+      console.log(`💰 Hold Amount to capture: ${order.holdAmount} IQD`);
+
+      captureResult = await captureWalletHold(
+        order.holdId,
+        order.holdAmount, // Capture the full hold amount (goodsSubtotal only)
+        'Order delivered successfully',
+        orderId
+      );
+
+      if (!captureResult.success) {
+        console.error(`❌ WARNING: Failed to capture hold for order ${orderId}:`, captureResult.error);
+        // ⚠️ Continue anyway - don't block delivery, but log for manual intervention
+        // The driver delivered the order physically, we can't rollback that
+      } else {
+        console.log(`✅ Hold captured successfully: ${captureResult.capturedAmount} IQD`);
       }
-    }));
+    } else {
+      console.log(`ℹ️ No active hold to capture for order ${orderId}`);
+      console.log(`   - holdId: ${order.holdId || 'null'}`);
+      console.log(`   - holdStatus: ${order.holdStatus || 'null'}`);
+    }
+
+    if(captureResult?.success){
+      await dynamodb.send(new UpdateCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},UpdateExpression:'SET holdStatus = :captured, walletFinancialStatus = :captured',ConditionExpression:'driverId = :driverId AND #status = :delivered AND holdId = :holdId',ExpressionAttributeNames:{'#status':'status'},ExpressionAttributeValues:{':captured':'CAPTURED',':driverId':driverId,':delivered':'delivered',':holdId':order.holdId}}));
+    }
+
     
     // Update dispatch job status to completed
     try {
@@ -5290,63 +5106,9 @@ async function deliverOrder(driverId, orderId, body, corsHeaders) {
  */
 async function reportStoreIssue(driverId, orderId, body, corsHeaders) {
   try {
-    console.log(`⚠️ Driver ${driverId} reporting issue for order ${orderId}:`, body);
-    
-    const now = new Date().toISOString();
-    const { issueType, notes } = body;
-    
-    if (!issueType) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          error: 'Missing issueType',
-          message: 'يجب تحديد نوع المشكلة'
-        })
-      };
-    }
-    
-    // Add issue to order
-    await dynamodb.send(new UpdateCommand({
-      TableName: ORDERS_TABLE,
-      Key: {
-        PK: `ORDER#${orderId}`,
-        SK: 'META'
-      },
-      UpdateExpression: 'SET storeIssue = :issue, storeIssueReportedAt = :reportedAt, updatedAt = :updatedAt',
-      ExpressionAttributeValues: {
-        ':issue': { type: issueType, notes, reportedBy: driverId, reportedAt: now },
-        ':reportedAt': now,
-        ':updatedAt': now,
-        ':driverId': driverId
-      },
-      ConditionExpression: 'driverId = :driverId'
-    }));
-    
-    // TODO: Send notification to support team
-    
-    return {
-      statusCode: 200,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        success: true,
-        message: 'تم الإبلاغ عن المشكلة بنجاح',
-        orderId,
-        issueType
-      })
-    };
-    
-  } catch (error) {
-    console.error('❌ Error reporting store issue:', error);
-    return {
-      statusCode: 500,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        error: 'Failed to report issue',
-        message: 'فشل في الإبلاغ عن المشكلة'
-      })
-    };
-  }
+    const response=await require('./driver-pickup-issues').recordPickupIssue({db:dynamodb,GetCommand,UpdateCommand,table:ORDERS_TABLE,driverId,orderId,body});
+    return {statusCode:response.statusCode,headers:corsHeaders,body:JSON.stringify(response.result)};
+  } catch { return {statusCode:503,headers:corsHeaders,body:JSON.stringify({success:false,code:'PICKUP_ISSUE_UNAVAILABLE',message:'تعذر حفظ بلاغ المشكلة؛ أعد المحاولة'})}; }
 }
 
 /**
@@ -5379,6 +5141,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
       };
     }
     
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(orderResult.Item,k))) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_RETURN_REQUIRED',message:'يلزم مسار العودة المعتمد؛ الحجز باقٍ حتى تأكيد الإرجاع'})};
     const customerUnreachableAttempts = (orderResult.Item.customerUnreachableAttempts || 0) + 1;
     
     // Update order
@@ -5395,7 +5158,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
         ':updatedAt': now,
         ':driverId': driverId
       },
-      ConditionExpression: 'driverId = :driverId'
+      ConditionExpression: 'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :driverId'
     }));
     
     // If 3+ attempts, initiate cancellation protocol
@@ -5406,6 +5169,7 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
           PK: `ORDER#${orderId}`,
           SK: 'META'
         },
+        ConditionExpression: 'attribute_not_exists(financialSnapshot) AND attribute_not_exists(commercialPricing) AND attribute_not_exists(financialAcceptance) AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND driverId = :driverId',
         UpdateExpression: 'SET #status = :status, cancelledAt = :cancelledAt, cancellationReason = :reason',
         ExpressionAttributeNames: {
           '#status': 'status'
@@ -5413,7 +5177,8 @@ async function reportCustomerUnreachable(driverId, orderId, corsHeaders) {
         ExpressionAttributeValues: {
           ':status': 'cancelled',
           ':cancelledAt': now,
-          ':reason': 'customer_unreachable'
+          ':reason': 'customer_unreachable',
+          ':driverId': driverId
         }
       }));
       
@@ -5494,7 +5259,8 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
       Key: {
         PK: `ORDER#${orderId}`,
         SK: 'META'
-      }
+      },
+      ConsistentRead: true
     }));
     
     if (!orderResult.Item) {
@@ -5509,6 +5275,8 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
     }
     
     const order = orderResult.Item;
+    if (['financialSnapshot','commercialPricing','financialAcceptance','financialOutcome','codFinancialEvidence'].some(k=>Object.prototype.hasOwnProperty.call(order,k))) return {statusCode:409,headers:corsHeaders,body:JSON.stringify({success:false,code:'FINANCIAL_CANCELLATION_REQUIRED',message:'يلزم مسار الإلغاء المالي المعتمد'})};
+
     
     // Verify this order belongs to the driver
     if (order.driverId !== driverId) {
@@ -5522,6 +5290,11 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
       };
     }
     
+    if (String(order.status).startsWith('canceled') || String(order.status).startsWith('cancelled')) {
+      await cleanupFinishedOrder(dynamodb, DRIVER_LIVE_STATE_TABLE, driverId, orderId);
+      return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,orderId,message:'تم إلغاء الطلب مسبقًا',holdReleased:order.holdStatus==='RELEASED',newStatus:order.status})};
+    }
+
     // Verify order can be cancelled
     const allowedStatuses = ['accepted', 'heading_to_store', 'arrived_at_store'];
     if (!allowedStatuses.includes(order.status)) {
@@ -5546,26 +5319,8 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
       
       console.log('✅ Order Service completed:', orderServiceResult);
       
-      // ===== STEP 3: Update WizzDriverLiveState - Make driver available again =====
-      console.log(`📊 Updating WizzDriverLiveState for driver ${driverId}`);
-      await dynamodb.send(new UpdateCommand({
-        TableName: DRIVER_LIVE_STATE_TABLE,
-        Key: { driverId },
-        UpdateExpression: 'REMOVE currentOrderId, currentWaveOfferId SET #status = :status, isSearching = :searching, activeOrdersCount = if_not_exists(activeOrdersCount, :one) - :one, lastUpdated = :now',
-        ExpressionAttributeNames: {
-          '#status': 'status'
-        },
-        ConditionExpression: 'attribute_exists(driverId) AND activeOrdersCount > :zero',
-        ExpressionAttributeValues: {
-          ':status': 'available',
-          ':searching': true,
-          ':zero': 0,
-          ':one': 1,
-          ':now': now
-        }
-      }));
-      console.log('✅ Driver live state updated - Driver is now available for new orders');
-      
+      await cleanupFinishedOrder(dynamodb, DRIVER_LIVE_STATE_TABLE, driverId, orderId);
+
       // ===== STEP 4: Update driver metrics (cancellation rate) =====
       try {
         await dynamodb.send(new UpdateCommand({
@@ -5604,6 +5359,12 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
     } catch (orderServiceError) {
       console.error('❌ Order Service failed:', orderServiceError);
       
+      const committed = await dynamodb.send(new GetCommand({TableName:ORDERS_TABLE,Key:{PK:`ORDER#${orderId}`,SK:'META'},ConsistentRead:true}));
+      if (committed.Item?.driverId===driverId && /^(canceled|cancelled)/.test(committed.Item.status)) {
+        await cleanupFinishedOrder(dynamodb, DRIVER_LIVE_STATE_TABLE, driverId, orderId);
+        return {statusCode:200,headers:corsHeaders,body:JSON.stringify({success:true,orderId,message:'تم تسجيل الإلغاء؛ تُتابع تسوية المحفظة تلقائيًا',holdReleased:committed.Item.holdStatus==='RELEASED',newStatus:committed.Item.status})};
+      }
+
       // Return error to driver
       return {
         statusCode: 500,
@@ -5631,6 +5392,11 @@ async function cancelOrderByDriver(driverId, orderId, body, corsHeaders) {
 
 
 
+async function readTripSettlement(orderId,sk){
+ if(!process.env.WALLET_HOLDS_TABLE)throw Error('SETTLEMENT_READER_UNAVAILABLE');
+ return (await dynamodb.send(new GetCommand({TableName:process.env.WALLET_HOLDS_TABLE,Key:{orderId,sk},ConsistentRead:true}))).Item;
+}
+
 async function getDriverTrips(driverId, query, headers) {
   const limit = Math.min(100, Math.max(1, Number.parseInt(query.limit, 10) || 20));
   let startKey;
@@ -5642,6 +5408,9 @@ async function getDriverTrips(driverId, query, headers) {
       return { statusCode: 400, headers, body: JSON.stringify({ success: false, error: 'Invalid nextToken' }) };
     }
   }
+  let historyFilter;
+  try {historyFilter=require('./driver-trip-history').historyFilter(query,driverId);}
+  catch {return {statusCode:400,headers,body:JSON.stringify({success:false,error:'Invalid history filter'})};}
   // Existing orders table has no driver index. Preserve DynamoDB's cursor,
   // including pages with no matching history rows.
   let result;
@@ -5650,40 +5419,15 @@ async function getDriverTrips(driverId, query, headers) {
   for (let page = 0; page < 20; page++) {
     result = await dynamodb.send(new ScanCommand({
     TableName: ORDERS_TABLE, Limit: Math.max(1, limit - items.length), ExclusiveStartKey: cursor,
-    FilterExpression: 'driverId = :driverId AND SK = :meta AND (#status = :delivered OR #status = :completed OR #status = :cancelled OR #status = :canceled)',
-    ExpressionAttributeNames: { '#status': 'status' },
-    ExpressionAttributeValues: { ':driverId': driverId, ':meta': 'META', ':delivered': 'delivered', ':completed': 'completed', ':cancelled': 'cancelled', ':canceled': 'canceled' }
+    ConsistentRead: true,
+    ...historyFilter
   }));
     items.push(...(result.Items || []));
     cursor = result.LastEvaluatedKey;
     if (!cursor || items.length >= limit) break;
   }
-  const trips = items.map(order => {
-    const pricing = normalizeOrderPricingToIqd(order);
-    const rawTotal = toNumber(order.total ?? order.totalAmount, 0);
-    const pricingTotal = toNumber(order.pricing?.total, 0);
-    const scale = rawTotal > 0 && pricingTotal / rawTotal >= 900 && pricingTotal / rawTotal <= 1100 ? 1000 : 1;
-    const fee = order.pricing?.deliveryFee != null ? toNumber(order.pricing.deliveryFee, 0) / scale : pricing.deliveryFee;
-    const bonus = order.pricing?.waveBonus != null ? toNumber(order.pricing.waveBonus, 0) / scale : toNumber(order.waveBonus, 0);
-
-    return {
-      tripId: order.orderId || order.PK.replace('ORDER#', ''),
-      orderId: order.orderId || order.PK.replace('ORDER#', ''),
-      orderNumber: order.orderNumber || '',
-      tripNumber: order.tripNumber || order.trip_number || null,
-      status: ['delivered', 'completed'].includes(order.status) ? 'completed' : 'cancelled',
-      deliveryFee: fee, tip: order.pricing?.tip != null ? toNumber(order.pricing.tip, 0) / scale : pricing.tip, waveBonus: bonus,
-      waveNumber: order.waveNumber, isEmergencyWave: order.pricing?.isEmergencyWave === true,
-      finalDeliveryFee: order.pricing?.finalDeliveryFee != null ? toNumber(order.pricing.finalDeliveryFee, 0) / scale : fee + bonus,
-      pickupLocation: order.pickupLocation || order.restaurantLocation || { lat: order.restaurantLat ?? order.pickupLatitude ?? 0, lng: order.restaurantLng ?? order.pickupLongitude ?? 0 },
-      deliveryLocation: order.deliveryLocation || { lat: order.deliveryAddress?.lat ?? order.customerLat ?? 0, lng: order.deliveryAddress?.lng ?? order.customerLng ?? 0 },
-      pickupAddress: order.pickupAddress || order.restaurantAddress || '',
-      deliveryAddress: typeof order.deliveryAddress === 'string' ? order.deliveryAddress : (order.deliveryAddress?.fullAddress || order.deliveryAddress?.addressLine1 || order.deliveryAddress?.address || ''),
-      restaurantName: order.restaurantName || order.businessName || '', customerName: order.customerName || order.deliveryName || '',
-      createdAt: order.createdAt, completedAt: order.deliveredAt || order.completedAt,
-      deliveryTime: order.deliveredAt, pickupTime: order.pickedUpAt
-    };
-  });
+  const trips=[];
+  for(let offset=0;offset<items.length;offset+=4)trips.push(...await Promise.all(items.slice(offset,offset+4).map(order=>require('./driver-trip-history').tripWithSettlement(order,normalizeOrderPricingToIqd,toNumber,readTripSettlement))));
   return { statusCode: 200, headers, body: JSON.stringify({ success: true, trips,
     count: trips.length, hasMore: !!result.LastEvaluatedKey,
     nextToken: result.LastEvaluatedKey ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64url') : null
