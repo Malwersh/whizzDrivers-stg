@@ -80,17 +80,17 @@ class Environment {
   // 🔧 FIXED: Use the SAME WebSocket endpoint as working WizzUser app
   static const String webSocketUrl = String.fromEnvironment('DRIVER_WS_URL',
       defaultValue:
-          'wss://igcrhwc84c.execute-api.us-east-1.amazonaws.com/staging');
+          'wss://vzvnqu5jhl.execute-api.us-east-1.amazonaws.com/staging');
 
   // Business ID for WebSocket connection
   static const String businessId = String.fromEnvironment('BUSINESS_ID',
       defaultValue: '7ccf646c-9594-48d4-8f63-c366d89257e5');
 
-  // Live Chat Support WebSocket URL (no authentication parameters - uses JWT in headers)
+  // Unified support endpoint; the support client authenticates with a fresh driver JWT.
   static const String liveChatWebSocketUrl = String.fromEnvironment(
       'LIVE_CHAT_WS_URL',
       defaultValue:
-          'wss://igcrhwc84c.execute-api.us-east-1.amazonaws.com/staging');
+          'wss://vzvnqu5jhl.execute-api.us-east-1.amazonaws.com/staging');
 
   // Chat Bridge API for support agent communication (PRODUCTION READY - API KEY ENDPOINT)
   static const String chatBridgeApiUrl = String.fromEnvironment(

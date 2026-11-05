@@ -23,11 +23,19 @@ async function send(phone,ip,key){
  UpdateExpression:x.cooldown?'SET nextAllowedAt = :next, expiresAt = :ttl':'SET expiresAt = :ttl ADD sends :one',
  ConditionExpression:x.cooldown?'attribute_not_exists(nextAllowedAt) OR nextAllowedAt <= :now':'attribute_not_exists(sends) OR sends < :limit',
  ExpressionAttributeValues:x.cooldown?{':next':time+60,':ttl':time+86400,':now':time}:{':ttl':time+172800,':one':1,':limit':x.limit}}}))}));
- const id=crypto.randomUUID(),code=String(crypto.randomInt(0,1000000)).padStart(6,'0');
+ const review=phone===process.env.REVIEW_TEST_PHONE&&/^\d{6}$/.test(process.env.REVIEW_TEST_CODE||'');
+ if(review){
+  const existing=await cognito.send(new ListUsersCommand({UserPoolId:pool,Filter:`phone_number = "${phone}"`,Limit:2}));
+  const user=existing.Users?.[0];
+  if(existing.PaginationToken||existing.Users?.length!==1||!user.Enabled||user.UserStatus!=='CONFIRMED'||!user.Attributes?.some(a=>a.Name==='phone_number_verified'&&a.Value==='true'))return reply(409,{message:'Review account unavailable'});
+ }
+ const id=crypto.randomUUID(),code=review?process.env.REVIEW_TEST_CODE:String(crypto.randomInt(0,1000000)).padStart(6,'0');
  const item={id,phone,username:phone,purpose:'registration-otp',expiresAt:time+300,attempts:0,used:false,digest:digest(key.hmacKey,id,phone,code)};
  await db.send(new TransactWriteCommand({TransactItems:[{Put:{TableName:table,Item:item,ConditionExpression:'attribute_not_exists(id)'}},{Put:{TableName:table,Item:{id:`ACTIVE#${phone}`,sessionId:id,expiresAt:time+300}}}]}));
- const response=await fetch('https://api.otpiq.com/api/sms',{method:'POST',headers:{Authorization:`Bearer ${key.apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({phoneNumber:phone.slice(1),smsType:'verification',provider:'whatsapp-telegram-sms',verificationCode:code}),signal:AbortSignal.timeout(10000)});
- if(!response.ok)return reply(503,{message:'تعذر إرسال رمز التحقق، حاول لاحقًا'});
+ if(!review){
+  const response=await fetch('https://api.otpiq.com/api/sms',{method:'POST',headers:{Authorization:`Bearer ${key.apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({phoneNumber:phone.slice(1),smsType:'verification',provider:'whatsapp-telegram-sms',verificationCode:code}),signal:AbortSignal.timeout(10000)});
+  if(!response.ok)return reply(503,{message:'تعذر إرسال رمز التحقق، حاول لاحقًا'});
+ }
  return reply(200,{sessionId:id,expiresIn:300,resendAfter:60});
 }
 async function resolveUser(phone){

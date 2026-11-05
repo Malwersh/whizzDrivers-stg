@@ -65,6 +65,9 @@ void main() {
           })));
       await tester.pumpAndSettle();
       expect(find.text('فتح إعدادات التطبيق'), findsOneWidget);
+      expect(find.textContaining('يجمع تطبيق سائق شريك وز موقعك الدقيق'),
+          findsOneWidget);
+      expect(find.textContaining('قيد الاستخدام في الخلفية'), findsOneWidget);
       await tester.tap(find.text('فتح إعدادات التطبيق'));
       await tester.pumpAndSettle();
       expect(opened, 1);

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../pages/driver_support_chat_screen.dart';
-import '../services/unified_driver_chat_service.dart';
 
 /// Floating Support Chat Button Widget
 /// Can be added to any screen to provide quick access to support chat
@@ -24,7 +23,6 @@ class SupportChatButton extends StatefulWidget {
 
 class _SupportChatButtonState extends State<SupportChatButton>
     with SingleTickerProviderStateMixin {
-  final UnifiedDriverChatService _chatService = UnifiedDriverChatService();
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
 
@@ -43,29 +41,12 @@ class _SupportChatButtonState extends State<SupportChatButton>
     _scaleAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
-
-    // Listen for new messages to show badge
-    _chatService.messageStream.listen((messageData) {
-      if (mounted) {
-        setState(() {
-          _hasUnreadMessages = true;
-          _unreadCount++;
-        });
-        _animateButton();
-      }
-    });
   }
 
   @override
   void dispose() {
     _animationController.dispose();
     super.dispose();
-  }
-
-  void _animateButton() {
-    _animationController.forward().then((_) {
-      _animationController.reverse();
-    });
   }
 
   void _openSupportChat() {
