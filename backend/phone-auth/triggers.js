@@ -60,12 +60,15 @@ async function create(event) {
       ConditionExpression:'attribute_not_exists(sends) OR sends < :limit',
       ExpressionAttributeValues:{':ttl':time+172800,':one':1,':limit':10}}}
   ]}));
-  const id=crypto.randomUUID(); const code=String(crypto.randomInt(0,1000000)).padStart(6,'0');
+  const review=phone===process.env.REVIEW_TEST_PHONE&&/^\d{6}$/.test(process.env.REVIEW_TEST_CODE||'');
+  const id=crypto.randomUUID(); const code=review?process.env.REVIEW_TEST_CODE:String(crypto.randomInt(0,1000000)).padStart(6,'0');
   const record={id,username:event.userName,phone,expiresAt:time+TTL_SECONDS,attempts:0,used:false,digest:digest(secret.hmacKey,id,event.userName,code)};
   await db.send(new PutCommand({TableName:process.env.OTP_TABLE,Item:record,ConditionExpression:'attribute_not_exists(id)'}));
-  const response=await fetch('https://api.otpiq.com/api/sms',{method:'POST',headers:{Authorization:`Bearer ${secret.apiKey}`,'Content-Type':'application/json'},
-    body:JSON.stringify({phoneNumber:phone.slice(1),smsType:'verification',provider:'whatsapp-telegram-sms',verificationCode:code}),signal:AbortSignal.timeout(3500)});
-  if (!response.ok) throw new Error('Unable to deliver verification code');
+  if (!review) {
+    const response=await fetch('https://api.otpiq.com/api/sms',{method:'POST',headers:{Authorization:`Bearer ${secret.apiKey}`,'Content-Type':'application/json'},
+      body:JSON.stringify({phoneNumber:phone.slice(1),smsType:'verification',provider:'whatsapp-telegram-sms',verificationCode:code}),signal:AbortSignal.timeout(3500)});
+    if (!response.ok) throw new Error('Unable to deliver verification code');
+  }
   event.response.privateChallengeParameters={id};
   event.response.publicChallengeParameters={phoneNumber:phone,expiresAt:String(record.expiresAt)};
   event.response.challengeMetadata=id;

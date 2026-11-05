@@ -31,6 +31,8 @@ Resources:
         Variables:
           OTP_TABLE: !Ref OtpSessions
           OTP_SECRET_ARN: arn:aws:secretsmanager:us-east-1:699561669180:secret:wizz/staging/otpiq-SB1iGZ
+          REVIEW_TEST_PHONE: "+9647800000000"
+          REVIEW_TEST_CODE: "123456"
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref OtpSessions

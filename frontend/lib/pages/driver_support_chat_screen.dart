@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import '../features/more/screens/live_chat_screen.dart';
 
-/// Compatibility entry point; identity always comes from the signed-in session.
+/// Compatibility entry for earnings cards and quick support. Caller-supplied
+/// profile labels never establish identity; LiveChatScreen reads live Cognito.
 class DriverSupportChatScreen extends StatelessWidget {
-  final String driverId;
-  final String? driverName, initialTopic;
   const DriverSupportChatScreen(
       {super.key, required this.driverId, this.driverName, this.initialTopic});
+  final String driverId;
+  final String? driverName;
+  final String? initialTopic;
   @override
-  Widget build(BuildContext context) => const LiveChatScreen();
+  Widget build(BuildContext context) =>
+      LiveChatScreen(initialTopic: initialTopic);
 }

@@ -135,7 +135,7 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen> {
                       const SizedBox(height: 12),
                       Text(
                         'للتواصل مع فريق الدعم:\n'
-                        'البريد: support@whizz.com\n'
+                        'البريد: support@wiz-go.com\n'
                         'الهاتف: +964 XXX XXX XXXX',
                         style: TextStyle(
                           color: Colors.grey.shade700,

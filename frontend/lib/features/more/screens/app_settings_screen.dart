@@ -1,3 +1,4 @@
+import '../../../release/release_privacy_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -400,32 +401,9 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   }
 
   void _showPrivacyPolicy() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Privacy Policy'),
-        content: const SingleChildScrollView(
-          child: Text(
-            'Privacy Policy for Wizz Driver App\n\n'
-            '1. Information Collection\n'
-            'We collect information necessary for delivery services including location data, contact information, and payment details.\n\n'
-            '2. Data Usage\n'
-            'Your data is used to facilitate deliveries, process payments, and improve our services.\n\n'
-            '3. Data Sharing\n'
-            'We do not share personal information with third parties without consent, except as required by law.\n\n'
-            '4. Data Security\n'
-            'We implement industry-standard security measures to protect your data.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const ReleasePrivacyScreen(),
+    ));
   }
 
   void _showDataUsage() {
@@ -647,7 +625,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
             SizedBox(height: 16),
             Text('© 2024 Wizz Delivery'),
             SizedBox(height: 16),
-            Text('For support, contact: support@wizz.com'),
+            Text('For support, contact: support@wiz-go.com'),
           ],
         ),
         actions: [

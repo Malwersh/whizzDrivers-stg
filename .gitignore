@@ -69,3 +69,12 @@ frontend/ios/fastlane/test_output
 *.pyc
 frontend/android/build/
 frontend/android/app/build/
+
+# Local Android upload signing material (never commit).
+**/key.properties
+**/*.jks
+**/*.keystore
+
+# Local signing backups and generated deployment output
+**/*.jks.*
+**/*.keystore.*
