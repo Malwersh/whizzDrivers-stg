@@ -1,3 +1,4 @@
+import '../../features/active_order/services/driver_location_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/active_order/models/active_order_model.dart';
 import '../../features/active_order/services/active_order_service.dart';
@@ -31,7 +32,15 @@ class ActiveOrderState {
 class ActiveOrderNotifier extends StateNotifier<ActiveOrderState> {
   final ActiveOrderService _service;
 
-  ActiveOrderNotifier(this._service) : super(ActiveOrderState());
+  ActiveOrderNotifier(this._service) : super(ActiveOrderState()) {
+    addListener((value) => DriverLocationService()
+        .synchronize(value.order?.orderId, value.order?.status));
+  }
+  @override
+  void dispose() {
+    DriverLocationService().stopTracking();
+    super.dispose();
+  }
 
   /// جلب الطلب النشط
   Future<void> fetchActiveOrder() async {
@@ -86,7 +95,8 @@ class ActiveOrderNotifier extends StateNotifier<ActiveOrderState> {
     state = state.copyWith(isLoading: true);
 
     try {
-      final updatedOrder = await _service.startHeadingToStore(state.order!.orderId);
+      final updatedOrder =
+          await _service.startHeadingToStore(state.order!.orderId);
       state = ActiveOrderState(order: updatedOrder, isLoading: false);
       return true;
     } catch (e) {
@@ -99,7 +109,7 @@ class ActiveOrderNotifier extends StateNotifier<ActiveOrderState> {
   Future<bool> arriveAtStore() async {
     print('🔍 arriveAtStore Provider: Starting...');
     print('🔍 arriveAtStore Provider: state.order = ${state.order?.orderId}');
-    
+
     if (state.order == null) {
       print('❌ arriveAtStore Provider: state.order is NULL! Cannot proceed.');
       return false;
@@ -110,7 +120,8 @@ class ActiveOrderNotifier extends StateNotifier<ActiveOrderState> {
 
     try {
       final updatedOrder = await _service.arriveAtStore(state.order!.orderId);
-      print('✅ arriveAtStore Provider: API Success! Updated to ${updatedOrder.status}');
+      print(
+          '✅ arriveAtStore Provider: API Success! Updated to ${updatedOrder.status}');
       state = ActiveOrderState(order: updatedOrder, isLoading: false);
       return true;
     } catch (e) {
@@ -122,7 +133,8 @@ class ActiveOrderNotifier extends StateNotifier<ActiveOrderState> {
 
   /// تحديث الطلب الحالي في الـ state (مهم عند استعادة الحالة بعد hot restart)
   void updateOrder(ActiveOrder order) {
-    print('📥 updateOrder Provider: Updating with orderId ${order.orderId}, status: ${order.status}');
+    print(
+        '📥 updateOrder Provider: Updating with orderId ${order.orderId}, status: ${order.status}');
     state = ActiveOrderState(order: order, isLoading: false);
     print('✅ updateOrder Provider: State updated successfully');
   }

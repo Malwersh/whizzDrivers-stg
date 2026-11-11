@@ -48,29 +48,45 @@ class MoreTab extends ConsumerStatefulWidget {
   ConsumerState<MoreTab> createState() => _MoreTabState();
 }
 
-class _MoreTabState extends ConsumerState<MoreTab> {
+class _MoreTabState extends ConsumerState<MoreTab> with WidgetsBindingObserver {
   DriverProfile? _driverProfile;
   bool _isLoading = true;
   bool _didRetryLoad = false;
+  int _profileRequest = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadDriverProfile();
   }
 
-  Future<void> _loadDriverProfile() async {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      _loadDriverProfile(silent: true);
+    }
+  }
+
+  Future<void> _loadDriverProfile({bool silent = false}) async {
+    final request = ++_profileRequest;
     try {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() {
           _isLoading = true;
         });
       }
       final profile = await (widget.loadProfile?.call() ??
           DriverService.getDriverProfile());
-      if (!mounted) return;
+      if (!mounted || request != _profileRequest) return;
       setState(() {
-        _driverProfile = profile;
+        if (profile != null || !silent) _driverProfile = profile;
         _isLoading = false;
       });
 
@@ -84,7 +100,7 @@ class _MoreTabState extends ConsumerState<MoreTab> {
         }
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || request != _profileRequest) return;
       setState(() {
         _isLoading = false;
       });
@@ -541,10 +557,13 @@ class _MoreTabState extends ConsumerState<MoreTab> {
         child: Material(
             color: Colors.transparent,
             child: InkWell(
-              onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const AccountDetailsScreen())),
+              onTap: () async {
+                await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AccountDetailsScreen()));
+                if (mounted) await _loadDriverProfile(silent: true);
+              },
               child: Padding(
                   padding: const EdgeInsets.all(18),
                   child: Column(

@@ -27,7 +27,8 @@ class _PhoneOtpLoginScreenState extends ConsumerState<PhoneOtpLoginScreen> {
   bool _sent = false;
   int _cooldown = 0;
   String? _message;
-  final Future<bool> _savedDeletionReceipt = AccountDeletionService.hasSavedReceipt();
+  final Future<bool> _savedDeletionReceipt =
+      AccountDeletionService.hasSavedReceipt();
 
   @override
   void dispose() {
@@ -91,6 +92,10 @@ class _PhoneOtpLoginScreenState extends ConsumerState<PhoneOtpLoginScreen> {
         final profile =
             await ProfileCompletionService().checkProfileCompleteness();
         if (!mounted) return;
+        if (profile.error != null) {
+          context.go('/profile-check');
+          return;
+        }
         final status = profile.profileData?['status']?.toString().toUpperCase();
         final target = profile.needsRedirect
             ? (profile.redirectPath ?? '/driver-profile-setup')
@@ -182,9 +187,13 @@ class _PhoneOtpLoginScreenState extends ConsumerState<PhoneOtpLoginScreen> {
                         future: _savedDeletionReceipt,
                         builder: (context, snapshot) => snapshot.data == true
                             ? TextButton(
-                                onPressed: _busy ? null : () => Navigator.of(context).push(
-                                  MaterialPageRoute<void>(builder: (_) => const DeleteAccountScreen()),
-                                ),
+                                onPressed: _busy
+                                    ? null
+                                    : () => Navigator.of(context).push(
+                                          MaterialPageRoute<void>(
+                                              builder: (_) =>
+                                                  const DeleteAccountScreen()),
+                                        ),
                                 child: const Text('متابعة طلب حذف الحساب'),
                               )
                             : const SizedBox.shrink(),

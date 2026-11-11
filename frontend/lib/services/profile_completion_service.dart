@@ -13,8 +13,25 @@ import 'dart:convert';
 
 /// Service to manage and check profile completion status
 class ProfileCompletionService {
+  final http.Client? client;
+  final Future<String?> Function()? tokenResolver;
+  ProfileCompletionService({this.client, this.tokenResolver});
+  Future<String?> _accessToken() async {
+    if (tokenResolver != null) return tokenResolver!();
+    final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+    return session.isSignedIn
+        ? session.userPoolTokensResult.value.accessToken.raw
+        : null;
+  }
 
-  ProfileCompletionService();
+  ProfileStatus _unavailable(String reason) => ProfileStatus(
+      exists: false,
+      status: ProfileStatusEnum.pendingProfile,
+      isComplete: false,
+      missingFields: const [],
+      needsRedirect: true,
+      redirectPath: '/profile-check',
+      error: reason);
 
   /// Check if the current user's profile is complete
   /// Returns ProfileStatus with completion details
@@ -23,39 +40,31 @@ class ProfileCompletionService {
       debugPrint('🔍 ProfileCompletionService: Checking profile completeness');
 
       // Get auth session
-      final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
-      if (!session.isSignedIn) {
-        debugPrint('⚠️ ProfileCompletionService: User not signed in');
+      final accessToken = await _accessToken();
+      if (accessToken == null)
         return ProfileStatus(
-          exists: false,
-          status: ProfileStatusEnum.pendingProfile,
-          isComplete: false,
-          missingFields: ['auth'],
-          needsRedirect: true,
-          redirectPath: '/driver-profile-setup',
-        );
-      }
-
-      final tokens = session.userPoolTokensResult.value;
-      final accessToken = tokens.accessToken.raw;
+            exists: false,
+            status: ProfileStatusEnum.pendingProfile,
+            isComplete: false,
+            missingFields: const ['auth'],
+            needsRedirect: true,
+            redirectPath: '/login');
 
       // Make HTTP request to driver profile API
-      final response = await http.get(
+      final response = await (client?.get ?? http.get)(
         Uri.parse('${Environment.apiBaseUrl}/driver/me'),
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
         },
-      );
+      ).timeout(const Duration(seconds: 15));
 
-      debugPrint('🌐 ProfileCompletionService: API Response status: ${response.statusCode}');
-      debugPrint('🌐 ProfileCompletionService: API Response body: ${response.body}');
+      debugPrint(
+          '🌐 ProfileCompletionService: API Response status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final responseData = json.decode(response.body);
-        
-        debugPrint('🔍 DEBUG: Full response: $responseData');
-        
+
         // Extract profile data from API response
         Map<String, dynamic> profile;
         if (responseData is Map && responseData.containsKey('data')) {
@@ -63,32 +72,37 @@ class ProfileCompletionService {
         } else {
           profile = responseData as Map<String, dynamic>;
         }
-        
+
         debugPrint('🔍 DEBUG: profile keys: ${profile.keys}');
         debugPrint('🔍 DEBUG: profile status value: ${profile['status']}');
-        debugPrint('ProfileCompletionService: Profile found: ${profile['status']}');
+        debugPrint(
+            'ProfileCompletionService: Profile found: ${profile['status']}');
 
         // Extract status
-        final statusString = profile['status'] as String? ?? 'PENDING_PROFILE';
+        final statusString = profile['status'];
+        if (statusString is! String || statusString.trim().isEmpty) {
+          return _unavailable('PROFILE_INVALID_RESPONSE');
+        }
         final statusEnum = _parseProfileStatus(statusString);
 
         // Check required fields
         final missingFields = _getMissingFields(profile);
-        
+
         debugPrint('🔍 ProfileCompletionService: Status enum: $statusEnum');
-        debugPrint('🔍 ProfileCompletionService: Missing fields: $missingFields');
-        
+        debugPrint(
+            '🔍 ProfileCompletionService: Missing fields: $missingFields');
+
         // Profile is complete if status is Active/PendingReview or all required fields are present
         final isComplete = statusEnum == ProfileStatusEnum.active ||
             statusEnum == ProfileStatusEnum.pendingReview ||
             missingFields.isEmpty;
 
         // Determine if redirect is needed
-        final needsRedirect =
-            statusEnum == ProfileStatusEnum.pendingProfile ||
+        final needsRedirect = statusEnum == ProfileStatusEnum.pendingProfile ||
             statusEnum == ProfileStatusEnum.pendingDocs;
-            
-        debugPrint('✅ ProfileCompletionService: isComplete: $isComplete, needsRedirect: $needsRedirect');
+
+        debugPrint(
+            '✅ ProfileCompletionService: isComplete: $isComplete, needsRedirect: $needsRedirect');
 
         return ProfileStatus(
           exists: true,
@@ -100,27 +114,13 @@ class ProfileCompletionService {
           profileData: profile,
         );
       } else {
-        debugPrint('❌ ProfileCompletionService: API error: ${response.statusCode} - ${response.body}');
+        debugPrint(
+            '❌ ProfileCompletionService: API error: ${response.statusCode} - ${response.body}');
 
         if (response.statusCode == 401 || response.statusCode == 403) {
-          debugPrint('⚠️ ProfileCompletionService: Access token expired or invalid. Signing out and redirecting to login.');
-          try {
-            await Amplify.Auth.signOut();
-          } catch (e) {
-            debugPrint('⚠️ ProfileCompletionService: signOut fallback failed: $e');
-          }
-
-          return ProfileStatus(
-            exists: false,
-            status: ProfileStatusEnum.pendingProfile,
-            isComplete: false,
-            missingFields: ['auth_expired'],
-            needsRedirect: true,
-            redirectPath: '/login',
-            error: 'Unauthorized (${response.statusCode})',
-          );
+          return _unavailable('PROFILE_ACCESS_UNAVAILABLE');
         }
-        
+
         // For 404, assume no profile exists
         if (response.statusCode == 404) {
           return ProfileStatus(
@@ -132,31 +132,11 @@ class ProfileCompletionService {
             redirectPath: '/driver-profile-setup',
           );
         }
-        
-        // For other errors, return error status
-        return ProfileStatus(
-          exists: false,
-          status: ProfileStatusEnum.pendingProfile,
-          isComplete: false,
-          missingFields: ['api_error'],
-          needsRedirect: true,
-          redirectPath: '/driver-profile-setup',
-          error: 'API Error: ${response.statusCode}',
-        );
+
+        return _unavailable('PROFILE_HTTP_${response.statusCode}');
       }
     } catch (e) {
-      debugPrint('❌ ProfileCompletionService: Error checking profile: $e');
-
-      // On error, assume profile needs to be completed to be safe
-      return ProfileStatus(
-        exists: false,
-        status: ProfileStatusEnum.pendingProfile,
-        isComplete: false,
-        missingFields: ['unknown'],
-        needsRedirect: true,
-        redirectPath: '/driver-profile-setup',
-        error: e.toString(),
-      );
+      return _unavailable('PROFILE_LOOKUP_UNAVAILABLE');
     }
   }
 
@@ -164,7 +144,16 @@ class ProfileCompletionService {
   List<String> _getMissingFields(Map<String, dynamic> profile) {
     final missing = <String>[];
     if (profile['profileSchemaVersion'] == 2) {
-      for (final field in ['name','country_id','governorate_id','work_region_id','home_address_text','drivingLicenseUrl','registrationPaperUrl','nationalIdUrl']) {
+      for (final field in [
+        'name',
+        'country_id',
+        'governorate_id',
+        'work_region_id',
+        'home_address_text',
+        'drivingLicenseUrl',
+        'registrationPaperUrl',
+        'nationalIdUrl'
+      ]) {
         if (_isNullOrEmpty(profile[field])) missing.add(field);
       }
       return missing;
@@ -213,8 +202,7 @@ class ProfileCompletionService {
       case 'REJECTED':
         return ProfileStatusEnum.rejected;
       default:
-        debugPrint('⚠️ Unknown status: $status, defaulting to PENDING_PROFILE');
-        return ProfileStatusEnum.pendingProfile;
+        throw const FormatException('Unknown driver profile status');
     }
   }
 
@@ -224,7 +212,8 @@ class ProfileCompletionService {
       debugPrint('🔄 ProfileCompletionService: Updating status to $status');
 
       // Get auth session
-      final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+      final session =
+          await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
       if (!session.isSignedIn) {
         debugPrint('⚠️ ProfileCompletionService: User not signed in');
         return false;
@@ -249,9 +238,11 @@ class ProfileCompletionService {
       final success = response.statusCode == 200;
 
       if (success) {
-        debugPrint('✅ ProfileCompletionService: Status updated to $statusString');
+        debugPrint(
+            '✅ ProfileCompletionService: Status updated to $statusString');
       } else {
-        debugPrint('❌ ProfileCompletionService: Failed to update status: ${response.statusCode}');
+        debugPrint(
+            '❌ ProfileCompletionService: Failed to update status: ${response.statusCode}');
       }
 
       return success;
@@ -296,7 +287,8 @@ class ProfileCompletionService {
   Future<String?> getPhoneNumber() async {
     try {
       // Get auth session
-      final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+      final session =
+          await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
       if (!session.isSignedIn) return null;
 
       final tokens = session.userPoolTokensResult.value;
@@ -326,7 +318,8 @@ class ProfileCompletionService {
   Future<String?> getEmail() async {
     try {
       // Get auth session
-      final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+      final session =
+          await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
       if (!session.isSignedIn) return null;
 
       final tokens = session.userPoolTokensResult.value;
@@ -356,7 +349,8 @@ class ProfileCompletionService {
   Future<String?> getRegistrationMethod() async {
     try {
       // Get auth session
-      final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+      final session =
+          await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
       if (!session.isSignedIn) return 'phone';
 
       final tokens = session.userPoolTokensResult.value;
@@ -377,7 +371,8 @@ class ProfileCompletionService {
       }
       return 'phone';
     } catch (e) {
-      debugPrint('❌ ProfileCompletionService: Error getting registration method: $e');
+      debugPrint(
+          '❌ ProfileCompletionService: Error getting registration method: $e');
       return 'phone'; // Default to phone
     }
   }

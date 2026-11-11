@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'package:amplify_flutter/amplify_flutter.dart';
+import 'package:image_picker/image_picker.dart';
+import '../../../widgets/support_attachment_image.dart';
 import 'package:flutter/material.dart';
 import '../../../services/authenticated_support_chat.dart';
 
@@ -13,16 +17,55 @@ class _LiveChatScreenState extends State<LiveChatScreen>
     with WidgetsBindingObserver {
   late final AuthenticatedSupportChat _chat;
   final _text = TextEditingController();
+  bool _restoredDraft = false;
+  StreamSubscription<dynamic>? _authEvents;
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _chat = widget.createChat?.call() ?? AuthenticatedSupportChat();
     _chat.addListener(_changed);
+    _text.addListener(_draftChanged);
+    _authEvents = Amplify.Hub.listen(HubChannel.Auth, (event) {
+      if (['SIGNED_OUT', 'SESSION_EXPIRED', 'USER_DELETED']
+          .contains(event.eventName)) {
+        _chat.invalidateIdentity();
+        _text.clear();
+        if (mounted) Navigator.of(context).pop();
+      }
+    });
     _chat.connect();
   }
 
+  void _draftChanged() => _chat.setDraft(_text.text);
+  Future<void> _image() async {
+    try {
+      final image = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 1920,
+          maxHeight: 1920,
+          imageQuality: 85);
+      if (image == null || !mounted) return;
+      if (await image.length() > 2 * 1024 * 1024)
+        throw StateError('IMAGE_TOO_LARGE');
+      final saved = await _chat.sendImage(await image.readAsBytes());
+      if (!saved && mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'لم يتأكد إرسال الصورة. استخدم JPEG أو PNG حتى ٢ ميغابايت، وأعد اختيار الصورة للمحاولة.')));
+    } catch (_) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content:
+                Text('تعذر إرسال الصورة؛ تحقق من نوعها وحجمها والاتصال.')));
+    }
+  }
+
   void _changed() {
+    if (!_restoredDraft && _chat.connected) {
+      _restoredDraft = true;
+      if (_text.text.isEmpty) _text.text = _chat.draft;
+    }
     if (mounted) setState(() {});
   }
 
@@ -38,6 +81,8 @@ class _LiveChatScreenState extends State<LiveChatScreen>
     WidgetsBinding.instance.removeObserver(this);
     _chat.removeListener(_changed);
     _chat.dispose();
+    _authEvents?.cancel();
+    _text.removeListener(_draftChanged);
     _text.dispose();
     super.dispose();
   }
@@ -149,12 +194,19 @@ class _LiveChatScreenState extends State<LiveChatScreen>
                                               color: own
                                                   ? Colors.white
                                                   : Colors.black87)),
-                                      if (message['attachment'] != null)
-                                        Text('صورة مرفقة بالمحادثة',
-                                            style: TextStyle(
-                                                color: own
-                                                    ? Colors.white
-                                                    : Colors.black87)),
+                                      if (message['attachment'] is Map &&
+                                          message['attachment']['attachmentId']
+                                              is String)
+                                        SupportAttachmentImage(
+                                            foregroundColor: own
+                                                ? Colors.white
+                                                : const Color(0xFF00296B),
+                                            key: ValueKey(
+                                                '${_chat.sessionId}/${message['attachment']['attachmentId']}'),
+                                            load: () => _chat.loadAttachment(
+                                                message['attachment']
+                                                        ['attachmentId']
+                                                    as String)),
                                     ]),
                               ));
                         },
@@ -163,10 +215,22 @@ class _LiveChatScreenState extends State<LiveChatScreen>
                 padding: const EdgeInsets.all(12),
                 child:
                     Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  IconButton(
+                      tooltip: 'إرفاق صورة',
+                      onPressed:
+                          _chat.connected && !_chat.sending && !_chat.uploading
+                              ? _image
+                              : null,
+                      icon: _chat.uploading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.image_outlined)),
                   Expanded(
                       child: TextField(
                           controller: _text,
-                          enabled: !_chat.sending,
+                          enabled: !_chat.sending && !_chat.uploading,
                           maxLength: 2000,
                           minLines: 1,
                           maxLines: 4,
@@ -179,7 +243,9 @@ class _LiveChatScreenState extends State<LiveChatScreen>
                   const SizedBox(width: 8),
                   IconButton.filled(
                       onPressed:
-                          _chat.connected && !_chat.sending ? _send : null,
+                          _chat.connected && !_chat.sending && !_chat.uploading
+                              ? _send
+                              : null,
                       tooltip: 'إرسال للدعم',
                       icon: _chat.sending
                           ? const SizedBox(

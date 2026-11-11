@@ -2403,7 +2403,10 @@ async function updateLocation(driverId, body, headers) {
   }
   const transaction=[...(!busy?[vehicles.fence(DRIVERS_TABLE,{driverId},driver),...(scope?.allowed?scope.guards:[])]:[]),
    {Update:{...guard,UpdateExpression:'SET '+sets.join(','),ExpressionAttributeNames:names,ExpressionAttributeValues:values}}];
+  const tracked=busy&&typeof body.orderId==='string'&&body.orderId===live.currentOrderId&&typeof body.accuracy==='number'&&Number.isFinite(body.accuracy)&&body.accuracy>=0&&body.accuracy<=100&&typeof body.heading==='number'&&Number.isFinite(body.heading)&&body.heading>=0&&body.heading<360&&Number.isFinite(Date.parse(body.observedAt))&&Date.now()-Date.parse(body.observedAt)<=30000&&Date.parse(body.observedAt)<=Date.now()+5000;
+  if(tracked){names['#trip']='tripLocation438';values[':trip']={orderId:body.orderId,lat,lng,accuracy:body.accuracy,heading:body.heading,observedAt:body.observedAt};sets.push('#trip=:trip');transaction[transaction.length-1].Update.UpdateExpression='SET '+sets.join(',');}
   await dynamodb.send(new TransactWriteCommand({TransactItems:transaction}));
+  if(tracked){const {LambdaClient,InvokeCommand}=require('@aws-sdk/client-lambda');await new LambdaClient({region:'us-east-1'}).send(new InvokeCommand({FunctionName:'WizzUser-WebSocketSendUpdate-staging',InvocationType:'Event',Payload:Buffer.from(JSON.stringify({source:'wizz.driver-location-438',schemaVersion:1,driverId,orderId:body.orderId}))}));}
   return {statusCode:stopped?403:200,headers,body:JSON.stringify({success:!stopped,location_updated:true,region_changed:!busy&&live.current_work_region_id!==region?.region_id,searching_stopped:stopped,
    ...(stopped?{code:scope.code}:{}),message:busy?'تم تحديث موقع الطلب الجاري':stopped?'أُوقف استقبال الطلبات الجديدة لأن الموقع خارج نطاق العمل المسموح أو المنطقة غير متاحة':'تم تحديث الموقع',
    data:{current_work_region:region?{id:region.region_id,name:region.region_name}:null}})};
