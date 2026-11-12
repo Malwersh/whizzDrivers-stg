@@ -9,7 +9,7 @@ function workflowRequired(){return Object.assign(Error('FINANCIAL_ORDER_WORKFLOW
 function addCondition(operation,condition){operation.ConditionExpression=(operation.ConditionExpression?'('+operation.ConditionExpression+') AND ':'')+condition;return operation;}
 function preparationAllowed(record,target){
  const graph={pending:['confirmed'],confirmed:['preparing','in_kitchen','ready','ready_for_pickup'],preparing:['ready','ready_for_pickup'],in_kitchen:['ready','ready_for_pickup'],ready:['ready_for_pickup'],ready_for_pickup:[]};
- return owns(record,'financialSnapshot')&&record.financialSnapshot!=null&&!['financialOutcome','codFinancialEvidence'].some(k=>owns(record,k))&&
+ return !(record.exceptionCancellation?.state==='REQUESTED'&&['pending','confirmed'].includes(record.status))&&owns(record,'financialSnapshot')&&record.financialSnapshot!=null&&!['financialOutcome','codFinancialEvidence'].some(k=>owns(record,k))&&
  record.holdId==null&&!['ACTIVE','SETTLED','CAPTURED'].includes(record.holdStatus)&&record.deletionRequestId==null&&record.deletedAt==null&&record.isDeleted!==true&&
  ['financialAcceptance','driverId','assignedDriverId','returnCaseId','returnStatus','cancellationRequestId','cancellationStatus'].every(k=>record[k]==null)&&
  Array.isArray(graph[record.status])&&(record.status===target||graph[record.status].includes(target));
@@ -17,11 +17,17 @@ function preparationAllowed(record,target){
 // Caller provides an already branch-scoped strongly consistent record. Applied to Update itself, never a separate ConditionCheck.
 function fenceMerchantOrderOperation(item,record){
  const op=item.Update||item.Put||item.Delete||item.ConditionCheck;
- if(!isFinancialOrder(record))return addCondition(op,LEGACY_ONLY);
+ if(!isFinancialOrder(record)){
+  const target=item.Put?.Item?.status||op.ExpressionAttributeValues?.[':status']||op.ExpressionAttributeValues?.[':newStatus'];
+  if(record.offerUsageReservation&&record.status==='pending'&&typeof target==='string'&&
+   (['cancelled','canceled','rejected','expired','failed'].includes(target)||/^(canceled|cancelled)_by_/.test(target)))
+   throw Object.assign(Error('OFFER_CANCELLATION_WORKFLOW_REQUIRED'),{code:'OFFER_CANCELLATION_WORKFLOW_REQUIRED',statusCode:409,status:409});
+  return addCondition(op,LEGACY_ONLY);
+ }
  const target=op.ExpressionAttributeValues?.[':status'];
  if(!item.Update||!preparationAllowed(record,target))throw workflowRequired();
  // Prevent a concurrent accept/return/completion or reassignment from turning this into a stale preparation write.
- const fields=['status','orderStatus',...FINANCIAL_FIELDS,'driverId','assignedDriverId','assignmentAttemptCounter','holdId','holdStatus','returnCaseId','returnStatus','cancellationRequestId','cancellationStatus','deletionRequestId','deletedAt','isDeleted'];
+ const fields=['status','orderStatus','exceptionCancellation',...FINANCIAL_FIELDS,'driverId','assignedDriverId','assignmentAttemptCounter','holdId','holdStatus','returnCaseId','returnStatus','cancellationRequestId','cancellationStatus','deletionRequestId','deletedAt','isDeleted'];
  op.ExpressionAttributeNames={...op.ExpressionAttributeNames};op.ExpressionAttributeValues={...op.ExpressionAttributeValues};
  const conditions=fields.map((k,i)=>{const n='#lf'+i;op.ExpressionAttributeNames[n]=k;if(!owns(record,k))return 'attribute_not_exists('+n+')';const v=':lf'+i;op.ExpressionAttributeValues[v]=record[k];return n+'='+v;});
  return addCondition(op,conditions.join(' AND '));
@@ -52,13 +58,10 @@ function canonicalFinancialPreparation(item,record){
 function driverProgressFence(target){
  const graph={heading_to_store:['assigned','accepted'],arrived_at_store:['heading_to_store'],picked_up:['arrived_at_store'],heading_to_customer:['picked_up'],arrived_at_customer:['heading_to_customer']};
  if(!graph[target])throw workflowRequired();
- const values={':lfSchema':1,':lfFundingSchema':2,':lfAllocationV1':'ORDER_ALLOCATION_V1',':lfAllocationV2':'ORDER_ALLOCATION_V2_DELIVERY_FUNDING',':lfCod':'COD',':lfNull':null,':lfNotDeleted':false};
- const fullCash=process.env.FINANCIAL_SETTLEMENT_MODEL==='FULL_CASH_AT_DELIVERY_V1';
- if(fullCash)Object.assign(values,{':lfFullSchema':3,':lfFullAllocation':'ORDER_ALLOCATION_V3_FULL_CASH',':lfFullModel':'FULL_CASH_AT_DELIVERY_V1'});
- const fullFence=fullCash?' OR (financialAcceptance.schemaVersion=:lfFullSchema AND financialAcceptance.settlementModel=:lfFullModel AND financialAcceptance.allocation.ruleVersion=:lfFullAllocation)':'';
+ const values={':lfSchema':1,':lfNull':null,':lfNotDeleted':false};
  const previous=graph[target].map((v,i)=>{values[':lfPrev'+i]=v;return ':lfPrev'+i;});
  const absent=['returnCaseId','returnStatus','cancellationRequestId','cancellationStatus'].map(k=>'(attribute_not_exists('+k+') OR '+k+'=:lfNull)').join(' AND ');
- return {values,condition:'('+LEGACY_ONLY+') OR (attribute_exists(financialSnapshot) AND ((financialAcceptance.schemaVersion=:lfSchema AND financialAcceptance.allocation.ruleVersion=:lfAllocationV1) OR (financialAcceptance.schemaVersion=:lfFundingSchema AND financialAcceptance.allocation.ruleVersion=:lfAllocationV2)'+fullFence+') AND financialAcceptance.paymentMethod=:lfCod AND financialAcceptance.allocation.paymentMethod=:lfCod AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND attribute_not_exists(deletionRequestId) AND attribute_not_exists(deletedAt) AND (attribute_not_exists(isDeleted) OR isDeleted=:lfNotDeleted) AND '+absent+' AND #status IN ('+previous.concat(':status').join(',')+'))'};
+ return {values,condition:'('+LEGACY_ONLY+') OR (attribute_exists(financialSnapshot) AND financialAcceptance.schemaVersion=:lfSchema AND attribute_not_exists(financialOutcome) AND attribute_not_exists(codFinancialEvidence) AND attribute_not_exists(deletionRequestId) AND attribute_not_exists(deletedAt) AND (attribute_not_exists(isDeleted) OR isDeleted=:lfNotDeleted) AND '+absent+' AND #status IN ('+previous.concat(':status').join(',')+'))'};
 }
 function customerStatusFilter(kind){
  if(!['active','completed'].includes(kind))throw Error('INVALID_STATUS_FILTER');

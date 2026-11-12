@@ -123,7 +123,7 @@ class _SplashPageState extends ConsumerState<SplashPage>
         debugPrint('❌ Splash: Profile check error: $e');
         // If profile check fails, go to setup as safe fallback
         if (!mounted) return;
-        context.go('/driver-profile-setup');
+        context.go('/profile-check');
       }
     } catch (e) {
       debugPrint('❌ Splash: Critical error: $e');

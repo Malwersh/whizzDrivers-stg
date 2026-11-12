@@ -32,6 +32,19 @@ Widget app(Widget child, {ThemeData? theme}) => ProviderScope(
         theme: theme ?? AppTheme.lightTheme,
         home: child));
 void main() {
+  testWidgets('resuming refreshes stale profile rating without clearing the card', (tester) async {
+    var current=profile(count:4).copyWith(rating:4.3);
+    var reads=0;
+    await tester.pumpWidget(app(MoreTab(loadProfile:()async{reads++;return current;})));
+    await tester.pumpAndSettle();expect(find.text('4.3'),findsOneWidget);
+    current=profile(count:5).copyWith(rating:4.2);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();expect(find.text('4.2'),findsOneWidget);
+    expect(find.text('4.3'),findsNothing);expect(reads,2);
+    expect(tester.takeException(),isNull);
+  });
+
   testWidgets(
       'profile separates rating and join date without manufactured rating',
       (tester) async {

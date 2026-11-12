@@ -154,6 +154,7 @@ class DriverSearchApiService {
     required double longitude,
     http.Client? client,
     Future<String?> Function()? tokenProvider,
+    Map<String, dynamic>? tracking,
   }) async {
     try {
       final token =
@@ -166,7 +167,7 @@ class DriverSearchApiService {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token'
         },
-        body: jsonEncode({'lat': latitude, 'lng': longitude}),
+        body: jsonEncode({'lat': latitude, 'lng': longitude, ...?tracking}),
       ).timeout(const Duration(seconds: 10));
       final succeeded = response.statusCode == 200 &&
           jsonDecode(response.body)['success'] == true;

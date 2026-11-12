@@ -2049,7 +2049,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
               },
               initialCameraPosition: CameraPosition(
                 target: _driverMapPoint,
-                zoom: 14,
+                zoom: 16,
               ),
               markers: _markers.map((marker) {
                 if (marker.markerId != const MarkerId('driver_location') ||

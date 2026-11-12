@@ -1,3 +1,4 @@
+import '../features/active_order/services/driver_location_service.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
@@ -18,9 +19,9 @@ class SessionManager extends ChangeNotifier {
   SessionManager._internal();
 
   // Session state stream
-  final BehaviorSubject<SessionState> _sessionStateController = 
+  final BehaviorSubject<SessionState> _sessionStateController =
       BehaviorSubject<SessionState>.seeded(const SessionInitial());
-  
+
   Stream<SessionState> get sessionStateStream => _sessionStateController.stream;
   SessionState get currentSessionState => _sessionStateController.value;
 
@@ -40,26 +41,28 @@ class SessionManager extends ChangeNotifier {
   static const String _loginTimeKey = 'login_time';
 
   // Session validation intervals
-  static const Duration _tokenRefreshInterval = Duration(minutes: 45); // قبل انتهاء الصلاحية بـ 15 دقيقة
+  static const Duration _tokenRefreshInterval =
+      Duration(minutes: 45); // قبل انتهاء الصلاحية بـ 15 دقيقة
   static const Duration _sessionValidationInterval = Duration(minutes: 5);
 
   /// تهيئة مدير الجلسات وتحميل الجلسة السابقة
   Future<void> initialize() async {
     debugPrint('🚀 تهيئة مدير الجلسات...');
-    
+
     try {
       _emitState(const SessionLoading(message: 'تحميل الجلسة السابقة...'));
-      
+
       // تحقق من وجود جلسة محفوظة
       await _loadSavedSession();
-      
+
       // بدء مراقبة الجلسة
       _startSessionValidation();
-      
+
       debugPrint('✅ تم تهيئة مدير الجلسات بنجاح');
     } catch (e) {
       debugPrint('❌ خطأ في تهيئة مدير الجلسات: $e');
-      _emitState(SessionError(error: 'فشل في تهيئة الجلسة', details: e.toString()));
+      _emitState(
+          SessionError(error: 'فشل في تهيئة الجلسة', details: e.toString()));
     }
   }
 
@@ -71,7 +74,7 @@ class SessionManager extends ChangeNotifier {
       final accessToken = prefs.getString(_accessTokenKey);
       final idToken = prefs.getString(_idTokenKey);
       final refreshToken = prefs.getString(_refreshTokenKey);
-      
+
       if (accessToken == null || idToken == null) {
         debugPrint('📭 لا توجد جلسة محفوظة');
         _emitState(const SessionUnauthenticated());
@@ -81,7 +84,7 @@ class SessionManager extends ChangeNotifier {
       // تحقق من صحة التوكينات
       if (_isTokenExpired(accessToken)) {
         debugPrint('⚠️ التوكين منتهي الصلاحية، محاولة تجديد...');
-        
+
         if (refreshToken != null) {
           await _refreshTokens(refreshToken);
           return;
@@ -101,9 +104,11 @@ class SessionManager extends ChangeNotifier {
       }
 
       // تحميل بيانات السائق
-      final driverDataString = (await SharedPreferences.getInstance()).getString(_driverDataKey);
-      final loginTimeString = (await SharedPreferences.getInstance()).getString(_loginTimeKey);
-      
+      final driverDataString =
+          (await SharedPreferences.getInstance()).getString(_driverDataKey);
+      final loginTimeString =
+          (await SharedPreferences.getInstance()).getString(_loginTimeKey);
+
       if (driverDataString == null || loginTimeString == null) {
         debugPrint('❌ بيانات الجلسة ناقصة');
         await _clearSession();
@@ -125,9 +130,8 @@ class SessionManager extends ChangeNotifier {
 
       _emitState(sessionState);
       _startTokenRefreshTimer();
-      
+
       debugPrint('✅ تم تحميل الجلسة المحفوظة للسائق: ${driverData['name']}');
-      
     } catch (e) {
       debugPrint('❌ خطأ في تحميل الجلسة المحفوظة: $e');
       await _clearSession();
@@ -141,7 +145,7 @@ class SessionManager extends ChangeNotifier {
     bool forceSignIn = false,
   }) async {
     debugPrint('🔐 محاولة تسجيل دخول للمعرف: $identifier');
-    
+
     try {
       _emitState(const SessionLoading(message: 'جارٍ تسجيل الدخول...'));
 
@@ -176,7 +180,8 @@ class SessionManager extends ChangeNotifier {
       }
 
       // الحصول على التوكينات
-      final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+      final session =
+          await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
       if (!session.isSignedIn) {
         const error = SessionError(
           error: 'فشل في الحصول على التوكينات',
@@ -193,10 +198,10 @@ class SessionManager extends ChangeNotifier {
       // الحصول على بيانات المستخدم
       final cognitoUser = await Amplify.Auth.getCurrentUser();
       final userAttributes = await Amplify.Auth.fetchUserAttributes();
-      
+
       // بناء بيانات السائق
       final driverData = _buildDriverData(cognitoUser, userAttributes);
-      
+
       // حفظ الجلسة
       await _saveSession(
         driverData: driverData,
@@ -217,11 +222,10 @@ class SessionManager extends ChangeNotifier {
 
       _emitState(sessionState);
       _startTokenRefreshTimer();
-      
+
       debugPrint('✅ تم تسجيل الدخول بنجاح للسائق: ${driverData['name']}');
-      
+
       return sessionState;
-      
     } catch (e) {
       debugPrint('❌ خطأ في تسجيل الدخول: $e');
       final error = SessionError(
@@ -235,14 +239,15 @@ class SessionManager extends ChangeNotifier {
 
   /// تسجيل الخروج
   Future<void> signOut({bool clearCognito = true}) async {
+    await DriverLocationService().stopTracking();
     debugPrint('🚪 بدء عملية تسجيل الخروج...');
-    
+
     try {
       _emitState(const SessionLoading(message: 'جارٍ تسجيل الخروج...'));
-      
+
       // إيقاف المؤقتات
       _stopTimers();
-      
+
       // تسجيل خروج من AWS Cognito
       if (clearCognito) {
         try {
@@ -252,12 +257,11 @@ class SessionManager extends ChangeNotifier {
           debugPrint('⚠️ خطأ في تسجيل الخروج من Cognito: $e');
         }
       }
-      
+
       // مسح الجلسة المحلية
       await _clearSession();
-      
+
       debugPrint('✅ تم تسجيل الخروج بنجاح');
-      
     } catch (e) {
       debugPrint('❌ خطأ في تسجيل الخروج: $e');
       // فرض مسح الجلسة حتى لو حدث خطأ
@@ -268,14 +272,14 @@ class SessionManager extends ChangeNotifier {
   /// فرض تسجيل خروج (لحل تضارب الجلسات)
   Future<void> _forceSignOut() async {
     debugPrint('⚡ فرض تسجيل خروج...');
-    
+
     try {
       // محاولة تسجيل خروج من Cognito
       await Amplify.Auth.signOut();
     } catch (e) {
       debugPrint('⚠️ تجاهل خطأ فرض تسجيل الخروج: $e');
     }
-    
+
     // مسح الجلسة المحلية
     await _clearSession();
   }
@@ -283,13 +287,13 @@ class SessionManager extends ChangeNotifier {
   /// تجديد التوكينات
   Future<void> _refreshTokens(String refreshToken) async {
     debugPrint('🔄 تجديد التوكينات...');
-    
+
     try {
       // AWS Cognito يدير تجديد التوكينات تلقائياً
       final session = await Amplify.Auth.fetchAuthSession(
         options: const FetchAuthSessionOptions(forceRefresh: true),
       ) as CognitoAuthSession;
-      
+
       if (!session.isSignedIn) {
         throw Exception('فشل في تجديد التوكينات');
       }
@@ -318,9 +322,8 @@ class SessionManager extends ChangeNotifier {
         );
         _emitState(updatedSession);
       }
-      
+
       debugPrint('✅ تم تجديد التوكينات بنجاح');
-      
     } catch (e) {
       debugPrint('❌ فشل في تجديد التوكينات: $e');
       _emitState(const SessionExpired(reason: 'فشل في تجديد التوكينات'));
@@ -365,7 +368,7 @@ class SessionManager extends ChangeNotifier {
     for (final attribute in attributes) {
       final key = attribute.userAttributeKey.key;
       final value = attribute.value;
-      
+
       switch (key) {
         case 'email':
           driverData['email'] = value;
@@ -442,7 +445,8 @@ class SessionManager extends ChangeNotifier {
   /// بدء مراقبة الجلسة
   void _startSessionValidation() {
     _sessionValidationTimer?.cancel();
-    _sessionValidationTimer = Timer.periodic(_sessionValidationInterval, (timer) async {
+    _sessionValidationTimer =
+        Timer.periodic(_sessionValidationInterval, (timer) async {
       await _validateCurrentSession();
     });
   }
@@ -480,14 +484,14 @@ class SessionManager extends ChangeNotifier {
 
   // Getters للوصول السريع
   bool get isAuthenticated => _currentState is SessionActive;
-  String? get currentDriverId => _currentState is SessionActive 
-      ? (_currentState as SessionActive).driverId 
+  String? get currentDriverId => _currentState is SessionActive
+      ? (_currentState as SessionActive).driverId
       : null;
-  Map<String, dynamic>? get currentDriverData => _currentState is SessionActive 
-      ? (_currentState as SessionActive).userData 
+  Map<String, dynamic>? get currentDriverData => _currentState is SessionActive
+      ? (_currentState as SessionActive).userData
       : null;
-  String? get currentAccessToken => _currentState is SessionActive 
-      ? (_currentState as SessionActive).accessToken 
+  String? get currentAccessToken => _currentState is SessionActive
+      ? (_currentState as SessionActive).accessToken
       : null;
 
   /// تنظيف الموارد

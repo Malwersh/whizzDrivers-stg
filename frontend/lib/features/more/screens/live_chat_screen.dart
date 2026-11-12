@@ -19,7 +19,8 @@ class LiveChatScreen extends StatefulWidget {
   State<LiveChatScreen> createState() => _LiveChatScreenState();
 }
 
-class _LiveChatScreenState extends State<LiveChatScreen> {
+class _LiveChatScreenState extends State<LiveChatScreen>
+    with WidgetsBindingObserver {
   final _text = TextEditingController();
   late final SupportChatIdentitySource _identity;
   StreamSubscription<void>? _authSubscription;
@@ -31,6 +32,7 @@ class _LiveChatScreenState extends State<LiveChatScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _identity = widget.identitySource ?? AmplifySupportChatIdentitySource();
     _authSubscription = _identity.invalidations
         .listen((_) => _invalidate(), onError: (Object _) => _invalidate());
@@ -107,7 +109,21 @@ class _LiveChatScreenState extends State<LiveChatScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final chat = _chat;
+    if (state == AppLifecycleState.resumed &&
+        chat != null &&
+        !chat.ready &&
+        !chat.connecting &&
+        !chat.closed &&
+        !chat.closing) {
+      unawaited(chat.connect());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     ++_epoch;
     unawaited(_authSubscription?.cancel() ?? Future<void>.value());
     _clearChat();
@@ -154,6 +170,7 @@ class _LiveChatScreenState extends State<LiveChatScreen> {
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
+        backgroundColor: const Color(0xFFF4F6FA),
         appBar: AppBar(
           title: const Text('الدردشة مع الدعم'),
           actions: [
@@ -259,6 +276,9 @@ class _LiveChatScreenState extends State<LiveChatScreen> {
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft,
                               child: Card(
+                                color: message.sender == 'driver'
+                                    ? const Color(0xFF00296B)
+                                    : Colors.white,
                                 child: Padding(
                                   padding: const EdgeInsets.all(12),
                                   child: Column(
@@ -272,13 +292,25 @@ class _LiveChatScreenState extends State<LiveChatScreen> {
                                             : 'فريق الدعم',
                                         style: Theme.of(
                                           context,
-                                        ).textTheme.labelSmall,
+                                        ).textTheme.labelSmall?.copyWith(
+                                              color: message.sender == 'driver'
+                                                  ? Colors.white
+                                                  : const Color(0xFF00296B),
+                                            ),
                                       ),
-                                      SelectableText(message.text),
+                                      SelectableText(message.text,
+                                          style: TextStyle(
+                                              color: message.sender == 'driver'
+                                                  ? Colors.white
+                                                  : const Color(0xFF00296B))),
                                       if (message.isUploading)
                                         const Text('جارٍ رفع الصورة…'),
                                       if (message.attachmentId != null)
                                         SupportAttachmentImage(
+                                          foregroundColor:
+                                              message.sender == 'driver'
+                                                  ? Colors.white
+                                                  : const Color(0xFF00296B),
                                           key: ValueKey(
                                             '${chat.sessionId}:${message.attachmentId}',
                                           ),
@@ -296,7 +328,12 @@ class _LiveChatScreenState extends State<LiveChatScreen> {
                                           },
                                           style: Theme.of(
                                             context,
-                                          ).textTheme.labelSmall,
+                                          ).textTheme.labelSmall?.copyWith(
+                                                color: message.sender ==
+                                                        'driver'
+                                                    ? Colors.white
+                                                    : const Color(0xFF00296B),
+                                              ),
                                         ),
                                     ],
                                   ),

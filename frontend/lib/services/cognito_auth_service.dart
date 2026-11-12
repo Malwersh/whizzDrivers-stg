@@ -1,3 +1,4 @@
+import '../features/active_order/services/driver_location_service.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -19,12 +20,12 @@ class CognitoAuthService {
   // Cache for last known profile status (to be used by router guards)
   static String? _lastKnownProfileStatus;
   static String? get lastKnownProfileStatus => _lastKnownProfileStatus;
-  
+
   /// Update the cached profile status (used by router guards)
   static Future<void> updateLastKnownProfileStatus(String? status) async {
     await _setLastKnownProfileStatus(status);
   }
-  
+
   static Future<void> _setLastKnownProfileStatus(String? status) async {
     _lastKnownProfileStatus = status;
     try {
@@ -53,7 +54,8 @@ class CognitoAuthService {
 
     // CRITICAL: Validate the session against Amplify, not just check if token exists
     try {
-      final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+      final session =
+          await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
       if (session.isSignedIn) {
         // Read live identity; cached tokens can outlive account deletion.
         await Amplify.Auth.fetchUserAttributes();
@@ -76,8 +78,8 @@ class CognitoAuthService {
         await prefs.remove('cognito_auth_token');
         await prefs.remove('driver_profile_status');
       }
-      debugPrint('Cognito session unavailable; cached identity remains inactive');
-
+      debugPrint(
+          'Cognito session unavailable; cached identity remains inactive');
     }
 
     debugPrint(
@@ -132,7 +134,8 @@ class CognitoAuthService {
 
           if (result.isSignedIn) {
             debugPrint('✅ Direct email login successful');
-            final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+            final session =
+                await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
             if (session.isSignedIn) {
               final tokens = session.userPoolTokensResult.value;
               await _saveToken(tokens.accessToken.raw);
@@ -145,7 +148,8 @@ class CognitoAuthService {
                   accessToken: tokens.accessToken.raw,
                   profile: profileData,
                 );
-                await _setLastKnownProfileStatus(profileData['status'] as String?);
+                await _setLastKnownProfileStatus(
+                    profileData['status'] as String?);
               }
 
               return {
@@ -157,11 +161,12 @@ class CognitoAuthService {
           }
         } on AuthException catch (e) {
           debugPrint('⚠️ Direct email login failed: ${e.message}');
-          
+
           // Strategy 2: Try with generated phone from email hash
           try {
             final generatedPhone = _generatePhoneFromEmail(email);
-            debugPrint('🔐 Strategy 2: Trying generated phone: $generatedPhone');
+            debugPrint(
+                '🔐 Strategy 2: Trying generated phone: $generatedPhone');
 
             final result = await Amplify.Auth.signIn(
               username: generatedPhone,
@@ -170,7 +175,8 @@ class CognitoAuthService {
 
             if (result.isSignedIn) {
               debugPrint('✅ Generated phone login successful');
-              final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+              final session =
+                  await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
               if (session.isSignedIn) {
                 final tokens = session.userPoolTokensResult.value;
                 await _saveToken(tokens.accessToken.raw);
@@ -183,7 +189,8 @@ class CognitoAuthService {
                     accessToken: tokens.accessToken.raw,
                     profile: profileData,
                   );
-                  await _setLastKnownProfileStatus(profileData['status'] as String?);
+                  await _setLastKnownProfileStatus(
+                      profileData['status'] as String?);
                 }
 
                 return {
@@ -194,8 +201,9 @@ class CognitoAuthService {
               }
             }
           } on AuthException catch (phoneError) {
-            debugPrint('⚠️ Generated phone login failed: ${phoneError.message}');
-            
+            debugPrint(
+                '⚠️ Generated phone login failed: ${phoneError.message}');
+
             // Return the original email error, not the phone error
             return {
               'success': false,
@@ -232,7 +240,8 @@ class CognitoAuthService {
   /// Generate phone number from email hash (same algorithm as registration)
   String _generatePhoneFromEmail(String email) {
     final emailHash = email.hashCode.abs();
-    final phoneNumber = '+964${emailHash.toString().padLeft(10, '0').substring(0, 10)}';
+    final phoneNumber =
+        '+964${emailHash.toString().padLeft(10, '0').substring(0, 10)}';
     return phoneNumber;
   }
 
@@ -250,7 +259,8 @@ class CognitoAuthService {
       );
 
       if (result.isSignedIn) {
-        final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
+        final session =
+            await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
         if (session.isSignedIn) {
           final tokens = session.userPoolTokensResult.value;
           await _saveToken(tokens.accessToken.raw);
@@ -327,7 +337,7 @@ class CognitoAuthService {
 
       // Use DriverService to get profile
       final profileResult = await DriverService.getDriverProfile();
-      
+
       if (profileResult != null) {
         debugPrint('🔐 FETCH_PROFILE: Profile fetched successfully');
         debugPrint('🔐 FETCH_PROFILE: Profile status: ${profileResult.status}');
@@ -356,6 +366,7 @@ class CognitoAuthService {
 
   /// Comprehensive sign out with cleanup
   Future<void> signOut() async {
+    await DriverLocationService().stopTracking();
     debugPrint('🔐 SIGNOUT: Starting comprehensive sign out');
 
     try {
@@ -392,22 +403,22 @@ class CognitoAuthService {
   Future<void> _clearAllAuthData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       // Clear authentication tokens
       _authToken = null;
       await prefs.remove('cognito_auth_token');
       await prefs.remove('access_token');
-      
+
       // Clear profile and session data
       _lastKnownProfileStatus = null;
       await prefs.remove('driver_profile_status');
       await prefs.remove('driver_id');
       await prefs.remove('driver_profile');
       await prefs.remove('isAuthenticated');
-      
+
       // Clear pending registration data
       await prefs.remove('pending_driver_registration');
-      
+
       debugPrint('🧹 AUTH_DATA: All local auth data cleared');
     } catch (e) {
       debugPrint('🧹 AUTH_DATA: Error clearing local data: $e');
@@ -422,12 +433,12 @@ class CognitoAuthService {
   }) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       await prefs.setString('driver_id', driverId);
       await prefs.setString('access_token', accessToken);
       await prefs.setString('driver_profile', jsonEncode(profile));
       await prefs.setBool('isAuthenticated', true);
-      
+
       debugPrint('🔐 CREDENTIALS: Driver credentials saved successfully');
     } catch (e) {
       debugPrint('🔐 CREDENTIALS: Error saving driver credentials: $e');
@@ -443,7 +454,8 @@ class CognitoAuthService {
 
     if (cleanPhone.startsWith('+964')) {
       String withoutPlus = cleanPhone.substring(1);
-      if (withoutPlus.length == 12 && withoutPlus.substring(3).startsWith('7')) {
+      if (withoutPlus.length == 12 &&
+          withoutPlus.substring(3).startsWith('7')) {
         return cleanPhone;
       }
     }
@@ -528,19 +540,19 @@ class CognitoAuthService {
 
   static String normalizeIraqiPhone(String phone) {
     String cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    
+
     if (cleanPhone.startsWith('+964')) {
       return cleanPhone;
     }
-    
+
     if (cleanPhone.startsWith('07') && cleanPhone.length == 11) {
       return '+964${cleanPhone.substring(1)}';
     }
-    
+
     if (cleanPhone.startsWith('7') && cleanPhone.length == 10) {
-      return '+964$cleanPhone'; 
+      return '+964$cleanPhone';
     }
-    
+
     return phone;
   }
 }
