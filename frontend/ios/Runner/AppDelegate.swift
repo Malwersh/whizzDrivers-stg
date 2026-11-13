@@ -191,7 +191,10 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
 }
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+@objc class AppDelegate: FlutterAppDelegate {
+  // Register legacy notification plugins before UIApplication finishes launching.
+  lazy var appFlutterEngine = FlutterEngine(name: "whizz.application")
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -213,12 +216,14 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
             }
         }
     
+    appFlutterEngine.run()
+    configureFlutterEngine()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
-    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "DriverLocationLabel") {
+  private func configureFlutterEngine() {
+    GeneratedPluginRegistrant.register(with: appFlutterEngine)
+    if let registrar = appFlutterEngine.registrar(forPlugin: "DriverLocationLabel") {
       FlutterMethodChannel(name: "com.whizz.driver/location_label", binaryMessenger: registrar.messenger()).setMethodCallHandler { call, result in
         guard call.method == "describe", let args = call.arguments as? [String: Double], let lat = args["latitude"], let lng = args["longitude"] else { result(FlutterMethodNotImplemented); return }
         CLGeocoder().reverseGeocodeLocation(CLLocation(latitude:lat,longitude:lng),preferredLocale:Locale(identifier:"ar")) { marks, _ in
@@ -229,10 +234,10 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
         }
       }
     }
-    if let soundRegistrar = engineBridge.pluginRegistry.registrar(forPlugin: "NotificationSoundFiles") { NotificationSoundFiles.register(with: soundRegistrar) }
+    if let soundRegistrar = appFlutterEngine.registrar(forPlugin: "NotificationSoundFiles") { NotificationSoundFiles.register(with: soundRegistrar) }
     
     // Register Native WebSocket plugin
-    NativeWebSocketPlugin.register(with: engineBridge.pluginRegistry.registrar(forPlugin: "NativeWebSocketPlugin")!)
+    NativeWebSocketPlugin.register(with: appFlutterEngine.registrar(forPlugin: "NativeWebSocketPlugin")!)
     
   }
 }
@@ -302,4 +307,18 @@ extension NotificationSoundFiles {
   try? FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true)
   try? data.write(to:dir.appendingPathComponent("driver-offer-audio-diagnostic.json"),options:.atomic)
  }
+}
+
+class SceneDelegate: FlutterSceneDelegate {
+  override func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
+      options connectionOptions: UIScene.ConnectionOptions) {
+    guard let windowScene = scene as? UIWindowScene,
+          let app = UIApplication.shared.delegate as? AppDelegate else { return }
+    let controller = FlutterViewController(engine: app.appFlutterEngine, nibName: nil, bundle: nil)
+    let sceneWindow = UIWindow(windowScene: windowScene)
+    sceneWindow.rootViewController = controller
+    window = sceneWindow
+    super.scene(scene, willConnectTo: session, options: connectionOptions)
+    sceneWindow.makeKeyAndVisible()
+  }
 }
