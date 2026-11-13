@@ -17,4 +17,11 @@ void main() {
     expect(await PushNotificationsService.consumeStashedWaveOfferFromTap(), isNull);
     expect(await PushNotificationsService.consumePendingTabFromTap(), isNull);
   });
+  test('case financial update opens wallet without reviving expired offer', () async {
+    SharedPreferences.setMockInitialValues({});
+    const message = RemoteMessage(data: {'type': 'driver_exception_financial_updated', 'orderId': 'order1', 'action': 'open_wallet'});
+    await PushNotificationsService.stashPendingTabFromTap(message);
+    expect(await PushNotificationsService.consumePendingTabFromTap(), 2);
+    expect(await PushNotificationsService.consumeStashedWaveOfferFromTap(), isNull);
+  });
 }
