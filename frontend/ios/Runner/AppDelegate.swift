@@ -191,7 +191,7 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
 }
 
 @main
-@objc class AppDelegate: FlutterAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -213,8 +213,12 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
             }
         }
     
-    GeneratedPluginRegistrant.register(with: self)
-    if let registrar = self.registrar(forPlugin: "DriverLocationLabel") {
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "DriverLocationLabel") {
       FlutterMethodChannel(name: "com.whizz.driver/location_label", binaryMessenger: registrar.messenger()).setMethodCallHandler { call, result in
         guard call.method == "describe", let args = call.arguments as? [String: Double], let lat = args["latitude"], let lng = args["longitude"] else { result(FlutterMethodNotImplemented); return }
         CLGeocoder().reverseGeocodeLocation(CLLocation(latitude:lat,longitude:lng),preferredLocale:Locale(identifier:"ar")) { marks, _ in
@@ -225,12 +229,11 @@ extension NativeWebSocketPlugin: FlutterStreamHandler {
         }
       }
     }
-    if let soundRegistrar = self.registrar(forPlugin: "NotificationSoundFiles") { NotificationSoundFiles.register(with: soundRegistrar) }
+    if let soundRegistrar = engineBridge.pluginRegistry.registrar(forPlugin: "NotificationSoundFiles") { NotificationSoundFiles.register(with: soundRegistrar) }
     
     // Register Native WebSocket plugin
-    NativeWebSocketPlugin.register(with: self.registrar(forPlugin: "NativeWebSocketPlugin")!)
+    NativeWebSocketPlugin.register(with: engineBridge.pluginRegistry.registrar(forPlugin: "NativeWebSocketPlugin")!)
     
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 }
 
