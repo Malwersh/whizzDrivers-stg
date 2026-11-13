@@ -61,7 +61,8 @@ class PushNotificationsService {
       data['type'] == 'wallet_topup_rejected' ||
       data['type'] == 'wallet_sandbox_payment_succeeded' ||
       data['type'] == 'wallet_transfer_completed' ||
-      data['type'] == 'wallet_cod_lifecycle';
+      data['type'] == 'wallet_cod_lifecycle' ||
+      data['type'] == 'driver_exception_financial_updated';
   static StreamSubscription<String>? _tokenRefreshSub;
   static StreamSubscription<dynamic>? _authHubSub;
   static FutureOr<void> Function(RemoteMessage message)? _onNotificationTap;
