@@ -11,7 +11,6 @@ import '../more/screens/live_chat_screen.dart';
 import 'widgets/go_online_button.dart';
 import '../../services/offer_performance_prefetch.dart';
 import 'widgets/decline_acceptance_impact.dart';
-import '../../widgets/location_permission_notice.dart';
 import '../demand/demand_card.dart';
 import '../../services/driver_location_mode.dart';
 import '../../services/financial_offer_reference.dart';
@@ -3501,8 +3500,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   Widget _buildCommonContent() {
     return Column(
       children: [
-        const LocationPermissionNotice(),
-
         // Popular offer times section
         if (_outsideCoverageConfirmed)
           const Padding(padding: EdgeInsets.all(20), child: Text('أنت خارج مناطق الخدمة حاليًا', style: TextStyle(color: AppColors.secondary)))
