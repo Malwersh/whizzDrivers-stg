@@ -114,9 +114,16 @@ class OrderItemsBottomSheet extends StatelessWidget {
         ? (item['specialInstructions'] ?? item['notes'] ?? '')
         : (item.notes ?? '');
 
+    final imageUrl = item is Map ? item['imageUrl'] : item.imageUrl;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (imageUrl is String && imageUrl.isNotEmpty) ...[
+          ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(imageUrl,
+            width: 52, height: 52, fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => const SizedBox(width: 52, height: 52, child: Icon(Icons.fastfood)))),
+          const SizedBox(width: 8),
+        ],
         // Quantity Badge
         Container(
           width: 32,
@@ -190,7 +197,7 @@ class OrderItemsBottomSheet extends StatelessWidget {
 
         // Price
         Text(
-          '${price.toStringAsFixed(2)} د.ع',
+          'سعر القطعة\n${price.toStringAsFixed(price == price.roundToDouble() ? 0 : 3)} د.ع',
           style: TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.bold,

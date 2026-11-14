@@ -8,15 +8,19 @@ class Environment {
     defaultValue: 'staging',
   );
 
-  // Temporary testing: fixed coordinates (match dev testing behavior)
-  // Disable for real launch by setting: --dart-define=USE_TEST_LOCATION=false
+  // GPS is the default. A fixed position requires explicit staging opt-in
+  // plus TEST_LOCATION_DRIVER_ID matching the signed-in test driver.
   static const bool useTestLocation =
-      bool.fromEnvironment('USE_TEST_LOCATION', defaultValue: true);
-  static final double testLatitude =
-      double.tryParse(const String.fromEnvironment('TEST_LATITUDE', defaultValue: '31.913292')) ??
+      bool.fromEnvironment('USE_TEST_LOCATION', defaultValue: false);
+  static const String testLocationDriverId =
+      String.fromEnvironment('TEST_LOCATION_DRIVER_ID', defaultValue: '');
+  static final double testLatitude = double.tryParse(
+          const String.fromEnvironment('TEST_LATITUDE',
+              defaultValue: '31.913292')) ??
       31.913292;
-  static final double testLongitude =
-      double.tryParse(const String.fromEnvironment('TEST_LONGITUDE', defaultValue: '44.476014')) ??
+  static final double testLongitude = double.tryParse(
+          const String.fromEnvironment('TEST_LONGITUDE',
+              defaultValue: '44.476014')) ??
       44.476014;
 
   // AWS Cognito Configuration - Updated for dedicated drivers pool
@@ -94,12 +98,12 @@ class Environment {
       defaultValue:
           'https://6ogrj6so22.execute-api.us-east-1.amazonaws.com/staging/api');
 
-    // CentralPlatform Push Notifications API
-    static const String centralPushApiBaseUrl = String.fromEnvironment(
-        'CENTRAL_PUSH_API_BASE_URL',
-        defaultValue:
-                'https://x066k4dftk.execute-api.us-east-1.amazonaws.com/staging',
-    );
+  // CentralPlatform Push Notifications API
+  static const String centralPushApiBaseUrl = String.fromEnvironment(
+    'CENTRAL_PUSH_API_BASE_URL',
+    defaultValue:
+        'https://x066k4dftk.execute-api.us-east-1.amazonaws.com/staging',
+  );
 
   // Regional defaults
   static const String defaultCountryCode = '+964';

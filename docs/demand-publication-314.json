@@ -1,0 +1,37 @@
+{
+  "status": "PUBLISHED",
+  "stage": "staging",
+  "table": "staging-DriverDemand",
+  "collector": "staging-DriverDemandCollector",
+  "dataset": "TEST",
+  "simulationIsolated": true,
+  "coverageStart": "2026-10-23T05:17:22.204549+00:00",
+  "stream": "arn:aws:dynamodb:us-east-1:699561669180:table/WizzDispatchJobs_staging/stream/2026-10-23T05:17:12.708",
+  "schedule": "staging-DriverDemandHourly",
+  "changedApiEntries": [
+    "lambda_driver_api_v2.js",
+    "driver-demand.js"
+  ],
+  "apiCodeSha256": "yuB12ZPbNGQEqLiRHTjvzPhWQaFL1aO3Z4erLxd+3AY=",
+  "sourceRowsMutated": false,
+  "financialWrites": false,
+  "initialRebuild": {
+    "success": true,
+    "regions": 12,
+    "events": 0
+  },
+  "alarms": [
+    "Errors",
+    "StreamLag",
+    "DeadLetter"
+  ],
+  "alarmNotifications": "CloudWatch only; no SNS contact configured",
+  "collectorCodeSha256": "CU8uaCjtbzZGWPo/TDowUgSpnuzzVOT2c/9z01cXgT8=",
+  "hoursAware": true,
+  "collectorGapDaysExcluded": true,
+  "finalRebuild": {
+    "success": true,
+    "regions": 12,
+    "events": 0
+  }
+}

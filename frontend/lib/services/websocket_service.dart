@@ -14,6 +14,7 @@ import '../config/environment.dart';
 import '../models/order_model.dart';
 import '../models/wave_offer.dart';
 import 'native_websocket_channel.dart';
+import 'offer_closure_inbox.dart';
 
 enum WebSocketStatus {
   disconnected,
@@ -236,6 +237,12 @@ class WebSocketService extends ChangeNotifier {
     required String driverId,
     required String authToken,
   }) async {
+    if (_driverId != null && _driverId != driverId) {
+      await disconnect();
+      _financialOfferEvents.clear();
+      _isAuthenticated = false;
+      _isReconnecting = false;
+    }
     // ✅ CRITICAL FIX: Prevent duplicate initialization during reconnection
     if (_isReconnecting) {
       debugPrint(
@@ -315,8 +322,7 @@ class WebSocketService extends ChangeNotifier {
       final deviceId = await _getUniqueDeviceId();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
 
-      // 🔧 FIX: DON'T send token in query params - iOS has URL length limit!
-      // We'll send token in first authentication message instead
+      // Authenticate the handshake through a header, without putting JWTs in URLs.
       final queryParams = <String, String>{
         'driverId':
             _driverId ?? 'unknown', // Primary identification for Wave System
@@ -329,10 +335,10 @@ class WebSocketService extends ChangeNotifier {
         'entityType': 'driver', // Clear entity type for backend routing
       };
 
-      // Store token to send in authentication message after connection
+      // Keep the current token for authenticated reconnects.
       if (token.isNotEmpty) {
         _authToken = token;
-        debugPrint('🔧 JWT Token will be sent in auth message (not URL)');
+        debugPrint('JWT handshake authentication prepared');
       }
 
       final uri =
@@ -353,7 +359,7 @@ class WebSocketService extends ChangeNotifier {
 
           // ✅ CRITICAL FIX: Connect FIRST to initialize controllers
           // Then access stream to listen
-          await _nativeChannel!.connect(uri.toString());
+          await _nativeChannel!.connect(uri.toString(), headers: {'Authorization': 'Bearer $token'});
 
           // Now access stream (controllers are already initialized in connect())
           final nativeStream = _nativeChannel!.stream;
@@ -383,7 +389,7 @@ class WebSocketService extends ChangeNotifier {
           debugPrint('🔧 Using standard Dart WebSocket');
           _useNativeWebSocket = false;
 
-          _channel = IOWebSocketChannel.connect(uri);
+          _channel = IOWebSocketChannel.connect(uri, headers: {'Authorization': 'Bearer $token'});
 
           // Listen to messages with better error handling
           _subscription = _channel!.stream.listen(
@@ -413,7 +419,7 @@ class WebSocketService extends ChangeNotifier {
 
       _setStatus(WebSocketStatus.connected);
 
-      // Send driver connection registration (includes authentication with JWT token)
+      // Bind the driver using the already authenticated handshake.
       await _sendDriverConnectionRegistration();
 
       // Send queued messages
@@ -1147,6 +1153,7 @@ class WebSocketService extends ChangeNotifier {
           break;
 
         // 🌊 WAVE SYSTEM OFFERS (Priority-Based Dispatch)
+        case 'financial_wave_offer':
         case 'new_wave_offer':
         case 'wave_offer':
           debugPrint('🌊🌊🌊 WAVE OFFER RECEIVED! 🌊🌊🌊');
@@ -1325,6 +1332,8 @@ class WebSocketService extends ChangeNotifier {
     }
   }
 
+  final Set<String> _financialOfferEvents = <String>{};
+
   /// 🌊 Handle Wave Offer from Wave System (Priority-Based)
   void _handleWaveOffer(Map<String, dynamic> json) {
     try {
@@ -1354,6 +1363,10 @@ class WebSocketService extends ChangeNotifier {
       // Convert to WaveOffer model
       try {
         final waveOffer = WaveOffer.fromJson(offerData);
+        if (waveOffer.financialTerms != null) {
+          if (!waveOffer.expiresAt.isAfter(DateTime.now()) || !_financialOfferEvents.add(waveOffer.offerId)) return;
+          if (_financialOfferEvents.length > 250) _financialOfferEvents.remove(_financialOfferEvents.first);
+        }
         debugPrint('✅ WaveOffer created successfully!');
         debugPrint('   📋 Offer ID: ${waveOffer.offerId}');
         debugPrint('   🌊 Wave Number: ${waveOffer.waveNumber}');
@@ -1392,20 +1405,15 @@ class WebSocketService extends ChangeNotifier {
   }
 
   /// Handle offer accepted by another driver
-  void _handleOfferAcceptedByOther(Map<String, dynamic> json) {
+  void _handleOfferAcceptedByOther(Map<String, dynamic> json) async {
     try {
-      final offerId = json['offerId'] ?? json['offer_id'] ?? json['id'];
-
-      if (offerId != null) {
-        debugPrint('🤝 Wave offer accepted by another driver: $offerId');
-        _offerTakenController.add({
-          'offerId': offerId,
-          'message': json['message'] ?? 'Offer taken by another driver'
-        });
-      }
-    } catch (e) {
-      debugPrint('❌ Error handling offer acceptance by other: $e');
-    }
+      final owner = _driverId;
+      if (owner == null) return;
+      final closure = await OfferClosureInbox.record(json, socketDriverId: owner);
+      if (closure == null || _driverId != owner) return;
+      _offerTakenController.add({'offerId': closure.offerId, 'orderId': closure.orderId,
+        'cycleId': closure.cycleId, 'eventId': closure.eventId, 'driverId': owner});
+    } catch (e) { debugPrint('Offer closure could not be saved: $e'); }
   }
 
   /// Handle offer acceptance confirmation
@@ -1445,7 +1453,6 @@ class WebSocketService extends ChangeNotifier {
         'userId': _driverId,
         'userType': 'driver',
         'driverId': _driverId,
-        'token': _authToken,
         'deviceId': 'driver_device_$_driverId',
         'platform': 'ios',
         'appVersion': '1.0.0',
@@ -1545,8 +1552,13 @@ class WebSocketService extends ChangeNotifier {
         'timestamp': json['timestamp']
       });
 
-      // Optionally disconnect and retry
-      disconnect();
+      // Reconnect with the current Cognito session; never reuse expired authority.
+      final owner = _driverId;
+      unawaited(() async {
+        await disconnect();
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (_driverId == owner && owner != null) await connect();
+      }());
     } catch (e) {
       debugPrint('❌ Error handling auth error: $e');
     }

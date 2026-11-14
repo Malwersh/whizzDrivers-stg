@@ -33,7 +33,7 @@ class RegistrationMethodSelectionScreen extends StatelessWidget {
               const Icon(
                 Icons.person_add_rounded,
                 size: 80,
-                color: AppColors.primary,
+                color: const Color(0xFF00296B),
               ),
               const SizedBox(height: 32),
 
@@ -112,7 +112,7 @@ class RegistrationMethodSelectionScreen extends StatelessWidget {
                     child: const Text(
                       'تسجيل الدخول',
                       style: TextStyle(
-                        color: AppColors.primary,
+                        color: const Color(0xFF00296B),
                         fontWeight: FontWeight.bold,
                       ),
                     ),

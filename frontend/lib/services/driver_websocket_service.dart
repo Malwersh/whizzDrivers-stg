@@ -1,3 +1,4 @@
+import 'driver_location_mode.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -595,8 +596,10 @@ class DriverWebSocketService {
 
   /// Update current location
   Future<void> _updateLocation() async {
+    // Do not resend a previous fixed/GPS point as a fresh observation on failure.
+    _lastKnownLocation = null;
     try {
-      if (Environment.useTestLocation) {
+      if (await DriverLocationMode.usesFixedTestPosition()) {
         _lastKnownLocation = Position(
           latitude: Environment.testLatitude,
           longitude: Environment.testLongitude,

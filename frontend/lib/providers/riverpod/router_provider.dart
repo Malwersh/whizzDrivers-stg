@@ -1,3 +1,5 @@
+import '../../screens/auth/profile_check_screen.dart';
+import '../../features/wallet/screens/zaincash_payment_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -89,7 +91,7 @@ GoRouter router(Ref ref) {
       );
 
       // Allow splash screen to handle auth check
-      if (state.uri.path == '/splash') {
+      if (state.uri.path == '/splash' || state.uri.path == '/profile-check') {
         return null; // Let splash screen handle navigation
       }
 
@@ -118,7 +120,7 @@ GoRouter router(Ref ref) {
           } catch (e) {
             debugPrint('❌ Error checking profile status: $e');
             // On error, redirect to profile setup to be safe
-            return '/driver-profile-setup';
+            return '/profile-check';
           }
         }
 
@@ -127,7 +129,7 @@ GoRouter router(Ref ref) {
         // All navigation happens from Splash after profile check
 
         // If trying to access home or other protected routes, verify profile is complete
-        if (state.uri.path == '/' || state.uri.path.startsWith('/demand-map') || state.uri.path.startsWith('/navigation')) {
+        if (state.uri.path.startsWith('/wallet/') || state.uri.path == '/' || state.uri.path.startsWith('/demand-map') || state.uri.path.startsWith('/navigation')) {
           try {
             final profileStatus = await profileCompletionService.checkProfileCompleteness();
             debugPrint('🔍 Profile status check for protected route: ${profileStatus.status}');
@@ -138,7 +140,7 @@ GoRouter router(Ref ref) {
             }
           } catch (e) {
             debugPrint('❌ Error checking profile status: $e');
-            return '/driver-profile-setup';
+            return '/profile-check';
           }
         }
       }
@@ -146,6 +148,8 @@ GoRouter router(Ref ref) {
       return null;
     },
     routes: [
+      GoRoute(path: '/profile-check', builder: (context, state) => const ProfileCheckScreen()),
+      GoRoute(path: '/wallet/zaincash-return', builder: (context, state) => const ZaincashPaymentScreen()),
       GoRoute(path: '/splash', builder: (context, state) => const SplashPage()),
       GoRoute(path: '/login', builder: (context, state) => const PhoneOtpLoginScreen()),
       GoRoute(path: '/login-legacy', builder: (context, state) => const LoginScreen()),

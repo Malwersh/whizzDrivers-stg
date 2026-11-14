@@ -32,7 +32,7 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          
+
           // Restaurant content
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -64,9 +64,9 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
                             )
                           : null,
                     ),
-                    
+
                     const SizedBox(width: 16),
-                    
+
                     // Restaurant info
                     Expanded(
                       child: Column(
@@ -80,9 +80,7 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
                               color: Colors.black87,
                             ),
                           ),
-                          
                           const SizedBox(height: 4),
-                          
                           Text(
                             restaurant.category,
                             style: TextStyle(
@@ -91,14 +89,12 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
                               fontWeight: FontWeight.w500,
                             ),
                           ),
-                          
                           const SizedBox(height: 4),
-                          
                           Row(
                             children: [
                               const Icon(
                                 Icons.star,
-                                color: Colors.amber,
+                                color: const Color(0xFF00296B),
                                 size: 16,
                               ),
                               const SizedBox(width: 4),
@@ -115,28 +111,33 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
                         ],
                       ),
                     ),
-                    
+
                     // Online status indicator
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: restaurant.isOnline ? Colors.green[100] : Colors.red[100],
+                        color: restaurant.isOnline
+                            ? Colors.green[100]
+                            : Colors.red[100],
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
                         restaurant.isOnline ? 'متاح' : 'مغلق',
                         style: TextStyle(
                           fontSize: 12,
-                          color: restaurant.isOnline ? Colors.green[700] : Colors.red[700],
+                          color: restaurant.isOnline
+                              ? Colors.green[700]
+                              : Colors.red[700],
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
                   ],
                 ),
-                
+
                 const SizedBox(height: 20),
-                
+
                 // Address
                 Row(
                   children: [
@@ -157,17 +158,19 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
                     ),
                   ],
                 ),
-                
+
                 const SizedBox(height: 16),
-                
+
                 // Active orders info
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: _getOrderDensityColor(restaurant.orderDensity).withOpacity(0.1),
+                    color: _getOrderDensityColor(restaurant.orderDensity)
+                        .withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: _getOrderDensityColor(restaurant.orderDensity).withOpacity(0.3),
+                      color: _getOrderDensityColor(restaurant.orderDensity)
+                          .withOpacity(0.3),
                     ),
                   ),
                   child: Row(
@@ -194,14 +197,16 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w700,
-                              color: _getOrderDensityColor(restaurant.orderDensity),
+                              color: _getOrderDensityColor(
+                                  restaurant.orderDensity),
                             ),
                           ),
                         ],
                       ),
                       const Spacer(),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
                           color: _getOrderDensityColor(restaurant.orderDensity),
                           borderRadius: BorderRadius.circular(8),
@@ -218,15 +223,16 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Action button
                 SizedBox(
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
-                    onPressed: restaurant.isOnline && restaurant.activeOrders > 0
+                    onPressed: restaurant.isOnline &&
+                            restaurant.activeOrders > 0
                         ? () {
                             Navigator.pop(context);
                             // Navigate to restaurant details or orders
@@ -252,7 +258,7 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
                     ),
                   ),
                 ),
-                
+
                 const SizedBox(height: 16),
               ],
             ),
@@ -288,7 +294,8 @@ class RestaurantDetailsBottomSheet extends StatelessWidget {
     }
   }
 
-  void _navigateToRestaurantOrders(BuildContext context, RestaurantData restaurant) {
+  void _navigateToRestaurantOrders(
+      BuildContext context, RestaurantData restaurant) {
     // هنا يمكن الانتقال لصفحة طلبات المطعم
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

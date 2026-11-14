@@ -1,0 +1,20 @@
+{
+  "part": 165,
+  "rootCause": "start-searching sent an expired SharedPreferences access token while Amplify already held a refreshed session",
+  "serverProof": "Cognito GetUser: Access Token has expired on the matching start-searching requests",
+  "changes": [
+    "Reuse DriverSearchApiService current-session authentication for start-searching",
+    "No stale preference token or mock token when reconnecting WebSocket",
+    "Bound start-searching HTTP request timeout",
+    "Show authentication/region failure accurately instead of generic internet warning"
+  ],
+  "targetedTestsPassed": 4,
+  "analysisErrors": 0,
+  "serverDeployment": false,
+  "deviceInstallationPending": false,
+  "orderStatusChanged": false,
+  "financialWrites": false,
+  "installedOnIMohammed": true,
+  "profileBuildSucceeded": true,
+  "manualGoOnlineRetestPending": true
+}

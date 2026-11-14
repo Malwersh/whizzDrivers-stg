@@ -12,7 +12,15 @@ class OrderStatusTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final steps = _getSteps();
-    final currentIndex = steps.indexWhere((step) => step.id == currentStatus);
+    final currentIndex = steps.indexWhere((step) =>
+        step.id ==
+        ({
+              'assigned': 'accepted',
+              'at_store': 'arrived_at_store',
+              'at_customer': 'arrived_at_customer',
+              'completed': 'delivered'
+            }[currentStatus] ??
+            currentStatus));
 
     return Card(
       elevation: 2,
@@ -35,7 +43,8 @@ class OrderStatusTimeline extends StatelessWidget {
               final index = entry.key;
               final step = entry.value;
               // المرحلة الأولى (القبول) دائماً مكتملة
-              final isCompleted = index < currentIndex || (index == 0 && currentIndex >= 0);
+              final isCompleted =
+                  index < currentIndex || (index == 0 && currentIndex >= 0);
               final isCurrent = index == currentIndex;
               final isLast = index == steps.length - 1;
 
@@ -128,11 +137,11 @@ class _TimelineStep extends StatelessWidget {
     Color lineColor;
 
     if (isCompleted) {
-      iconColor = Colors.green;
+      iconColor = const Color(0xFF00509D);
       labelColor = Colors.grey[700]!;
-      lineColor = Colors.green;
+      lineColor = const Color(0xFF00509D);
     } else if (isCurrent) {
-      iconColor = Colors.blue;
+      iconColor = const Color(0xFF00509D);
       labelColor = Colors.black;
       lineColor = Colors.grey[300]!;
     } else {
@@ -154,7 +163,9 @@ class _TimelineStep extends StatelessWidget {
                 height: 40,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: isCurrent ? iconColor.withOpacity(0.1) : Colors.transparent,
+                  color: isCurrent
+                      ? iconColor.withOpacity(0.1)
+                      : Colors.transparent,
                   border: Border.all(
                     color: iconColor,
                     width: isCurrent ? 2 : 1.5,
@@ -166,7 +177,7 @@ class _TimelineStep extends StatelessWidget {
                   size: isCurrent ? 24 : 20,
                 ),
               ),
-              
+
               // Vertical line
               if (!isLast)
                 Expanded(

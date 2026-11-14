@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "readOnlyVerification": true,
+  "area": {
+    "id": "Rmhveqa2vrrj13",
+    "name": "ناحية الحيرة"
+  },
+  "days": 7,
+  "slotsPerDay": 24,
+  "simulationLabel": true,
+  "capturedTestDataStillInsufficient": true,
+  "queryCannotOverrideScopeOrDataset": true,
+  "unknownDriverDenied": true,
+  "streamEnabled": true,
+  "hourlyScheduleEnabled": true,
+  "writerRestrictedToAnalytics": true,
+  "ordersOrFinancialRecordsMutated": false
+}

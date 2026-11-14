@@ -1,3 +1,5 @@
+import '../../../utils/readable_colors.dart';
+import '../../more/screens/vehicle_info_screen.dart';
 // Account Status Screen
 // Shown when account is suspended or rejected
 // Version: 1.0
@@ -54,7 +56,7 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: Center(
+        child: SingleChildScrollView(
           child: Padding(
             padding: const EdgeInsets.all(24.0),
             child: Column(
@@ -80,9 +82,9 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen> {
                 Text(
                   isSuspended ? 'حساب معلق' : 'تم رفض الطلب',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 16),
@@ -91,13 +93,13 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen> {
                 Text(
                   isSuspended
                       ? 'تم تعليق حسابك مؤقتاً\n'
-                            'يرجى التواصل مع الدعم الفني للمزيد من المعلومات'
+                          'يرجى التواصل مع الدعم الفني للمزيد من المعلومات'
                       : 'تم رفض طلب الانضمام\n'
-                            'يمكنك التواصل مع الدعم الفني لمعرفة السبب',
+                          'يمكنك التواصل مع الدعم الفني لمعرفة السبب',
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Colors.grey.shade700,
-                    height: 1.5,
-                  ),
+                        color: Colors.grey.shade700,
+                        height: 1.5,
+                      ),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 48),
@@ -146,6 +148,14 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen> {
                 ),
                 const SizedBox(height: 32),
 
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                          builder: (_) => const VehicleInfoScreen())),
+                  icon: const Icon(Icons.description_outlined),
+                  label: const Text('عرض المركبات وتحديث الوثائق'),
+                ),
+                const SizedBox(height: 12),
                 // Logout button
                 ElevatedButton(
                   onPressed: () async {
@@ -156,6 +166,7 @@ class _AccountStatusScreenState extends ConsumerState<AccountStatusScreen> {
                     }
                   },
                   style: ElevatedButton.styleFrom(
+                    foregroundColor: readableForeground(Colors.red.shade600),
                     backgroundColor: Colors.red.shade600,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 48,

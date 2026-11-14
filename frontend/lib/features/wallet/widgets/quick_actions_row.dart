@@ -1,3 +1,6 @@
+import '../screens/monthly_statement_screen.dart';
+import '../providers/wallet_provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../screens/topup_screen.dart';
 import 'package:flutter/material.dart';
 import '../../../design_system/app_colors.dart';
@@ -7,11 +10,11 @@ import '../../../design_system/app_colors.dart';
 /// Provides quick access buttons for common wallet actions
 /// - Top up balance (شحن الرصيد)
 /// - Monthly statement (الكشف الشهري)
-class QuickActionsRow extends StatelessWidget {
+class QuickActionsRow extends ConsumerWidget {
   const QuickActionsRow({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
       child: Row(
@@ -36,9 +39,11 @@ class QuickActionsRow extends StatelessWidget {
                 ),
                 elevation: 0,
               ),
-              onPressed: () {
-                Navigator.of(context).push(
+              onPressed: () async {
+                await Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const TopupScreen()));
+                if (context.mounted)
+                  ref.read(walletRefreshProvider.notifier).state++;
               },
             ),
           ),
@@ -70,13 +75,8 @@ class QuickActionsRow extends StatelessWidget {
                 ),
               ),
               onPressed: () {
-                // TODO: Navigate to MonthlyStatementScreen (Phase 1B)
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('الكشف الشهري - قريباً'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const MonthlyStatementScreen()));
               },
             ),
           ),

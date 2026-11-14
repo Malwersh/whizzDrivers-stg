@@ -1,516 +1,595 @@
+import '../widgets/active_assignment_guard.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/active_order_model.dart';
 import '../../../providers/riverpod/active_order_provider.dart';
+import '../widgets/active_trip_summary.dart';
+import '../widgets/driver_trip_help.dart';
 import '../widgets/store_issue_bottom_sheet.dart';
-import '../widgets/cancel_order_dialog.dart';
-import '../widgets/unassign_order_bottom_sheet.dart';
-import '../../../services/driver_service.dart';
+import '../widgets/driver_unassign_flow.dart';
+import '../widgets/trip_arrival_slider.dart';
+import '../../home/widgets/order_items_bottom_sheet.dart';
 
-/// شاشة في المطعم - المرحلة 2
 class AtRestaurantScreen extends ConsumerStatefulWidget {
+  const AtRestaurantScreen({super.key, required this.order, this.onContinue});
   final ActiveOrder order;
-
-  const AtRestaurantScreen({
-    super.key,
-    required this.order,
-  });
-
+  final void Function(ActiveOrder)? onContinue;
   @override
-  ConsumerState<AtRestaurantScreen> createState() =>
-      _AtRestaurantScreenState();
+  ConsumerState<AtRestaurantScreen> createState() => _AtRestaurantScreenState();
 }
 
 class _AtRestaurantScreenState extends ConsumerState<AtRestaurantScreen> {
-  bool _isLoading = false;
-
+  late ActiveOrder _order;
+  bool _reading = false, _busy = false, _fresh = false;
+  String? _error;
+  bool get _pickedUp =>
+      ['picked_up', 'heading_to_customer'].contains(_order.status);
+  bool get _canConfirm =>
+      _fresh &&
+      !_reading &&
+      !_busy &&
+      ['at_store', 'arrived_at_store', 'picked_up', 'heading_to_customer']
+          .contains(_order.status);
   @override
   void initState() {
     super.initState();
-    // تحديث الـ Provider بالطلب الحالي (مهم بعد hot restart)
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(activeOrderProvider.notifier).updateOrder(widget.order);
+    _order = widget.order;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  Future<ActiveOrder> _read() async {
+    final order = await ref
+        .read(activeOrderServiceProvider)
+        .getOrderById(widget.order.orderId);
+    if (!mounted) throw StateError('Screen closed');
+    if (order.orderId != widget.order.orderId)
+      throw StateError('Order changed');
+    setState(() {
+      _order = order;
+      _fresh = true;
     });
+    ref.read(activeOrderProvider.notifier).updateOrder(order);
+    return order;
   }
 
-  void _showCancelDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => CancelOrderDialog(
-        orderId: widget.order.orderId,
-        onCancel: (reason, notes) async {
-          // استدعاء API الإلغاء من خلال الـ Provider
-          final success = await ref
-              .read(activeOrderProvider.notifier)
-              .cancelOrderByDriver(reason: reason, notes: notes);
-          
-          if (!success && mounted) {
-            throw Exception('فشل في إلغاء الطلب');
-          }
-        },
-      ),
-    );
-  }
-
-  void _showUnassignBottomSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => UnassignOrderBottomSheet(
-        orderId: widget.order.orderId,
-        onUnassign: (reason) async {
-          // استدعاء API فك الارتباط
-          final result = await DriverService.unassignActiveOrder(reason);
-          
-          if (result['success'] == true) {
-            if (mounted) {
-              // عرض رسالة نجاح
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(result['message'] ?? 'تم فك الارتباط من الطلب بنجاح'),
-                  backgroundColor: Colors.green,
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-              
-              // مسح الطلب النشط من الـ Provider
-              ref.read(activeOrderProvider.notifier).clearOrder();
-              
-              // تحديث حالة البحث في SharedPreferences
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('isSearchingForOffers', true);
-              await prefs.setString('searchEndTime', 
-                DateTime.now().add(const Duration(hours: 2)).toIso8601String());
-              
-              // العودة للصفحة الرئيسية
-              context.go('/');
-            }
-          } else {
-            throw Exception(result['message'] ?? 'فشل في فك الارتباط من الطلب');
-          }
-        },
-      ),
-    );
-  }
-
-  void _showIssueSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => StoreIssueBottomSheet(
-        orderId: widget.order.orderId,
-        onSubmit: (issueType, notes) async {
-          // TODO: Call API to report issue
-          // For now, just show success
-          await Future.delayed(const Duration(seconds: 1));
-          print('Issue reported: $issueType - $notes');
-        },
-      ),
-    );
-  }
-
-  Future<void> _pickupOrder() async {
-    setState(() => _isLoading = true);
-
-    // 1️⃣ أولاً: تحديث الحالة إلى picked_up
-    final pickupSuccess =
-        await ref.read(activeOrderProvider.notifier).pickupOrder();
-
-    if (!pickupSuccess) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('فشل تأكيد استلام الطلب. حاول مرة أخرى.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      return;
-    }
-
-    // 2️⃣ ثانياً: تحديث الحالة إلى heading_to_customer
-    final headingSuccess =
-        await ref.read(activeOrderProvider.notifier).startHeadingToCustomer();
-
-    setState(() => _isLoading = false);
-
-    if (headingSuccess && mounted) {
-      // 3️⃣ ثالثاً: الانتقال لشاشة التوجه للعميل
-      final updatedOrder = ref.read(activeOrderProvider).order;
-      if (updatedOrder != null) {
-        context.go('/heading-to-customer', extra: updatedOrder);
-      }
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('فشل بدء التوجه للعميل. حاول مرة أخرى.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+  Future<void> _refresh() async {
+    if (_busy || _reading) return;
+    setState(() {
+      _reading = true;
+      _error = null;
+    });
+    try {
+      await _read();
+    } catch (_) {
+      if (mounted)
+        setState(() {
+          _fresh = false;
+          _error = 'تعذر تحديث الطلب. تحقق من الاتصال وأعد المحاولة.';
+        });
+    } finally {
+      if (mounted) setState(() => _reading = false);
     }
   }
 
+  void _continue(ActiveOrder order) {
+    if (widget.onContinue != null) {
+      widget.onContinue!(order);
+    } else {
+      context.go('/heading-to-customer', extra: order);
+    }
+  }
+
+  Future<void> _confirmPickup() async {
+    if (!_canConfirm) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _read();
+      if (!mounted) return;
+      if (_order.status == 'heading_to_customer') {
+        _continue(_order);
+        return;
+      }
+      if (['at_store', 'arrived_at_store'].contains(_order.status)) {
+        final success =
+            await ref.read(activeOrderProvider.notifier).pickupOrder();
+        if (!mounted) return;
+        if (success) {
+          final updated = ref.read(activeOrderProvider).order;
+          if (updated == null || updated.orderId != _order.orderId)
+            throw StateError('Order changed');
+          setState(() => _order = updated);
+        } else {
+          await _read();
+          if (!['picked_up', 'heading_to_customer'].contains(_order.status))
+            throw StateError('Pickup unconfirmed');
+        }
+      }
+      if (!mounted) return;
+      if (_order.status == 'heading_to_customer') {
+        _continue(_order);
+        return;
+      }
+      if (_order.status != 'picked_up')
+        throw StateError('Pickup stage changed');
+      final heading =
+          await ref.read(activeOrderProvider.notifier).startHeadingToCustomer();
+      if (!mounted) return;
+      if (heading) {
+        final updated = ref.read(activeOrderProvider).order;
+        if (updated == null || updated.orderId != _order.orderId)
+          throw StateError('Order changed');
+        setState(() => _order = updated);
+      } else {
+        await _read();
+      }
+      if (_order.status == 'heading_to_customer') {
+        _continue(_order);
+      } else {
+        setState(() => _error =
+            'تم تأكيد الاستلام. أعد السحب لمتابعة التوصيل إلى الزبون.');
+      }
+    } catch (_) {
+      if (mounted)
+        setState(() => _error = _pickedUp
+            ? 'تم تأكيد الاستلام. حدّث الطلب للمتابعة إلى الزبون.'
+            : 'لم يتأكد استلام الطلب. حدّث الطلب وأعد المحاولة.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _call(String? phone) async {
+    if (phone == null || phone.trim().isEmpty) return;
+    try {
+      if (!await launchUrl(Uri(scheme: 'tel', path: phone),
+          mode: LaunchMode.externalApplication)) throw Exception();
+    } catch (_) {
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('تعذر فتح الاتصال')));
+    }
+  }
+
+  Future<void> _help() async {
+    if (_busy || _reading) return;
+    final action = await showModalBottomSheet<DriverTripHelpAction>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => DriverTripHelp(order: _order));
+    if (!mounted || action == null) return;
+    switch (action) {
+      case DriverTripHelpAction.unableToDeliver:
+        break;
+      case DriverTripHelpAction.callStore:
+        await _call(_order.restaurantPhone);
+        break;
+      case DriverTripHelpAction.callCustomer:
+        await _call(_order.customerPhone);
+        break;
+      case DriverTripHelpAction.items:
+        await showModalBottomSheet(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: Colors.transparent,
+            builder: (_) => OrderItemsBottomSheet(
+                items: _order.items, restaurantName: _order.restaurantName));
+        break;
+      case DriverTripHelpAction.unassign:
+        await showDriverUnassignFlow(context, ref, _order);
+        break;
+      case DriverTripHelpAction.reportPickup:
+        if (!TripStyle.canUnassign(_order)) return;
+        final saved = await showModalBottomSheet<bool>(
+            context: context,
+            isScrollControlled: true,
+            useSafeArea: true,
+            isDismissible: false,
+            enableDrag: false,
+            backgroundColor: Colors.transparent,
+            builder: (_) => StoreIssueBottomSheet(
+                orderId: _order.orderId,
+                onSubmit: (type, notes) async {
+                  final result = await ref
+                      .read(activeOrderServiceProvider)
+                      .reportStoreIssue(_order.orderId,
+                          issueType: type,
+                          notes: notes,
+                          assignment: _order.financialAssignment);
+                  if (result['success'] != true ||
+                      result['orderId'] != _order.orderId)
+                    throw Exception('لم يتأكد حفظ البلاغ');
+                }));
+        if (saved == true && mounted)
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('تم حفظ بلاغ مشكلة الاستلام')));
+        break;
+    }
+  }
+
+  Widget _card(Widget child) => Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE0E7F0))),
+      child: child);
+  Widget _sectionTitle(IconData icon, String text) => Row(children: [
+        Icon(icon, color: TripStyle.blue, size: 22),
+        const SizedBox(width: 10),
+        Expanded(
+            child: Text(text,
+                style: const TextStyle(
+                    color: TripStyle.ink,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold)))
+      ]);
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        title: const Text('استلام الطلب من المطعم'),
-        centerTitle: true,
-        elevation: 0,
-        backgroundColor: Colors.green,
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.cancel_outlined),
-            tooltip: 'إلغاء الطلب',
-            onPressed: _showCancelDialog,
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Restaurant info card
-            _buildRestaurantCard(),
+  Widget build(BuildContext context) => ActiveAssignmentGuard(
+      order: _order, enabled: !_busy, child: _buildScreen(context));
 
-            const SizedBox(height: 16),
-
-            // Order details card
-            _buildOrderDetailsCard(),
-
-            const SizedBox(height: 16),
-
-            // Items list
-            _buildItemsList(),
-
-            const SizedBox(height: 24),
-
-            // Pickup button
-            ElevatedButton(
-              onPressed: _isLoading ? null : _pickupOrder,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                minimumSize: const Size(double.infinity, 54),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(100),
-                ),
-              ),
-              child: _isLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : const Text(
-                      'تأكيد استلام الطلب',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-            ),
-
-            const SizedBox(height: 12),
-
-            // Unassign button
-            OutlinedButton.icon(
-              onPressed: _isLoading ? null : _showUnassignBottomSheet,
-              icon: const Icon(Icons.link_off_rounded, size: 20),
-              label: const Text(
-                'فك الارتباط من الطلب',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.orange,
-                side: const BorderSide(color: Colors.orange, width: 2),
-                minimumSize: const Size(double.infinity, 54),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(100),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 12),
-
-            // Report issue button
-            OutlinedButton.icon(
-              onPressed: _isLoading ? null : _showIssueSheet,
-              icon: Icon(Icons.report_problem, color: Colors.red[700]),
-              label: Text(
-                'هناك مشكلة في الطلب',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.red[700],
-                ),
-              ),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 54),
-                side: BorderSide(color: Colors.red[700]!, width: 2),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(100),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRestaurantCard() {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                color: Colors.orange[100],
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                Icons.restaurant,
-                color: Colors.orange[800],
-                size: 32,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.order.restaurantName,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.order.restaurantAddress,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            IconButton(
-              onPressed: () {
-                // TODO: Call restaurant
-              },
-              icon: Icon(Icons.phone, color: Colors.green[700]),
-              iconSize: 28,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOrderDetailsCard() {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'تفاصيل الطلب',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.grey[800],
-              ),
-            ),
-            const SizedBox(height: 16),
-            _buildInfoRow(
-              Icons.receipt,
-              'رقم الطلب',
-              '#${widget.order.orderNumber ?? widget.order.shortOrderId}',
-            ),
-            const Divider(height: 24),
-            _buildInfoRow(
-              Icons.person,
-              'اسم العميل',
-              widget.order.customerName,
-            ),
-            const Divider(height: 24),
-            _buildInfoRow(
-              Icons.attach_money,
-              'إجمالي المبلغ',
-              '${(widget.order.total ?? widget.order.totalAmount).toStringAsFixed(0)} دينار',
-              valueColor: Colors.green[700],
-            ),
-            const Divider(height: 24),
-            _buildInfoRow(
-              Icons.payment,
-              'طريقة الدفع',
-              widget.order.isCashPayment ? '💵 نقدي' : '💳 بطاقة',
-              valueColor: widget.order.isCashPayment
-                  ? Colors.green[700]
-                  : Colors.blue[700],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildItemsList() {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'الأصناف',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey[800],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.blue[100],
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '${widget.order.items.length} صنف',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue[800],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            ...widget.order.items.map((item) => _buildItemRow(item)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildItemRow(OrderItem item) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: Colors.orange[100],
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: Text(
-                '${item.quantity}×',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.orange[800],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.name,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                // Special instructions removed - not in OrderItem model
-              ],
-            ),
-          ),
-          Text(
-            '${item.price.toStringAsFixed(0)} د',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey[700],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoRow(
-    IconData icon,
-    String label,
-    String value, {
-    Color? valueColor,
-  }) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: Colors.grey[600]),
-        const SizedBox(width: 8),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.grey[600],
-          ),
-        ),
-        const Spacer(),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.bold,
-            color: valueColor ?? Colors.grey[800],
-          ),
-        ),
-      ],
-    );
+  Widget _buildScreen(BuildContext context) {
+    final quantity =
+        _order.items.fold<int>(0, (sum, item) => sum + item.quantity);
+    final number = _order.orderNumber ?? _order.shortOrderId;
+    return Directionality(
+        textDirection: TextDirection.rtl,
+        child: Scaffold(
+            backgroundColor: TripStyle.background,
+            appBar: AppBar(
+                title: const Text('استلام الطلب',
+                    style:
+                        TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                centerTitle: true,
+                backgroundColor: Colors.white,
+                foregroundColor: TripStyle.ink,
+                elevation: 0,
+                actions: [
+                  TextButton.icon(
+                      onPressed: _busy || _reading ? null : _help,
+                      icon: const Icon(Icons.help_outline, size: 19),
+                      label: const Text('مساعدة'),
+                      style:
+                          TextButton.styleFrom(foregroundColor: TripStyle.blue))
+                ]),
+            body: Column(children: [
+              if (_reading)
+                const LinearProgressIndicator(color: TripStyle.blue),
+              Expanded(
+                  child: RefreshIndicator(
+                      onRefresh: _refresh,
+                      child: ListView(
+                          padding: const EdgeInsets.all(20),
+                          children: [
+                            Container(
+                                padding: const EdgeInsets.all(20),
+                                decoration: BoxDecoration(
+                                    color: TripStyle.ink,
+                                    borderRadius: BorderRadius.circular(22)),
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      Row(children: [
+                                        Container(
+                                            padding: const EdgeInsets.all(9),
+                                            decoration: BoxDecoration(
+                                                color: TripStyle.yellow,
+                                                borderRadius:
+                                                    BorderRadius.circular(12)),
+                                            child: const Icon(
+                                                Icons.shopping_bag_outlined,
+                                                color: TripStyle.ink)),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                            child: Text(
+                                                _pickedUp
+                                                    ? 'تم استلام الطلب'
+                                                    : 'طابق الطلب قبل استلامه',
+                                                style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 19,
+                                                    fontWeight:
+                                                        FontWeight.bold)))
+                                      ]),
+                                      const SizedBox(height: 18),
+                                      const Text('رقم الطلب',
+                                          style: TextStyle(
+                                              color: Color(0xFFD8E4F2),
+                                              fontSize: 12)),
+                                      Row(children: [
+                                        Expanded(
+                                            child: SelectableText(number,
+                                                textDirection:
+                                                    TextDirection.ltr,
+                                                style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 18,
+                                                    fontWeight:
+                                                        FontWeight.bold))),
+                                        IconButton(
+                                            tooltip: 'نسخ رقم الطلب',
+                                            onPressed: () async {
+                                              await Clipboard.setData(
+                                                  ClipboardData(text: number));
+                                              if (mounted)
+                                                ScaffoldMessenger.of(context)
+                                                    .showSnackBar(const SnackBar(
+                                                        content: Text(
+                                                            'تم نسخ رقم الطلب')));
+                                            },
+                                            icon: const Icon(
+                                                Icons.copy_outlined,
+                                                color: Colors.white,
+                                                size: 20))
+                                      ]),
+                                    ])),
+                            const SizedBox(height: 16),
+                            _card(Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _sectionTitle(Icons.storefront_outlined,
+                                      'نقطة الاستلام'),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Expanded(
+                                            child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                              Text(_order.restaurantName,
+                                                  style: const TextStyle(
+                                                      fontSize: 19,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      color: TripStyle.ink)),
+                                              if (_order
+                                                  .restaurantAddress.isNotEmpty)
+                                                Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 6),
+                                                    child: Text(
+                                                        _order
+                                                            .restaurantAddress,
+                                                        style: const TextStyle(
+                                                            color:
+                                                                TripStyle.muted,
+                                                            height: 1.6)))
+                                            ])),
+                                        if (_order.restaurantPhone
+                                                ?.trim()
+                                                .isNotEmpty ==
+                                            true)
+                                          IconButton(
+                                              tooltip: 'الاتصال بالمتجر',
+                                              onPressed: _busy
+                                                  ? null
+                                                  : () => _call(
+                                                      _order.restaurantPhone),
+                                              icon: const Icon(
+                                                  Icons.call_outlined,
+                                                  color: TripStyle.blue))
+                                      ])
+                                ])),
+                            const SizedBox(height: 16),
+                            _card(Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _sectionTitle(Icons.receipt_long_outlined,
+                                      'الأصناف المطلوبة'),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                      '${_order.items.length} أصناف • $quantity قطع',
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          color: TripStyle.muted)),
+                                  const SizedBox(height: 16),
+                                  if (_order.items.isEmpty)
+                                    const Text(
+                                        'تعذر عرض الأصناف. حدّث الطلب للتحقق.',
+                                        style:
+                                            TextStyle(color: TripStyle.muted)),
+                                  ..._order.items.asMap().entries.map((entry) {
+                                    final item = entry.value;
+                                    return Column(children: [
+                                      if (entry.key > 0)
+                                        const Divider(height: 28),
+                                      Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Container(
+                                                constraints:
+                                                    const BoxConstraints(
+                                                        minWidth: 42),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 10,
+                                                        vertical: 8),
+                                                decoration: BoxDecoration(
+                                                    color:
+                                                        const Color(0xFFEDF3FA),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            12)),
+                                                child: Text('×${item.quantity}',
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(
+                                                        color: TripStyle.blue,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 16))),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                                child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                  Text(item.name,
+                                                      style: const TextStyle(
+                                                          color: TripStyle.ink,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          fontSize: 16)),
+                                                  if (item.modifiers
+                                                          ?.isNotEmpty ==
+                                                      true)
+                                                    Padding(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .only(top: 4),
+                                                        child: Text(
+                                                            item
+                                                                .modifiers!
+                                                                .join('، '),
+                                                            style: const TextStyle(
+                                                                color: TripStyle
+                                                                    .muted,
+                                                                height: 1.6))),
+                                                  if (item.notes
+                                                          ?.trim()
+                                                          .isNotEmpty ==
+                                                      true)
+                                                    Padding(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .only(top: 4),
+                                                        child: Text(item.notes!,
+                                                            style: const TextStyle(
+                                                                color: TripStyle
+                                                                    .muted,
+                                                                height: 1.6)))
+                                                ]))
+                                          ])
+                                    ]);
+                                  }),
+                                  const SizedBox(height: 16),
+                                  Container(
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                          color: const Color(0xFFFFF7D9),
+                                          borderRadius:
+                                              BorderRadius.circular(12)),
+                                      child: const Text(
+                                          'تحقق من رقم الطلب والأصناف والكميات قبل تأكيد الاستلام.',
+                                          style: TextStyle(
+                                              color: TripStyle.ink,
+                                              fontSize: 12,
+                                              height: 1.6))),
+                                ])),
+                            if (_order.specialInstructions?.trim().isNotEmpty ==
+                                true) ...[
+                              const SizedBox(height: 16),
+                              _card(Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _sectionTitle(
+                                        Icons.notes_outlined, 'ملاحظات الطلب'),
+                                    const SizedBox(height: 10),
+                                    Text(_order.specialInstructions!,
+                                        style: const TextStyle(
+                                            color: TripStyle.muted,
+                                            height: 1.6))
+                                  ]))
+                            ],
+                            const SizedBox(height: 16),
+                            _card(Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _sectionTitle(Icons.location_on_outlined,
+                                      'نقطة التسليم'),
+                                  const SizedBox(height: 12),
+                                  Text(_order.customerName,
+                                      style: const TextStyle(
+                                          color: TripStyle.ink,
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold)),
+                                  if (_order.customerAddress.isNotEmpty)
+                                    Padding(
+                                        padding: const EdgeInsets.only(top: 6),
+                                        child: Text(_order.customerAddress,
+                                            style: const TextStyle(
+                                                color: TripStyle.muted,
+                                                height: 1.6)))
+                                ])),
+                            const SizedBox(height: 16),
+                            _card(Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _sectionTitle(
+                                      Icons.payments_outlined,
+                                      _order.isCashPayment
+                                          ? 'التحصيل عند التسليم'
+                                          : 'طريقة الدفع'),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                      '${(_order.total ?? _order.totalAmount).toStringAsFixed(0)} د.ع',
+                                      style: const TextStyle(
+                                          color: TripStyle.ink,
+                                          fontSize: 28,
+                                          fontWeight: FontWeight.bold)),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                      _order.isCashPayment
+                                          ? 'نقدًا • يُحصّل من الزبون عند التسليم'
+                                          : 'الدفع بالبطاقة',
+                                      style: const TextStyle(
+                                          color: TripStyle.muted, height: 1.6))
+                                ])),
+                            if (_error != null) ...[
+                              const SizedBox(height: 16),
+                              _card(Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Text(_error!,
+                                        style: const TextStyle(
+                                            color: Color(0xFFAF2536),
+                                            height: 1.6)),
+                                    TextButton(
+                                        onPressed: _busy ? null : _refresh,
+                                        style: TextButton.styleFrom(
+                                            foregroundColor: TripStyle.blue),
+                                        child: const Text('تحديث الطلب'))
+                                  ]))
+                            ],
+                          ]))),
+              Container(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                  decoration: const BoxDecoration(
+                      color: Colors.white,
+                      border:
+                          Border(top: BorderSide(color: Color(0xFFE0E7F0)))),
+                  child: SafeArea(
+                      top: false,
+                      child: TripArrivalSlider(
+                          enabled: _canConfirm,
+                          onConfirm: _confirmPickup,
+                          label: _pickedUp
+                              ? 'اسحب لمتابعة التوصيل'
+                              : 'اسحب لتأكيد الاستلام',
+                          confirmingLabel: _pickedUp
+                              ? 'جارٍ بدء التوصيل'
+                              : 'جارٍ تأكيد الاستلام',
+                          releaseLabel: _pickedUp
+                              ? 'أفلت لمتابعة التوصيل'
+                              : 'أفلت لتأكيد الاستلام',
+                          semanticsLabel: _pickedUp
+                              ? 'اسحب إلى اليسار لمتابعة التوصيل'
+                              : 'اسحب إلى اليسار لتأكيد استلام الطلب'))),
+            ])));
   }
 }

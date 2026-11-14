@@ -1,0 +1,10 @@
+{
+  "uploadAndReceipt": true,
+  "idempotentReplay": true,
+  "list": true,
+  "authenticatedReadAndHash": true,
+  "otherDriverRejected": true,
+  "noStatusOrFinancialChange": true,
+  "readableAfterDelivery": true,
+  "disposableOrderAndObjectsCleaned": true
+}

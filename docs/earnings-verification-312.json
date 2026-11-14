@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "readOnly": true,
+  "timezone": "America/Chicago",
+  "periodStart": "2026-10-19T00:00:00-05:00",
+  "periodEnd": "2026-10-25T23:59:59.999000-05:00",
+  "pages": 1,
+  "completedTrips": 12,
+  "confirmedTrips": 12,
+  "unconfirmedTrips": 0,
+  "confirmedTotal": 37000,
+  "baseTotal": 32750,
+  "tipTotal": 4250,
+  "yallaEntitlement": 2750,
+  "cashCollectionExcluded": true,
+  "walletCashflowExcluded": true,
+  "awsMutated": false
+}
