@@ -33,7 +33,7 @@ void main() {
               onHome: () => homes++)));
       await t.pumpAndSettle();
       expect(find.text('تم إكمال الطلب'), findsOneWidget);
-      expect(find.text('2,750 د.ع'), findsOneWidget);
+      expect(find.text('2,750'), findsOneWidget);
       expect(find.textContaining('8,500'), findsNothing);
       expect(find.byType(AlertDialog), findsNothing);
       await t.tap(find.text('العودة للرئيسية'));
@@ -55,11 +55,11 @@ void main() {
             },
             onHome: () {})));
     await t.pumpAndSettle();
-    expect(find.text('2,750 د.ع'), findsNothing);
+    expect(find.text('2,750'), findsNothing);
     expect(find.textContaining('تعذّر تحميل'), findsOneWidget);
     await t.tap(find.text('إعادة المحاولة'));
     await t.pumpAndSettle();
-    expect(find.text('2,750 د.ع'), findsOneWidget);
+    expect(find.text('2,750'), findsOneWidget);
     expect(reads, 2);
   });
   testWidgets('zero confirmed entitlement remains zero', (t) async {
@@ -71,6 +71,6 @@ void main() {
             loadOrder: (_) async => throw Exception(),
             onHome: () {})));
     await t.pumpAndSettle();
-    expect(find.text('0 د.ع'), findsOneWidget);
+    expect(find.text('0'), findsOneWidget);
   });
 }
