@@ -28,7 +28,22 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+def uploadSigningFile = rootProject.file("key.properties")
+def uploadSigning = new Properties()
+if (uploadSigningFile.isFile()) {
+    uploadSigningFile.withInputStream { uploadSigning.load(it) }
+}
+
 android {
+    if (uploadSigningFile.isFile()) {
+        signingConfigs.create("upload") {
+            storeFile = rootProject.file(uploadSigning.getProperty("storeFile"))
+            storePassword = uploadSigning.getProperty("storePassword")
+            keyAlias = uploadSigning.getProperty("keyAlias")
+            keyPassword = uploadSigning.getProperty("keyPassword")
+        }
+    }
+
     namespace "com.wiz.wizdriverapp"
     compileSdkVersion flutter.compileSdkVersion
     ndkVersion flutter.ndkVersion
@@ -59,9 +74,7 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.findByName("upload")
         }
     }
 }
