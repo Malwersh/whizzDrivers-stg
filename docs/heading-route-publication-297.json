@@ -1,0 +1,17 @@
+{
+  "function": "DriversApi-staging",
+  "beforeCodeSha256": "Aq4MMciv+rxhNziyIVFa9qZs04qBJbc9KAMUrLyiCzc=",
+  "beforeRevisionId": "8b8ab147-1ae5-4df0-a936-3545e03bed41",
+  "role": "arn:aws:iam::699561669180:role/drivers-api-staging-DriversApiFunctionRole-ngkzZnWAPRS0",
+  "candidateHexSha256": "b4e0956545ec8009f43afd843c1162c61ccd80069d1d873f45ce3353b728d056",
+  "changedEntries": [
+    "lambda_driver_api_v2.js",
+    "driver-trip-route.js"
+  ],
+  "afterCodeSha256": "tOCVZUXsgAn0Ov2EPBFixhzNgAadHYc/Rc4zU7co0FY=",
+  "verifiedStatus": "Successful",
+  "policyName": "DriverTripRouteRead297",
+  "environmentAdded": [
+    "DRIVER_ROUTE_MAPBOX_SECRET_ARN"
+  ]
+}

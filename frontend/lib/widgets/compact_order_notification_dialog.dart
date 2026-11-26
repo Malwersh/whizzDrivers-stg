@@ -92,7 +92,7 @@ class _CompactOrderNotificationDialogState
     Navigator.of(context).pop();
     widget.onAccept();
     HapticFeedback.lightImpact();
-    
+
     // Placeholder: Navigation to be implemented
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -275,7 +275,8 @@ class _CompactOrderNotificationDialogState
                 ],
               ),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
+              border:
+                  Border.all(color: AppColors.success.withValues(alpha: 0.3)),
             ),
             child: Row(
               children: [
@@ -287,7 +288,7 @@ class _CompactOrderNotificationDialogState
                   ),
                   child: const Icon(
                     Icons.monetization_on,
-                    color: Colors.white,
+                    color: const Color(0xFF00296B),
                     size: 20,
                   ),
                 ),
@@ -416,7 +417,7 @@ class _CompactOrderNotificationDialogState
                         style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.bold,
-                          color: Colors.white,
+                          color: const Color(0xFF00296B),
                         ),
                       ),
                     ),
@@ -438,7 +439,7 @@ class _CompactOrderNotificationDialogState
                           const Icon(
                             Icons.location_on,
                             size: 16,
-                            color: AppColors.primary,
+                            color: const Color(0xFF00296B),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
@@ -604,7 +605,9 @@ class _CompactOrderNotificationDialogState
             errorBuilder: (context, error, stackTrace) {
               // Fallback to icon if image fails to load
               return Icon(
-                isSingleOrder ? Icons.delivery_dining : Icons.featured_play_list,
+                isSingleOrder
+                    ? Icons.delivery_dining
+                    : Icons.featured_play_list,
                 color: Colors.white,
                 size: 28,
               );
@@ -728,7 +731,7 @@ class _CompactOrderNotificationDialogState
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            
+
             // Header
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -750,9 +753,9 @@ class _CompactOrderNotificationDialogState
                 ],
               ),
             ),
-            
+
             const Divider(height: 1),
-            
+
             // Items list
             Expanded(
               child: ListView.builder(
@@ -778,30 +781,31 @@ class _CompactOrderNotificationDialogState
                             color: Colors.grey[300],
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: item.imageUrl != null && item.imageUrl!.isNotEmpty
-                            ? ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  item.imageUrl!,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) {
-                                    return Icon(
-                                      Icons.restaurant_menu,
-                                      color: Colors.grey[600],
-                                      size: 30,
-                                    );
-                                  },
+                          child: item.imageUrl != null &&
+                                  item.imageUrl!.isNotEmpty
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Image.network(
+                                    item.imageUrl!,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Icon(
+                                        Icons.restaurant_menu,
+                                        color: Colors.grey[600],
+                                        size: 30,
+                                      );
+                                    },
+                                  ),
+                                )
+                              : Icon(
+                                  Icons.restaurant_menu,
+                                  color: Colors.grey[600],
+                                  size: 30,
                                 ),
-                              )
-                            : Icon(
-                                Icons.restaurant_menu,
-                                color: Colors.grey[600],
-                                size: 30,
-                              ),
                         ),
-                        
+
                         const SizedBox(width: 12),
-                        
+
                         // Item details
                         Expanded(
                           child: Column(
@@ -829,7 +833,7 @@ class _CompactOrderNotificationDialogState
                             ],
                           ),
                         ),
-                        
+
                         // Quantity circle
                         Container(
                           width: 32,
@@ -842,7 +846,7 @@ class _CompactOrderNotificationDialogState
                             child: Text(
                               '${item.quantity}',
                               style: const TextStyle(
-                                color: Colors.white,
+                                color: const Color(0xFF00296B),
                                 fontWeight: FontWeight.bold,
                                 fontSize: 14,
                               ),

@@ -1,0 +1,7 @@
+# Delivery failure sheet — 308
+
+Replaced initial push/pushReplacement entry into ReturnOrderScreen from heading-to-customer and delivery with a single bottom sheet. Shared return logic runs in asSheet presentation: rounded white safe-area surface, compact bounded scrollable content, blue/yellow theme, short order number, close and persistent “العودة إلى الطلب” footer. Dropdowns expand within narrow screen bounds. Opening/closing only reads state; no report, cash declaration or return submission is triggered.
+
+Pending requests disable closing/actions. Customer-unreachable still requires the existing delivery-attempt evidence flow where policy requires it; no-cash confirmation and server-verified assignment/state gates are preserved. After an explicit request confirms a returning state, the sheet closes and the existing full return-continuation flow replaces the active delivery route, with updated provider state. Previously returning orders also resume the proper continuation.
+
+Validation: 15 widget/return/delivery/customer-trip tests passed, including 320/390 widths with bottom-safe inset, dismissal with zero mutation calls, and a mocked explicit return request transitioning exactly once to the established continuation. Targeted analyzer no errors/warnings, style infos only. Profile build248 succeeded and installed on the test iPhone; app launch requested. No server deploy or live test-order mutation.

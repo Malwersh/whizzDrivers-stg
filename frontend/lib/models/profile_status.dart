@@ -62,7 +62,8 @@ class ProfileStatus {
   });
 
   /// Check if user can access the main app
-  bool get canAccessMainApp => isComplete && status == ProfileStatusEnum.active;
+  bool get canAccessMainApp =>
+      !needsRedirect && isComplete && status == ProfileStatusEnum.active;
 
   /// Get user-friendly status message
   String get statusMessage {
@@ -112,9 +113,8 @@ class ProfileStatus {
       isComplete: json['isComplete'] ?? false,
       missingFields: List<String>.from(json['missingFields'] ?? []),
       needsRedirect: !(json['isComplete'] ?? false),
-      redirectPath: (json['isComplete'] ?? false)
-          ? null
-          : '/driver-profile-setup',
+      redirectPath:
+          (json['isComplete'] ?? false) ? null : '/driver-profile-setup',
       profileData: json['profileData'],
     );
   }

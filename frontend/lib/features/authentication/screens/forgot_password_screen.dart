@@ -12,7 +12,8 @@ class ForgotPasswordScreen extends ConsumerStatefulWidget {
   const ForgotPasswordScreen({super.key});
 
   @override
-  ConsumerState<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
+  ConsumerState<ForgotPasswordScreen> createState() =>
+      _ForgotPasswordScreenState();
 }
 
 class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
@@ -64,7 +65,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     final phoneRaw = _phoneController.text.trim();
     _normalizedPhone = IdentityNormalizer.normalizeIraqiPhone(phoneRaw);
     final throttleNotifier = ref.read(verificationThrottleProvider.notifier);
-    final throttleState = ref.read(verificationThrottleProvider).identityState(_normalizedPhone!);
+    final throttleState =
+        ref.read(verificationThrottleProvider).identityState(_normalizedPhone!);
     if (throttleState.cooldownRemaining > 0 || throttleState.isSending) {
       return; // ignore spam taps
     }
@@ -81,21 +83,39 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
           identity: _normalizedPhone!,
           channel: 'phone',
           purpose: 'password_reset',
-          attempt: ref.read(verificationThrottleProvider).identityState(_normalizedPhone!).recentSends.length,
-          cooldownSeconds: ref.read(verificationThrottleProvider).identityState(_normalizedPhone!).currentCooldownDuration,
+          attempt: ref
+              .read(verificationThrottleProvider)
+              .identityState(_normalizedPhone!)
+              .recentSends
+              .length,
+          cooldownSeconds: ref
+              .read(verificationThrottleProvider)
+              .identityState(_normalizedPhone!)
+              .currentCooldownDuration,
         );
       } else {
-        throttleNotifier.setError(_normalizedPhone!, result['message'] ?? 'فشل في إرسال الرمز');
+        throttleNotifier.setError(
+            _normalizedPhone!, result['message'] ?? 'فشل في إرسال الرمز');
         AuthLogger().logSendCode(
           identity: _normalizedPhone!,
           channel: 'phone',
           purpose: 'password_reset',
-          attempt: ref.read(verificationThrottleProvider).identityState(_normalizedPhone!).recentSends.length + 1,
-          cooldownSeconds: ref.read(verificationThrottleProvider).identityState(_normalizedPhone!).currentCooldownDuration,
+          attempt: ref
+                  .read(verificationThrottleProvider)
+                  .identityState(_normalizedPhone!)
+                  .recentSends
+                  .length +
+              1,
+          cooldownSeconds: ref
+              .read(verificationThrottleProvider)
+              .identityState(_normalizedPhone!)
+              .currentCooldownDuration,
         );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(result['message'] ?? 'فشل في إرسال رمز التحقق'), backgroundColor: AppColors.error),
+            SnackBar(
+                content: Text(result['message'] ?? 'فشل في إرسال رمز التحقق'),
+                backgroundColor: AppColors.error),
           );
         }
         return;
@@ -133,7 +153,10 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     }
   }
 
-  bool get _isCodeComplete => _currentCode.length == 6 && _currentCode.replaceAll(RegExp(r'\D'), '').length == 6; // standardized to 6 digits
+  bool get _isCodeComplete =>
+      _currentCode.length == 6 &&
+      _currentCode.replaceAll(RegExp(r'\D'), '').length ==
+          6; // standardized to 6 digits
 
   Future<void> _verifyCode() async {
     if (!_isCodeComplete) {
@@ -185,7 +208,10 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
             ),
           );
           // reset OTP widget
-          setState(() { _otpKey = UniqueKey(); _currentCode = ''; });
+          setState(() {
+            _otpKey = UniqueKey();
+            _currentCode = '';
+          });
           if (_normalizedPhone != null) {
             AuthLogger().logVerifyCode(
               identity: _normalizedPhone!,
@@ -260,7 +286,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     });
 
     try {
-      final code = _currentCode; // use captured OTP instead of removed _codeControllers
+      final code =
+          _currentCode; // use captured OTP instead of removed _codeControllers
       final result = await AuthService.resetPassword(
         phone: _phoneController.text.trim(),
         code: code,
@@ -317,7 +344,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     });
 
     try {
-      final result = await AuthService.sendVerificationCode(_phoneController.text.trim());
+      final result =
+          await AuthService.sendVerificationCode(_phoneController.text.trim());
       final notifier = ref.read(verificationThrottleProvider.notifier);
       if (result['success'] == true) {
         notifier.recordSend(identity);
@@ -325,17 +353,33 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
           identity: identity,
           channel: 'phone',
           purpose: 'password_reset',
-          attempt: ref.read(verificationThrottleProvider).identityState(identity).recentSends.length,
-          cooldownSeconds: ref.read(verificationThrottleProvider).identityState(identity).currentCooldownDuration,
+          attempt: ref
+              .read(verificationThrottleProvider)
+              .identityState(identity)
+              .recentSends
+              .length,
+          cooldownSeconds: ref
+              .read(verificationThrottleProvider)
+              .identityState(identity)
+              .currentCooldownDuration,
         );
       } else {
-        notifier.setError(identity, result['message'] ?? 'فشل في إعادة الإرسال');
+        notifier.setError(
+            identity, result['message'] ?? 'فشل في إعادة الإرسال');
         AuthLogger().logSendCode(
           identity: identity,
           channel: 'phone',
           purpose: 'password_reset',
-          attempt: ref.read(verificationThrottleProvider).identityState(identity).recentSends.length + 1,
-          cooldownSeconds: ref.read(verificationThrottleProvider).identityState(identity).currentCooldownDuration,
+          attempt: ref
+                  .read(verificationThrottleProvider)
+                  .identityState(identity)
+                  .recentSends
+                  .length +
+              1,
+          cooldownSeconds: ref
+              .read(verificationThrottleProvider)
+              .identityState(identity)
+              .currentCooldownDuration,
         );
       }
 
@@ -366,7 +410,9 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
   }
 
   void _onOtpChanged(String code) {
-    setState(() { _currentCode = code; });
+    setState(() {
+      _currentCode = code;
+    });
     if (_isCodeComplete && !_codeVerified) {
       _verifyCode();
     }
@@ -376,7 +422,10 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
   Widget build(BuildContext context) {
     final cooldown = _normalizedPhone == null
         ? 0
-        : ref.watch(verificationThrottleProvider).identityState(_normalizedPhone!).cooldownRemaining;
+        : ref
+            .watch(verificationThrottleProvider)
+            .identityState(_normalizedPhone!)
+            .cooldownRemaining;
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -394,7 +443,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
               const SizedBox(height: 20),
 
               // Icon and header
-              const Icon(Icons.lock_reset, size: 80, color: AppColors.primary),
+              const Icon(Icons.lock_reset,
+                  size: 80, color: const Color(0xFF00296B)),
               const SizedBox(height: 24),
               const Text(
                 'استعادة كلمة المرور',
@@ -447,7 +497,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
                       ),
                     ),
                     child: _isLoading
-                        ? const CircularProgressIndicator(color: Colors.white)
+                        ? const CircularProgressIndicator(
+                            color: const Color(0xFF00296B))
                         : const Text(
                             'إرسال رمز التحقق',
                             style: TextStyle(
@@ -459,7 +510,11 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
                 ),
               ] else ...[
                 // OTP input fields
-                const Text('رمز التحقق', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                const Text('رمز التحقق',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary)),
                 const SizedBox(height: 8),
                 VerificationCodeInput(
                   key: _otpKey,
@@ -472,13 +527,17 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
 
                 // Resend code
                 TextButton(
-                  onPressed: (_isResending || _codeVerified || cooldown > 0) ? null : _resendCode,
+                  onPressed: (_isResending || _codeVerified || cooldown > 0)
+                      ? null
+                      : _resendCode,
                   child: _isResending
                       ? const CircularProgressIndicator()
                       : Text(
-                          cooldown > 0 ? 'إعادة الإرسال خلال ${cooldown}s' : 'إعادة إرسال الرمز',
+                          cooldown > 0
+                              ? 'إعادة الإرسال خلال ${cooldown}s'
+                              : 'إعادة إرسال الرمز',
                           style: const TextStyle(
-                            color: AppColors.primary,
+                            color: const Color(0xFF00296B),
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                           ),
@@ -549,7 +608,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
                         ),
                       ),
                       child: _isLoading
-                          ? const CircularProgressIndicator(color: Colors.white)
+                          ? const CircularProgressIndicator(
+                              color: const Color(0xFF00296B))
                           : const Text(
                               'تغيير كلمة المرور',
                               style: TextStyle(
@@ -575,7 +635,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
                         ),
                       ),
                       child: _isLoading
-                          ? const CircularProgressIndicator(color: Colors.white)
+                          ? const CircularProgressIndicator(
+                              color: const Color(0xFF00296B))
                           : const Text(
                               'تحقق من الرمز',
                               style: TextStyle(

@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -180,7 +181,8 @@ class _IdentityVerificationScreenState
           Text(
             statusDescription,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+            style:
+                const TextStyle(fontSize: 14, color: AppColors.textSecondary),
           ),
         ],
       ),
@@ -280,9 +282,8 @@ class _IdentityVerificationScreenState
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: isCompleted
-                        ? AppColors.success
-                        : AppColors.textPrimary,
+                    color:
+                        isCompleted ? AppColors.success : AppColors.textPrimary,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -328,7 +329,7 @@ class _IdentityVerificationScreenState
             ),
           ),
           const SizedBox(height: 16),
-          
+
           // Show existing documents from profile
           _buildExistingDocument(
             title: 'البطاقة الوطنية',
@@ -363,7 +364,7 @@ class _IdentityVerificationScreenState
             ),
           ),
           const SizedBox(height: 12),
-          
+
           _buildDocumentUpload(
             title: 'National ID (Front)',
             description:
@@ -537,9 +538,8 @@ class _IdentityVerificationScreenState
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: hasFile
-                            ? AppColors.success
-                            : AppColors.textPrimary,
+                        color:
+                            hasFile ? AppColors.success : AppColors.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -565,8 +565,7 @@ class _IdentityVerificationScreenState
   }
 
   Widget _buildSubmitButton() {
-    final bool canSubmit =
-        _nationalIdFront != null &&
+    final bool canSubmit = _nationalIdFront != null &&
         _nationalIdBack != null &&
         _drivingLicense != null &&
         _selfiePhoto != null;
@@ -579,6 +578,8 @@ class _IdentityVerificationScreenState
         child: ElevatedButton(
           onPressed: canSubmit ? _submitVerification : null,
           style: ElevatedButton.styleFrom(
+            foregroundColor: readableForeground(
+                canSubmit ? AppColors.primary : AppColors.grey300),
             backgroundColor: canSubmit ? AppColors.primary : AppColors.grey300,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(28),

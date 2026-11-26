@@ -1,215 +1,146 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter/foundation.dart';
+import '../../../services/driver_search_api_service.dart';
+import '../../../services/driver_location_mode.dart';
 
-/// خدمة تتبع موقع السائق وإرساله للسيرفر
+/// Real GPS publishing belongs to the active trip, not to a screen's timer.
 class DriverLocationService {
-  static final DriverLocationService _instance = DriverLocationService._internal();
-  
+  static final DriverLocationService _instance = DriverLocationService._();
   factory DriverLocationService() => _instance;
-  
-  DriverLocationService._internal();
+  DriverLocationService._();
+  // Explicit dependency injection for offline lifecycle/GPS tests only.
+  DriverLocationService.testing(
+      {required this.testPermission,
+      required this.testPositions,
+      required this.testCurrent,
+      required this.testSend,
+      required this.testFixedMode});
+  Future<LocationPermission> Function()? testPermission;
+  Stream<Position> Function(LocationSettings)? testPositions;
+  Future<Position> Function(LocationSettings)? testCurrent;
+  Future<bool> Function(String, Position)? testSend;
+  Future<bool> Function()? testFixedMode;
+  DateTime Function()? testNow;
+  bool _fixedMode = false;
+  Future<Position> _current(LocationSettings settings) async {
+    if (testCurrent != null) return testCurrent!(settings);
+    if (_fixedMode) {
+      final p = await DriverSearchApiService.getCurrentPosition();
+      if (p == null) throw StateError('Test position unavailable');
+      return p;
+    }
+    return Geolocator.getCurrentPosition(locationSettings: settings);
+  }
 
-  Timer? _locationTimer;
-  StreamSubscription<Position>? _positionStream;
-  String? _currentOrderId;
-  bool _isTracking = false;
-
-  /// بدء تتبع الموقع لطلب معين
-  Future<void> startTracking(String orderId) async {
-    if (_isTracking && _currentOrderId == orderId) {
-      debugPrint('⚠️ Already tracking for order: $orderId');
+  StreamSubscription<Position>? _positions;
+  Timer? _heartbeat;
+  String? _orderId;
+  bool _sending = false;
+  DateTime? _sentAt;
+  int _generation = 0;
+  static const phases = {
+    'picked_up',
+    'heading_to_customer',
+    'arrived_at_customer',
+    'on_the_way',
+    'out_for_delivery'
+  };
+  void synchronize(String? id, String? status) {
+    if (id == null || !phases.contains(status)) {
+      unawaited(stopTracking());
       return;
     }
+    if (_orderId != id) unawaited(startTracking(id));
+  }
 
-    await stopTracking(); // إيقاف أي تتبع سابق
-
-    _currentOrderId = orderId;
-    _isTracking = true;
-
-    debugPrint('🟢 Starting location tracking for order: $orderId');
-
-    // التحقق من أذونات الموقع
-    final hasPermission = await _checkLocationPermission();
-    if (!hasPermission) {
-      debugPrint('❌ Location permission denied');
-      return;
+  Future<void> startTracking(String id) async {
+    final generation = ++_generation;
+    _heartbeat?.cancel();
+    final previous = _positions;
+    _positions = null;
+    _orderId = id;
+    _sentAt = null;
+    await previous?.cancel();
+    _fixedMode = await (testFixedMode?.call() ??
+        DriverLocationMode.usesFixedTestPosition());
+    final permission = _fixedMode
+        ? LocationPermission.always
+        : await (testPermission?.call() ?? Geolocator.checkPermission());
+    if (_generation != generation ||
+        _orderId != id ||
+        permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) return;
+    final LocationSettings settings = Platform.isAndroid
+        ? AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 5,
+            intervalDuration: const Duration(seconds: 5),
+            foregroundNotificationConfig: const ForegroundNotificationConfig(
+                notificationTitle: 'توصيل الطلب جارٍ',
+                notificationText: 'مشاركة موقع الرحلة لتتبع التوصيل',
+                enableWakeLock: true))
+        : AppleSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 5,
+            activityType: ActivityType.automotiveNavigation,
+            pauseLocationUpdatesAutomatically: false,
+            showBackgroundLocationIndicator: true,
+            allowBackgroundLocationUpdates: true);
+    // A trial profile must never publish the physical device's real GPS.
+    if (!_fixedMode) {
+      _positions = (testPositions?.call(settings) ??
+              Geolocator.getPositionStream(locationSettings: settings))
+          .listen((p) => unawaited(_publish(id, p)), onError: (Object _) {});
     }
-
-    // بدء تتبع الموقع كل 30 ثانية
-    _locationTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      _sendCurrentLocation();
+    _heartbeat = Timer.periodic(const Duration(seconds: 15), (_) async {
+      if (_orderId != id || _sending) return;
+      try {
+        final p = await _current(settings).timeout(const Duration(seconds: 10));
+        await _publish(id, p);
+      } catch (_) {}
     });
-
-    // إرسال الموقع الأول مباشرة
-    _sendCurrentLocation();
+    try {
+      final p = await _current(settings).timeout(const Duration(seconds: 12));
+      await _publish(id, p);
+    } catch (_) {}
   }
 
-  /// إيقاف تتبع الموقع
+  Future<void> _publish(String id, Position p) async {
+    final now = testNow?.call() ?? DateTime.now();
+    if (_orderId != id ||
+        _sending ||
+        p.accuracy > 100 ||
+        now.difference(p.timestamp).inSeconds > 30 ||
+        _sentAt != null && now.difference(_sentAt!).inSeconds < 5) return;
+    _sending = true;
+    try {
+      final ok = testSend != null
+          ? await testSend!(id, p)
+          : await DriverSearchApiService.refreshSearchPosition(
+              latitude: p.latitude,
+              longitude: p.longitude,
+              tracking: {
+                  'orderId': id,
+                  'accuracy': p.accuracy,
+                  'heading':
+                      p.heading >= 0 && p.heading < 360 ? p.heading : 0.0,
+                  'observedAt': p.timestamp.toUtc().toIso8601String()
+                });
+      if (ok) _sentAt = now;
+    } finally {
+      _sending = false;
+    }
+  }
+
   Future<void> stopTracking() async {
-    if (_locationTimer != null) {
-      _locationTimer!.cancel();
-      _locationTimer = null;
-    }
-
-    if (_positionStream != null) {
-      await _positionStream!.cancel();
-      _positionStream = null;
-    }
-
-    _isTracking = false;
-    _currentOrderId = null;
-
-    debugPrint('🔴 Location tracking stopped');
+    _generation++;
+    _heartbeat?.cancel();
+    _heartbeat = null;
+    _orderId = null;
+    _sentAt = null;
+    final stream = _positions;
+    _positions = null;
+    await stream?.cancel();
   }
-
-  /// إرسال الموقع الحالي للسيرفر
-  Future<void> _sendCurrentLocation() async {
-    if (!_isTracking || _currentOrderId == null) {
-      return;
-    }
-
-    try {
-      // الحصول على الموقع الحالي
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 10),
-      );
-
-      debugPrint('📍 Sending location: ${position.latitude}, ${position.longitude}');
-
-      // إرسال الموقع للسيرفر
-      await _updateLocationOnServer(
-        orderId: _currentOrderId!,
-        latitude: position.latitude,
-        longitude: position.longitude,
-        timestamp: DateTime.now(),
-      );
-
-      debugPrint('✅ Location sent successfully');
-    } catch (e) {
-      debugPrint('❌ Error sending location: $e');
-      
-      // إعادة المحاولة بعد فشل الإرسال
-      if (_isTracking) {
-        debugPrint('🔄 Retrying in 10 seconds...');
-        await Future.delayed(const Duration(seconds: 10));
-        if (_isTracking) {
-          _sendCurrentLocation();
-        }
-      }
-    }
-  }
-
-  /// التحقق من أذونات الموقع
-  Future<bool> _checkLocationPermission() async {
-    bool serviceEnabled;
-    LocationPermission permission;
-
-    // التحقق من تفعيل خدمة الموقع
-    serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      debugPrint('❌ Location services are disabled');
-      return false;
-    }
-
-    // التحقق من الأذونات
-    permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        debugPrint('❌ Location permissions are denied');
-        return false;
-      }
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      debugPrint('❌ Location permissions are permanently denied');
-      return false;
-    }
-
-    return true;
-  }
-
-  /// إرسال الموقع للسيرفر (API Call)
-  Future<void> _updateLocationOnServer({
-    required String orderId,
-    required double latitude,
-    required double longitude,
-    required DateTime timestamp,
-  }) async {
-    // TODO: استبدل هذا بالـ API call الحقيقي
-    // مثال:
-    // final response = await http.post(
-    //   Uri.parse('https://api.example.com/driver/location'),
-    //   headers: {'Content-Type': 'application/json'},
-    //   body: jsonEncode({
-    //     'orderId': orderId,
-    //     'latitude': latitude,
-    //     'longitude': longitude,
-    //     'timestamp': timestamp.toIso8601String(),
-    //   }),
-    // );
-    //
-    // if (response.statusCode != 200) {
-    //   throw Exception('Failed to update location');
-    // }
-
-    // محاكاة API call
-    await Future.delayed(const Duration(milliseconds: 500));
-    
-    debugPrint('''
-    📤 Location update:
-       Order ID: $orderId
-       Lat: $latitude
-       Lng: $longitude
-       Time: ${timestamp.toIso8601String()}
-    ''');
-  }
-
-  /// الحصول على الموقع الحالي (للاستخدام الفوري)
-  Future<Position?> getCurrentPosition() async {
-    try {
-      final hasPermission = await _checkLocationPermission();
-      if (!hasPermission) {
-        return null;
-      }
-
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-    } catch (e) {
-      debugPrint('❌ Error getting current position: $e');
-      return null;
-    }
-  }
-
-  /// تتبع الموقع بشكل مستمر (للاستخدام في الخرائط)
-  Stream<Position> getPositionStream() {
-    return Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // تحديث كل 10 أمتار
-      ),
-    );
-  }
-
-  /// حساب المسافة بين نقطتين
-  double calculateDistance(
-    double startLat,
-    double startLng,
-    double endLat,
-    double endLng,
-  ) {
-    return Geolocator.distanceBetween(
-      startLat,
-      startLng,
-      endLat,
-      endLng,
-    );
-  }
-
-  /// التحقق من حالة التتبع
-  bool get isTracking => _isTracking;
-  String? get currentOrderId => _currentOrderId;
 }

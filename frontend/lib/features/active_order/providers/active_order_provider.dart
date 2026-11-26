@@ -84,8 +84,7 @@ class ActiveOrderProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final updatedOrder =
-          await _service.arriveAtStore(_currentOrder!.orderId);
+      final updatedOrder = await _service.arriveAtStore(_currentOrder!.orderId);
       _currentOrder = updatedOrder;
       _error = null;
       _isLoading = false;
@@ -218,6 +217,7 @@ class ActiveOrderProvider extends ChangeNotifier {
         _currentOrder!.orderId,
         issueType: issueType,
         notes: notes,
+        assignment: _currentOrder!.financialAssignment,
       );
       _error = null;
       _isLoading = false;

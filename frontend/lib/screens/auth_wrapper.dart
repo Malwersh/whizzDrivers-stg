@@ -8,7 +8,7 @@ import '../features/authentication/screens/pending_review_screen.dart';
 /// Authentication Wrapper that checks authentication state and routes users accordingly
 class AuthWrapper extends ConsumerStatefulWidget {
   final Widget authenticatedHome;
-  
+
   const AuthWrapper({
     super.key,
     required this.authenticatedHome,
@@ -20,6 +20,7 @@ class AuthWrapper extends ConsumerStatefulWidget {
 
 class _AuthWrapperState extends ConsumerState<AuthWrapper> {
   bool _isLoading = true;
+  bool _profileUnavailable = false;
   bool _isAuthenticated = false;
   String? _profileStatus;
 
@@ -32,26 +33,27 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper> {
   Future<void> _checkAuthenticationState() async {
     try {
       debugPrint('🔐 AuthWrapper: Checking authentication state...');
-      
+
       // Get auth service from provider
       final authService = ref.read(authServiceProvider);
-      
+
       // Check if user is authenticated
       final isAuthenticated = authService.isAuthenticated;
-      
+
       debugPrint('🔐 AuthWrapper: User authenticated: $isAuthenticated');
-      
+
       // User must be authenticated to proceed
       if (isAuthenticated) {
         // User is authenticated, check profile status
         try {
           final profileService = ref.read(profileCompletionServiceProvider);
           final profileStatus = await profileService.checkProfileCompleteness();
-          
+
           debugPrint('🔐 AuthWrapper: Profile status: ${profileStatus.status}');
-          
+
           setState(() {
             _isAuthenticated = true;
+            _profileUnavailable = profileStatus.error != null;
             _profileStatus = profileStatus.status.name.toUpperCase();
             _isLoading = false;
           });
@@ -60,14 +62,14 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper> {
           // If profile check fails, treat as needs profile completion
           setState(() {
             _isAuthenticated = true;
-            _profileStatus = 'PENDING_PROFILE';
+            _profileUnavailable = true;
             _isLoading = false;
           });
         }
       } else {
         // User is not authenticated
         debugPrint('🔐 AuthWrapper: User not authenticated');
-        
+
         setState(() {
           _isAuthenticated = false;
           _profileStatus = null;
@@ -86,6 +88,13 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper> {
 
   @override
   Widget build(BuildContext context) {
+    if (_profileUnavailable)
+      return Scaffold(
+          body: Center(
+              child: FilledButton(
+                  onPressed: () => context.go('/profile-check'),
+                  child:
+                      const Text('تعذر التحقق من الحساب · إعادة المحاولة'))));
     if (_isLoading) {
       return const Scaffold(
         body: Center(
@@ -104,22 +113,24 @@ class _AuthWrapperState extends ConsumerState<AuthWrapper> {
     switch (_profileStatus) {
       case 'PENDINGPROFILE':
       case 'PENDING_PROFILE':
-        debugPrint('🔐 AuthWrapper: Showing pending review screen (profile incomplete)');
+        debugPrint(
+            '🔐 AuthWrapper: Showing pending review screen (profile incomplete)');
         return const PendingReviewScreen();
-      
+
       case 'PENDINGREVIEW':
       case 'PENDING_REVIEW':
         debugPrint('🔐 AuthWrapper: Showing pending review screen');
         return const PendingReviewScreen();
-      
+
       case 'APPROVED':
       case 'ACTIVE':
         debugPrint('🔐 AuthWrapper: Showing home screen');
         return widget.authenticatedHome;
-      
+
       default:
         // Unknown status - show pending review screen as default
-        debugPrint('🔐 AuthWrapper: Unknown profile status: $_profileStatus, showing pending review screen');
+        debugPrint(
+            '🔐 AuthWrapper: Unknown profile status: $_profileStatus, showing pending review screen');
         return const PendingReviewScreen();
     }
   }

@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 
 import '../../../design_system/app_colors.dart';
@@ -189,14 +190,14 @@ class _SupportScreenState extends State<SupportScreen> {
                     child: _isLoading
                         ? const Center(child: CircularProgressIndicator())
                         : _tickets.isEmpty
-                        ? _buildEmptyState()
-                        : ListView.builder(
-                            itemCount: _tickets.length,
-                            itemBuilder: (context, index) {
-                              final ticket = _tickets[index];
-                              return _buildTicketCard(ticket);
-                            },
-                          ),
+                            ? _buildEmptyState()
+                            : ListView.builder(
+                                itemCount: _tickets.length,
+                                itemBuilder: (context, index) {
+                                  final ticket = _tickets[index];
+                                  return _buildTicketCard(ticket);
+                                },
+                              ),
                   ),
                 ],
               ),
@@ -374,7 +375,8 @@ class _SupportScreenState extends State<SupportScreen> {
           const SizedBox(height: 8),
           Row(
             children: [
-              const Icon(Icons.category, size: 14, color: AppColors.textSecondary),
+              const Icon(Icons.category,
+                  size: 14, color: AppColors.textSecondary),
               const SizedBox(width: 4),
               Text(
                 ticket['category'] ?? 'General',
@@ -610,17 +612,19 @@ class _CreateTicketSheetState extends State<CreateTicketSheet> {
             child: ElevatedButton(
               onPressed: _isLoading ? null : _submitTicket,
               style: ElevatedButton.styleFrom(
+                foregroundColor: readableForeground(AppColors.primary),
                 backgroundColor: AppColors.primary,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(25),
                 ),
               ),
               child: _isLoading
-                  ? const CircularProgressIndicator(color: AppColors.white)
+                  ? const CircularProgressIndicator(
+                      color: const Color(0xFF00296B))
                   : const Text(
                       'Submit Ticket',
                       style: TextStyle(
-                        color: AppColors.white,
+                        color: const Color(0xFF00296B),
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),

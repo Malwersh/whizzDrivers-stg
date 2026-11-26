@@ -1,3 +1,4 @@
+import '../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,8 +13,7 @@ class ForgotPasswordScreen extends ConsumerStatefulWidget {
       _ForgotPasswordScreenState();
 }
 
-class _ForgotPasswordScreenState
-    extends ConsumerState<ForgotPasswordScreen> {
+class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
   String _resetMethod = 'email';
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
@@ -30,17 +30,20 @@ class _ForgotPasswordScreenState
   Future<void> _handlePasswordReset() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() { _isSubmitting = true; });
-    
+    setState(() {
+      _isSubmitting = true;
+    });
+
     try {
       if (_resetMethod == 'email') {
         // Use static method for email reset
         final success = await CognitoAuthServiceEnhanced.resetPasswordEmail(
           email: _emailController.text.trim(),
         );
-        
+
         if (success) {
-          _showSuccessDialog('تم إرسال رابط / رمز إعادة التعيين إلى بريدك الإلكتروني');
+          _showSuccessDialog(
+              'تم إرسال رابط / رمز إعادة التعيين إلى بريدك الإلكتروني');
         } else {
           _showErrorDialog('فشل في إرسال بريد إعادة التعيين');
         }
@@ -50,18 +53,21 @@ class _ForgotPasswordScreenState
         final result = await authService.resetPasswordPhone(
           phone: _phoneController.text.trim(),
         );
-        
+
         if (result['success'] == true) {
           _showSuccessDialog(result['message'] ?? 'تم إرسال رمز إعادة التعيين');
         } else {
-          _showErrorDialog(result['message'] ?? 'فشل في إرسال رمز إعادة التعيين');
+          _showErrorDialog(
+              result['message'] ?? 'فشل في إرسال رمز إعادة التعيين');
         }
       }
     } catch (e) {
       _showErrorDialog('خطأ: $e');
     } finally {
       if (mounted) {
-        setState(() { _isSubmitting = false; });
+        setState(() {
+          _isSubmitting = false;
+        });
       }
     }
   }
@@ -70,23 +76,26 @@ class _ForgotPasswordScreenState
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('تم الإرسال', style: TextStyle(color: AppColors.success)),
-        content: Text(message, style: const TextStyle(color: AppColors.textPrimary)),
+        title: const Text('تم الإرسال',
+            style: TextStyle(color: AppColors.success)),
+        content:
+            Text(message, style: const TextStyle(color: AppColors.textPrimary)),
         actions: [
           TextButton(
             onPressed: () {
               Navigator.of(context).pop();
               // Navigate to password reset verification screen with proper data
-              final identifier = _resetMethod == 'email' 
-                  ? _emailController.text.trim() 
+              final identifier = _resetMethod == 'email'
+                  ? _emailController.text.trim()
                   : _phoneController.text.trim();
-              
+
               context.go('/password-reset-verification', extra: {
                 'identifier': identifier,
                 'resetMethod': _resetMethod,
               });
             },
-            child: const Text('حسناً', style: TextStyle(color: AppColors.primary)),
+            child:
+                const Text('حسناً', style: TextStyle(color: AppColors.primary)),
           ),
         ],
       ),
@@ -98,11 +107,13 @@ class _ForgotPasswordScreenState
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('خطأ', style: TextStyle(color: AppColors.error)),
-        content: Text(message, style: const TextStyle(color: AppColors.textPrimary)),
+        content:
+            Text(message, style: const TextStyle(color: AppColors.textPrimary)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('حسناً', style: TextStyle(color: AppColors.primary)),
+            child:
+                const Text('حسناً', style: TextStyle(color: AppColors.primary)),
           ),
         ],
       ),
@@ -116,9 +127,10 @@ class _ForgotPasswordScreenState
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.primary,
-        title: const Text('استعادة كلمة المرور', style: TextStyle(color: AppColors.white)),
+        title: const Text('استعادة كلمة المرور',
+            style: TextStyle(color: const Color(0xFF00296B))),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: AppColors.white),
+          icon: const Icon(Icons.arrow_back, color: const Color(0xFF00296B)),
           onPressed: () => context.go('/login'), // updated route
         ),
       ),
@@ -144,10 +156,13 @@ class _ForgotPasswordScreenState
                     const SizedBox(height: 40),
                     const Text(
                       'استعادة كلمة المرور',
-                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: AppColors.primary),
+                      style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF00296B)),
                     ),
                     const SizedBox(height: 30),
-                    
+
                     // Method toggle
                     Container(
                       decoration: BoxDecoration(
@@ -158,18 +173,25 @@ class _ForgotPasswordScreenState
                         children: [
                           Expanded(
                             child: GestureDetector(
-                              onTap: () => setState(() => _resetMethod = 'email'),
+                              onTap: () =>
+                                  setState(() => _resetMethod = 'email'),
                               child: Container(
-                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
                                 decoration: BoxDecoration(
-                                  color: _resetMethod == 'email' ? AppColors.primary : Colors.transparent,
-                                  borderRadius: const BorderRadius.horizontal(left: Radius.circular(10)),
+                                  color: _resetMethod == 'email'
+                                      ? AppColors.primary
+                                      : Colors.transparent,
+                                  borderRadius: const BorderRadius.horizontal(
+                                      left: Radius.circular(10)),
                                 ),
                                 child: Text(
                                   'البريد الإلكتروني',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    color: _resetMethod == 'email' ? AppColors.white : AppColors.textPrimary,
+                                    color: _resetMethod == 'email'
+                                        ? AppColors.white
+                                        : AppColors.textPrimary,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -178,18 +200,25 @@ class _ForgotPasswordScreenState
                           ),
                           Expanded(
                             child: GestureDetector(
-                              onTap: () => setState(() => _resetMethod = 'phone'),
+                              onTap: () =>
+                                  setState(() => _resetMethod = 'phone'),
                               child: Container(
-                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
                                 decoration: BoxDecoration(
-                                  color: _resetMethod == 'phone' ? AppColors.primary : Colors.transparent,
-                                  borderRadius: const BorderRadius.horizontal(right: Radius.circular(10)),
+                                  color: _resetMethod == 'phone'
+                                      ? AppColors.primary
+                                      : Colors.transparent,
+                                  borderRadius: const BorderRadius.horizontal(
+                                      right: Radius.circular(10)),
                                 ),
                                 child: Text(
                                   'رقم الهاتف',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    color: _resetMethod == 'phone' ? AppColors.white : AppColors.textPrimary,
+                                    color: _resetMethod == 'phone'
+                                        ? AppColors.white
+                                        : AppColors.textPrimary,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -262,6 +291,8 @@ class _ForgotPasswordScreenState
                             ElevatedButton(
                               onPressed: _handlePasswordReset,
                               style: ElevatedButton.styleFrom(
+                                foregroundColor:
+                                    readableForeground(AppColors.primary),
                                 backgroundColor: AppColors.primary,
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 50, vertical: 15),
@@ -273,7 +304,7 @@ class _ForgotPasswordScreenState
                                 'إرسال',
                                 style: TextStyle(
                                   fontSize: 18,
-                                  color: AppColors.white,
+                                  color: const Color(0xFF00296B),
                                 ),
                               ),
                             ),

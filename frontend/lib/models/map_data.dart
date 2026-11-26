@@ -7,6 +7,8 @@ class MapDataResponse {
   final List<NeighborRegion> neighborRegions;
   final List<NearbyStore> nearbyStores;
   final MapSummary summary;
+  final String? customerServicePhone;
+  final Map<String, dynamic>? mapTools;
 
   MapDataResponse({
     required this.success,
@@ -16,10 +18,17 @@ class MapDataResponse {
     required this.neighborRegions,
     required this.nearbyStores,
     required this.summary,
+    this.customerServicePhone,
+    this.mapTools,
   });
 
   factory MapDataResponse.fromJson(Map<String, dynamic> json) {
     return MapDataResponse(
+      customerServicePhone:
+          json['map_tools']?['customerServicePhone'] as String?,
+      mapTools: json['map_tools'] is Map
+          ? Map<String, dynamic>.from(json['map_tools'])
+          : null,
       success: json['success'] ?? false,
       timestamp: json['timestamp'] ?? '',
       processingTimeMs: json['processing_time_ms'] ?? 0,
@@ -149,7 +158,7 @@ class NearbyStore {
       waitingOrdersCount: json['waiting_orders_count'],
     );
   }
-  
+
   /// تحديث حالة المطعم (لاستخدامها في real-time updates)
   NearbyStore copyWith({
     String? onlineStatus,

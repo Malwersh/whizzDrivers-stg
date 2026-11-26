@@ -5,9 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jwt_decoder/jwt_decoder.dart';
 
+import '../config/environment.dart';
+import '../services/cognito_token_service.dart';
+
 /// Provider for current driver ID
 final currentDriverIdProvider = FutureProvider<String?>((ref) async {
   try {
+    if (Environment.isProduction) return DriverAuthHelper.getCurrentDriverId();
     // Try to get driver ID from SharedPreferences first
     final prefs = await SharedPreferences.getInstance();
     
@@ -52,6 +56,7 @@ final currentDriverIdProvider = FutureProvider<String?>((ref) async {
 /// Provider for current driver authentication status
 final driverAuthStatusProvider = FutureProvider<bool>((ref) async {
   try {
+    if (Environment.isProduction) return await DriverAuthHelper.getCurrentAccessToken() != null;
     final prefs = await SharedPreferences.getInstance();
     final accessToken = prefs.getString('access_token');
     
@@ -71,6 +76,7 @@ final driverAuthStatusProvider = FutureProvider<bool>((ref) async {
 /// Provider for current access token
 final driverAccessTokenProvider = FutureProvider<String?>((ref) async {
   try {
+    if (Environment.isProduction) return DriverAuthHelper.getCurrentAccessToken();
     final prefs = await SharedPreferences.getInstance();
     final accessToken = prefs.getString('access_token');
     
@@ -89,6 +95,9 @@ class DriverAuthHelper {
   /// Get current driver ID from any available source
   static Future<String?> getCurrentDriverId() async {
     try {
+      if (Environment.isProduction) {
+        return (await CognitoTokenService.readUserPoolTokens())?.userId;
+      }
       final prefs = await SharedPreferences.getInstance();
       
       // Check stored driver ID first
@@ -121,6 +130,7 @@ class DriverAuthHelper {
   
   /// Get current access token from Amplify session
   static Future<String?> getCurrentAccessToken() async {
+    if (Environment.isProduction) return CognitoTokenService.getAccessToken();
     try {
       // Get token from Amplify Auth Session
       final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;

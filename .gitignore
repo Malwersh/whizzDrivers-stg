@@ -27,7 +27,6 @@ frontend/build/
 frontend/.flutter-plugins
 frontend/.flutter-plugins-dependencies
 frontend/.packages
-frontend/pubspec.lock
 
 # iOS
 frontend/ios/Pods/

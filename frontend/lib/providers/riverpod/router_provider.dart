@@ -1,3 +1,5 @@
+import '../../screens/auth/profile_check_screen.dart';
+import '../../features/wallet/screens/zaincash_payment_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -54,8 +56,16 @@ GoRouter router(Ref ref) {
       );
     },
     redirect: (BuildContext context, GoRouterState state) async {
-      // ✅ FIXED: Check Amplify session asynchronously
-      final isAuthenticated = await authService.checkAuthentication();
+      // Splash restores the session and resumes an active order when needed.
+      if (state.uri.path == '/splash' || state.uri.path == '/profile-check') {
+        return null;
+      }
+      final bool isAuthenticated;
+      try {
+        isAuthenticated = await authService.checkAuthentication();
+      } catch (_) {
+        return '/profile-check';
+      }
 
       final isAuthRoute =
           state.uri.path.startsWith('/login') ||
@@ -88,11 +98,6 @@ GoRouter router(Ref ref) {
         '🔀 Router redirect: path=${state.uri.path}, isAuthenticated=$isAuthenticated, isAuthRoute=$isAuthRoute, isProfileSetupRoute=$isProfileSetupRoute',
       );
 
-      // Allow splash screen to handle auth check
-      if (state.uri.path == '/splash') {
-        return null; // Let splash screen handle navigation
-      }
-
       // If user is not authenticated and not on auth/debug route, redirect to login
       if (!isAuthenticated && !isAuthRoute && !isProfileSetupRoute && !isDebugRoute) {
         debugPrint('🔀 Redirecting to login (not authenticated)');
@@ -118,7 +123,7 @@ GoRouter router(Ref ref) {
           } catch (e) {
             debugPrint('❌ Error checking profile status: $e');
             // On error, redirect to profile setup to be safe
-            return '/driver-profile-setup';
+            return '/profile-check';
           }
         }
 
@@ -127,7 +132,7 @@ GoRouter router(Ref ref) {
         // All navigation happens from Splash after profile check
 
         // If trying to access home or other protected routes, verify profile is complete
-        if (state.uri.path == '/' || state.uri.path.startsWith('/demand-map') || state.uri.path.startsWith('/navigation')) {
+        if (state.uri.path.startsWith('/wallet/') || state.uri.path == '/' || state.uri.path.startsWith('/demand-map') || state.uri.path.startsWith('/navigation')) {
           try {
             final profileStatus = await profileCompletionService.checkProfileCompleteness();
             debugPrint('🔍 Profile status check for protected route: ${profileStatus.status}');
@@ -138,7 +143,7 @@ GoRouter router(Ref ref) {
             }
           } catch (e) {
             debugPrint('❌ Error checking profile status: $e');
-            return '/driver-profile-setup';
+            return '/profile-check';
           }
         }
       }
@@ -146,7 +151,15 @@ GoRouter router(Ref ref) {
       return null;
     },
     routes: [
-      GoRoute(path: '/splash', builder: (context, state) => const SplashPage()),
+      GoRoute(path: '/profile-check', builder: (context, state) => const ProfileCheckScreen()),
+      GoRoute(path: '/wallet/zaincash-return', builder: (context, state) => const ZaincashPaymentScreen()),
+      GoRoute(
+        path: '/splash',
+        builder: (context, state) {
+          final extra = state.extra;
+          return SplashPage(phone: extra is Map<String, dynamic> ? extra['phone'] as String? : null);
+        },
+      ),
       GoRoute(path: '/login', builder: (context, state) => const PhoneOtpLoginScreen()),
       GoRoute(path: '/login-legacy', builder: (context, state) => const LoginScreen()),
       GoRoute(path: '/new-login/phone-otp', builder: (context, state) => const PhoneOtpLoginScreen()),

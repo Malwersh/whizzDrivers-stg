@@ -1,0 +1,53 @@
+{
+  "part": 311,
+  "scope": "Driver trip history and trip details redesign",
+  "research": [
+    {
+      "product": "Spark Driver",
+      "source": "https://sparkdriverapp-walmart.helpdocs.io/l/en/article/399wtq7wtt-reviewing-your-trips",
+      "pattern": "Date/status history, selecting a trip for earnings details; cancellation does not imply zero compensation."
+    },
+    {
+      "product": "Spark Driver earnings",
+      "source": "https://sparkdriverapp-walmart.helpdocs.io/l/en/article/m42drex3qj-navigating-the-earnings-tab",
+      "pattern": "Separate trip receipts from aggregate earnings overview."
+    },
+    {
+      "product": "Uber Driver",
+      "source": "https://help.uber.com/driving-and-delivering/article/viewing-trip-earnings?nodeId=9fbc207b-2837-4428-8133-2d2df7b3b17d",
+      "pattern": "Daily history and per-trip breakdown."
+    },
+    {
+      "product": "DoorDash",
+      "source": "https://dasher.doordash.com/en-ca/blog/how-to-use-dasher-app",
+      "pattern": "Separate history from broader earnings goals/payout functionality."
+    }
+  ],
+  "implemented": [
+    "Brand navy/blue/yellow with dark money text on white, no low-contrast yellow amounts.",
+    "Compact store/reference/status/entitlement/time/quantity cards, date grouping includes year and uses local end time.",
+    "Server-side date and terminal-state filters with cursor continuation and deduplication; late filter responses/session replacement rejected.",
+    "Single-order trip detail read authenticates owner, excludes internal finance allocations and phone numbers.",
+    "Confirmed financial driver entitlement replaces customer delivery tariff in history; Yalla2750 vs tariff1500.",
+    "Read-only trip details: base/tip/total, saved stop coordinates/addresses and actual timestamps, accepted route estimate explicitly labeled, COD cash/retained amount/settled collateral/extra wallet credit.",
+    "Saved delivery photos accessible in read-only mode; existing cash review and actual-return continuation preserved as explicit actions.",
+    "Returned terminal orders are visible; unknown states and missing earnings are not labeled completed/zero."
+  ],
+  "limits": [
+    "One order per trip in current data model; no invented multi-stop shopping or mutable-tip policies.",
+    "Historical map shows stored pickup/destination markers only; no invented GPS road trace or newly computed route presented as historical.",
+    "Distance is accepted route estimate; elapsed duration includes waiting from acceptance until recorded completion.",
+    "Legacy missing earnings and unproven cancelled/returned compensation are unavailable, never replaced by customer fees or assumed zero.",
+    "Orders table still has no driver chronology index: bounded scans/cursors preserved; client sorts loaded rows. Current verified driver history all15 rows fit one page. No partial-page aggregate earnings shown.",
+    "No financial calculations, balance changes, order transitions, IAM/environment changes or other financial-function redeployment."
+  ],
+  "verification": {
+    "backendTests": 31,
+    "frontendTests": 12,
+    "analyzer": "No errors/warnings; style/legacy print infos only",
+    "liveReadOnlyReport": "trips-history-verification-311.json",
+    "publication": "trips-history-publication-311.json",
+    "iosBuild": 250,
+    "installed": "Profile250 successfully installed on existing test iPhone; app launch requested"
+  }
+}

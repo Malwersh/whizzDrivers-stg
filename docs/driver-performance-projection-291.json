@@ -1,0 +1,66 @@
+{
+  "status": "APPROVED_INFRASTRUCTURE_PUBLICATION_STARTED",
+  "automaticReviewRejected": true,
+  "rejectedActionsExecuted": false,
+  "sourceBusinessWrites": 0,
+  "newResources": {
+    "table": "DriverPerformanceSnapshots_staging",
+    "functions": [
+      "staging-driver-performance-collector",
+      "staging-driver-performance-projection"
+    ],
+    "queues": [
+      "staging-driver-performance-refresh",
+      "staging-driver-performance-failures"
+    ],
+    "schedule": "every minute, reconciliation/expiry only"
+  },
+  "liveChangesRequiringApproval": {
+    "enableStreams": [
+      "staging-Holds",
+      "whizz-order-ratings-staging"
+    ],
+    "doNotAddOrderStreamReader": true,
+    "orderEventsForwardedBy": "WaveSystem_CreateDispatchJob, keys-only async invocation",
+    "newCollectorPermissions": "GetItem on offers/ratings; Query on offers; read four source streams; write only new projection table and send to its queues",
+    "newWorkerPermissions": "GetItem/Query on five fact tables and two specific indexes; read/write/delete only new projection table; own queues; read Lambda mapping status and CloudWatch iterator lag",
+    "readerGetItemRoles": [
+      "arn:aws:iam::699561669180:role/drivers-api-staging-DriversApiFunctionRole-ngkzZnWAPRS0",
+      "arn:aws:iam::699561669180:role/staging-wizz-staff-service-StaffFunctionRole-hk0IFW4PhVQx",
+      "arn:aws:iam::699561669180:role/wavesystem-staging-WaveSystemHandleWaveTimeoutFunct-1Ha5LxcDA5TA",
+      "arn:aws:iam::699561669180:role/wavesystem-staging-WaveSystemStartWaveFunctionRole-wywNnz4z2VEE"
+    ],
+    "readerResource": "arn:aws:dynamodb:us-east-1:699561669180:table/DriverPerformanceSnapshots_staging",
+    "forwardInvokeRole": "arn:aws:iam::699561669180:role/wavesystem-staging-WaveSystemCreateDispatchJobFunct-JYOain643E7e",
+    "forwardInvokeResource": "arn:aws:lambda:us-east-1:699561669180:function:staging-driver-performance-collector"
+  },
+  "activationGates": [
+    "Explicit infrastructure/deployment permission after automatic rejection",
+    "Create resources, backfill and verify persisted state/API/wave parity",
+    "Verify stream health, async forwarder and failure queue",
+    "Publish read consumers and run dispatch shadow",
+    "Inventory/upgrade all pinned-policy readers before publishing VERIFIED_SNAPSHOT_V1 for new search cycles",
+    "Activate new-policy cycles only; existing LEGACY_METRICS cycles retain captured policy"
+  ],
+  "tests": {
+    "projectionUnit": 21,
+    "backendRegression": 93,
+    "capturedStartRuntime": 14,
+    "capturedTimeoutRuntime": 14,
+    "flutterRegression": 31,
+    "flutterPendingNoticeSuite": 8,
+    "samTemplate": "VALID",
+    "typescript": "PASS"
+  },
+  "userVisibleStatus": "Not deployed. Existing wave selection and existing applications remain unchanged.",
+  "snapshotSource": "docs/driver-performance-projection-parity-291.json",
+  "liveSourceParity": {
+    "acceptanceRate": 0.92,
+    "completionRate": 0.95,
+    "consecutiveRejections": 1,
+    "awsWrites": 0,
+    "persistedInAws": false
+  },
+  "rejectionStreak": "Since last verified acceptance, independent of the last100 acceptance window; incomplete coverage is explicit.",
+  "userApproval": "EXPLICIT_STAGING_INFRASTRUCTURE_AND_CONSUMER_DEPLOYMENT_APPROVAL_RECEIVED"
+}

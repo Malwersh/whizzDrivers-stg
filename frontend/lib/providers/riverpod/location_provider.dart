@@ -1,3 +1,4 @@
+import '../../services/driver_location_mode.dart';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -57,7 +58,7 @@ class LocationNotifier extends StateNotifier<LocationState> {
     _setLoading(true);
 
     try {
-      if (Environment.useTestLocation) {
+      if (await DriverLocationMode.usesFixedTestPosition()) {
         state = state.copyWith(
           isLocationServiceEnabled: true,
           hasPermission: true,
@@ -94,8 +95,7 @@ class LocationNotifier extends StateNotifier<LocationState> {
         permission = await Geolocator.requestPermission();
       }
 
-      final hasPermission =
-          permission != LocationPermission.denied &&
+      final hasPermission = permission != LocationPermission.denied &&
           permission != LocationPermission.deniedForever;
 
       state = state.copyWith(hasPermission: hasPermission);
@@ -121,12 +121,12 @@ class LocationNotifier extends StateNotifier<LocationState> {
     }
   }
 
-  void startLocationUpdates() {
+  Future<void> startLocationUpdates() async {
     // Cancel existing subscription if any
     _stopLocationUpdates();
 
     try {
-      if (Environment.useTestLocation) {
+      if (await DriverLocationMode.usesFixedTestPosition()) {
         state = state.copyWith(
           currentPosition: Position(
             latitude: Environment.testLatitude,
@@ -153,24 +153,23 @@ class LocationNotifier extends StateNotifier<LocationState> {
         distanceFilter: 10, // Update if moved 10 meters
       );
 
-      _positionStreamSubscription =
-          Geolocator.getPositionStream(
-            locationSettings: locationSettings,
-          ).listen(
-            (Position position) {
-              state = state.copyWith(
-                currentPosition: position,
-                errorMessage: null,
-              );
-              debugPrint(
-                '📍 Location updated: ${position.latitude}, ${position.longitude}',
-              );
-            },
-            onError: (dynamic error) {
-              _setError('خطأ في تحديثات الموقع: ${error.toString()}');
-              debugPrint('❌ Location stream error: $error');
-            },
+      _positionStreamSubscription = Geolocator.getPositionStream(
+        locationSettings: locationSettings,
+      ).listen(
+        (Position position) {
+          state = state.copyWith(
+            currentPosition: position,
+            errorMessage: null,
           );
+          debugPrint(
+            '📍 Location updated: ${position.latitude}, ${position.longitude}',
+          );
+        },
+        onError: (dynamic error) {
+          _setError('خطأ في تحديثات الموقع: ${error.toString()}');
+          debugPrint('❌ Location stream error: $error');
+        },
+      );
 
       debugPrint('📍 Started location updates');
     } catch (e) {
@@ -200,6 +199,7 @@ class LocationNotifier extends StateNotifier<LocationState> {
 }
 
 // Provider definition
-final locationProvider = StateNotifierProvider<LocationNotifier, LocationState>((ref) {
+final locationProvider =
+    StateNotifierProvider<LocationNotifier, LocationState>((ref) {
   return LocationNotifier();
 });

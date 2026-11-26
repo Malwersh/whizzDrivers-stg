@@ -1,3 +1,4 @@
+import '../../more/screens/vehicle_info_screen.dart';
 // Pending Review Screen
 // Shown when driver profile is under admin review
 // Version: 1.0
@@ -62,7 +63,7 @@ class _PendingReviewScreenState extends ConsumerState<PendingReviewScreen>
       if (status.error != null) {
         setState(() => _error = 'تعذر التحقق من الحالة. أعد المحاولة.');
       } else if (status.canAccessMainApp) {
-        context.go('/');
+        context.go('/splash');
       } else if (status.status.name == 'rejected' ||
           status.status.name == 'suspended') {
         context.go('/account-status');
@@ -183,6 +184,16 @@ class _PendingReviewScreenState extends ConsumerState<PendingReviewScreen>
                         _checking ? 'جاري التحقق…' : 'التحقق من حالة الطلب'),
                   ),
                   // Logout button
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => const VehicleInfoScreen()));
+                      if (mounted) await _checkStatus();
+                    },
+                    icon: const Icon(Icons.directions_car_outlined),
+                    label: const Text('مركباتي ووثائقي'),
+                  ),
+                  const SizedBox(height: 12),
                   OutlinedButton(
                     onPressed: () async {
                       final authService = ref.read(authServiceProvider);

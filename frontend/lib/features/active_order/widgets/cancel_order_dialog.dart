@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -78,12 +79,14 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
     try {
       await widget.onCancel(
         _selectedReason!,
-        _notesController.text.trim().isEmpty ? null : _notesController.text.trim(),
+        _notesController.text.trim().isEmpty
+            ? null
+            : _notesController.text.trim(),
       );
 
       if (mounted) {
         Navigator.pop(context, true); // true indicates cancellation confirmed
-        
+
         // رسالة تأكيد
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -92,7 +95,7 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
             duration: Duration(seconds: 2),
           ),
         );
-        
+
         // العودة للصفحة الرئيسية باستخدام GoRouter
         context.go('/');
       }
@@ -176,7 +179,8 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
 
               // رسالة التحذير
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFAFAFA),
                   borderRadius: BorderRadius.circular(12),
@@ -220,7 +224,7 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
               ...List.generate(_cancelReasons.length, (index) {
                 final reason = _cancelReasons[index];
                 final isSelected = _selectedReason == reason['value'];
-                
+
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
                   child: InkWell(
@@ -231,7 +235,8 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
                     },
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
                       decoration: BoxDecoration(
                         color: isSelected
                             ? const Color(0xFFFDC500)
@@ -248,9 +253,7 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
                         children: [
                           Icon(
                             reason['icon'],
-                            color: isSelected
-                                ? Colors.white
-                                : Colors.grey[600],
+                            color: isSelected ? Colors.white : Colors.grey[600],
                             size: 22,
                           ),
                           const SizedBox(width: 12),
@@ -300,7 +303,8 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFF2196F3), width: 2),
+                      borderSide:
+                          const BorderSide(color: Color(0xFF2196F3), width: 2),
                     ),
                     filled: true,
                     fillColor: Colors.grey[50],
@@ -317,6 +321,8 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
                 child: ElevatedButton(
                   onPressed: _isSubmitting ? null : _handleCancel,
                   style: ElevatedButton.styleFrom(
+                    foregroundColor:
+                        readableForeground(const Color(0xFFFAFAFA)),
                     backgroundColor: const Color(0xFFFAFAFA),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(25),
@@ -349,8 +355,12 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
               SizedBox(
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: _isSubmitting ? null : () => Navigator.pop(context, false),
+                  onPressed: _isSubmitting
+                      ? null
+                      : () => Navigator.pop(context, false),
                   style: ElevatedButton.styleFrom(
+                    foregroundColor:
+                        readableForeground(const Color(0xFFFDC500)),
                     backgroundColor: const Color(0xFFFDC500),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(25),
@@ -362,7 +372,7 @@ class _CancelOrderDialogState extends State<CancelOrderDialog> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                      color: const Color(0xFF00296B),
                     ),
                   ),
                 ),

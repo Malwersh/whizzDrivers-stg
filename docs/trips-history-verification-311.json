@@ -1,0 +1,26 @@
+{
+  "status": "PASS",
+  "readOnly": true,
+  "rowsVerified": 15,
+  "pages": 1,
+  "yalla": {
+    "orderNumber": "ORD1792721062420",
+    "driverEarnings": 2750,
+    "driverBaseEarnings": 2750,
+    "driverTip": 0,
+    "earningsState": "CONFIRMED",
+    "deliveryFee": 1500,
+    "cashCollectedAmount": 8500,
+    "driverCashRetained": 2750,
+    "settledCollateral": 5750,
+    "durationSeconds": 7492,
+    "estimatedDistanceMeters": 6520,
+    "deliveryProofCount": 0
+  },
+  "detailMatchesList": true,
+  "otherDriverDenied": true,
+  "periodAndStateFilterPassed": true,
+  "invalidFilterRejected": true,
+  "privateFinancialFieldsAndPhoneExcluded": true,
+  "awsMutated": false
+}

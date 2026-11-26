@@ -7,10 +7,12 @@ import '../../../models/wallet_transaction.dart';
 /// Displays a single wallet transaction with icon, title, amount, and date
 class TransactionTile extends StatelessWidget {
   final WalletTransaction transaction;
+  final bool useBaghdadTime;
 
   const TransactionTile({
     super.key,
     required this.transaction,
+    this.useBaghdadTime=false,
   });
 
   @override
@@ -80,7 +82,7 @@ class TransactionTile extends StatelessWidget {
                 ],
                 const SizedBox(height: 4),
                 Text(
-                  _formatDate(transaction.createdAt),
+                  _formatDate(useBaghdadTime ? transaction.createdAt.toUtc().add(const Duration(hours:3)) : transaction.createdAt),
                   style: const TextStyle(
                     fontSize: 12,
                     color: AppColors.textSecondary,
@@ -120,7 +122,7 @@ class TransactionTile extends StatelessWidget {
   }
 
   String _formatDate(DateTime date) {
-    final now = DateTime.now();
+    final now = useBaghdadTime ? DateTime.now().toUtc().add(const Duration(hours:3)) : DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final txnDate = DateTime(date.year, date.month, date.day);
     

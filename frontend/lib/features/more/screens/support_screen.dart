@@ -1,3 +1,4 @@
+import '../../../utils/readable_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -210,7 +211,7 @@ class _SupportScreenState extends State<SupportScreen>
                             Text(
                               'كيف يمكننا مساعدتك؟',
                               style: TextStyle(
-                                color: Colors.white,
+                                color: const Color(0xFF00296B),
                                 fontSize: 22,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -218,7 +219,7 @@ class _SupportScreenState extends State<SupportScreen>
                             Text(
                               'نحن هنا لدعمك على مدار الساعة',
                               style: TextStyle(
-                                color: Colors.white,
+                                color: const Color(0xFF00296B),
                                 fontSize: 16,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -266,27 +267,26 @@ class _SupportScreenState extends State<SupportScreen>
                                 pageBuilder:
                                     (context, animation, secondaryAnimation) =>
                                         const LiveChatScreen(),
-                                transitionsBuilder:
-                                    (
-                                      context,
-                                      animation,
-                                      secondaryAnimation,
-                                      child,
-                                    ) {
-                                      const begin = Offset(1.0, 0.0);
-                                      const end = Offset.zero;
-                                      const curve = Curves.easeInOutCubic;
+                                transitionsBuilder: (
+                                  context,
+                                  animation,
+                                  secondaryAnimation,
+                                  child,
+                                ) {
+                                  const begin = Offset(1.0, 0.0);
+                                  const end = Offset.zero;
+                                  const curve = Curves.easeInOutCubic;
 
-                                      var tween = Tween(
-                                        begin: begin,
-                                        end: end,
-                                      ).chain(CurveTween(curve: curve));
+                                  var tween = Tween(
+                                    begin: begin,
+                                    end: end,
+                                  ).chain(CurveTween(curve: curve));
 
-                                      return SlideTransition(
-                                        position: animation.drive(tween),
-                                        child: child,
-                                      );
-                                    },
+                                  return SlideTransition(
+                                    position: animation.drive(tween),
+                                    child: child,
+                                  );
+                                },
                                 transitionDuration: const Duration(
                                   milliseconds: 300,
                                 ),
@@ -370,7 +370,7 @@ class _SupportScreenState extends State<SupportScreen>
                         children: [
                           const Icon(
                             Icons.history,
-                            color: AppColors.primary,
+                            color: const Color(0xFF00296B),
                             size: 24,
                           ),
                           const SizedBox(width: 12),
@@ -409,8 +409,8 @@ class _SupportScreenState extends State<SupportScreen>
                       child: _isLoading
                           ? _buildLoadingState()
                           : _tickets.isEmpty
-                          ? _buildEmptyState()
-                          : _buildTicketsList(),
+                              ? _buildEmptyState()
+                              : _buildTicketsList(),
                     ),
                   ],
                 ),
@@ -722,48 +722,48 @@ class _SupportScreenState extends State<SupportScreen>
                       ),
                     ],
                   ),
-              const SizedBox(height: 8),
-              Text(
-                ticket['description'] ?? 'بدون وصف',
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: AppColors.textSecondary,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  const Icon(
-                    Icons.category_outlined,
-                    size: 16,
-                    color: AppColors.textSecondary,
-                  ),
-                  const SizedBox(width: 4),
+                  const SizedBox(height: 8),
                   Text(
-                    ticket['category'] ?? 'عام',
+                    ticket['description'] ?? 'بدون وصف',
                     style: const TextStyle(
-                      fontSize: 12,
+                      fontSize: 14,
                       color: AppColors.textSecondary,
                     ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  const Spacer(),
-                  const Icon(
-                    Icons.access_time,
-                    size: 16,
-                    color: AppColors.textSecondary,
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.category_outlined,
+                        size: 16,
+                        color: AppColors.textSecondary,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        ticket['category'] ?? 'عام',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      const Spacer(),
+                      const Icon(
+                        Icons.access_time,
+                        size: 16,
+                        color: AppColors.textSecondary,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        ticket['created_at'] ?? 'تاريخ غير معروف',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 4),
-                  Text(
-                    ticket['created_at'] ?? 'تاريخ غير معروف',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
                 ],
               ),
             ),
@@ -947,7 +947,7 @@ class _CreateTicketSheetState extends State<CreateTicketSheet> {
                         Icon(
                           category['icon'],
                           size: 20,
-                          color: AppColors.primary,
+                          color: const Color(0xFF00296B),
                         ),
                         const SizedBox(width: 12),
                         Text(category['label']),
@@ -1017,6 +1017,7 @@ class _CreateTicketSheetState extends State<CreateTicketSheet> {
             child: ElevatedButton(
               onPressed: _isLoading ? null : _submitTicket,
               style: ElevatedButton.styleFrom(
+                foregroundColor: readableForeground(AppColors.primary),
                 backgroundColor: AppColors.primary,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
@@ -1024,11 +1025,12 @@ class _CreateTicketSheetState extends State<CreateTicketSheet> {
                 elevation: 0,
               ),
               child: _isLoading
-                  ? const CircularProgressIndicator(color: Colors.white)
+                  ? const CircularProgressIndicator(
+                      color: const Color(0xFF00296B))
                   : const Text(
                       'إرسال التذكرة',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: const Color(0xFF00296B),
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),

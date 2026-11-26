@@ -36,7 +36,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "INVALID_ARGS", message: "Missing URL", details: nil))
                 return
             }
-            connect(urlString: urlString, result: result)
+            connect(urlString: urlString, headers: args["headers"] as? [String: String] ?? [:], result: result)
             
         case "send":
             guard let args = call.arguments as? [String: Any],
@@ -54,7 +54,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
         }
     }
     
-    private func connect(urlString: String, result: @escaping FlutterResult) {
+    private func connect(urlString: String, headers: [String: String], result: @escaping FlutterResult) {
         print("🔌 [Native] Connecting to: \(urlString)")
         
         guard let url = URL(string: urlString) else {
@@ -73,7 +73,9 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
         urlSession = URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue())
         
         // Create WebSocket task
-        webSocketTask = urlSession?.webSocketTask(with: url)
+        var request = URLRequest(url: url)
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        webSocketTask = urlSession?.webSocketTask(with: request)
         
         // Resume (connect) FIRST
         webSocketTask?.resume()
@@ -108,7 +110,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
                 print("❌ [Native] Send failed: \(error.localizedDescription)")
                 result(FlutterError(code: "SEND_FAILED", message: error.localizedDescription, details: nil))
             } else {
-                print("📤 [Native] Message sent: \(message)")
+                print("Native socket message sent")
                 result(true)
             }
         }
@@ -143,7 +145,7 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
                 case .string(let text):
                     print("🔥🔥🔥 [Native] MESSAGE RECEIVED! 🔥🔥🔥")
                     print("📥 [Native] Received text length: \(text.count) chars")
-                    print("📥 [Native] Received: \(text)")
+                    print("Native socket message received")
                     print("📤 [Native] Sending to Flutter via eventSink...")
                     print("📤 [Native] eventSink is nil: \(self?.eventSink == nil)")
                     
@@ -152,14 +154,14 @@ public class NativeWebSocketPlugin: NSObject, FlutterPlugin {
                         "data": text,
                         "timestamp": Date().timeIntervalSince1970
                     ]
-                    print("📤 [Native] Event data prepared: \(eventData)")
+                    print("Native socket event prepared")
                     
                     self?.eventSink?(eventData)
                     print("✅ [Native] Sent to Flutter!")
                     
                 case .data(let data):
                     if let text = String(data: data, encoding: .utf8) {
-                        print("📥 [Native] Received data: \(text)")
+                        print("Native socket data received")
                         self?.eventSink?([
                             "type": "message",
                             "data": text,

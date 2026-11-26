@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
+import '../config/environment.dart';
 import '../utils/iraqi_phone.dart';
-import 'cognito_auth_service_enhanced.dart';
 
 /// Amplify owns token persistence and refresh; no parallel token store.
 class PhoneAuthException implements Exception {
@@ -17,9 +17,13 @@ class PhoneOtpAuthService {
   String? _sessionId;
   String? _phone;
   String? get phone => _phone;
-  static const _baseUrl = String.fromEnvironment('PHONE_AUTH_API_URL',
-      defaultValue:
-          'https://yyka17sq38.execute-api.us-east-1.amazonaws.com/staging');
+  static const _baseUrl = Environment.isProduction ||
+          Environment.environment == 'production' ||
+          Environment.environment == 'prod'
+      ? 'https://w99egtarjj.execute-api.us-east-1.amazonaws.com/production'
+      : String.fromEnvironment('PHONE_AUTH_API_URL',
+          defaultValue:
+              'https://yyka17sq38.execute-api.us-east-1.amazonaws.com/staging');
 
   Future<Map<String, dynamic>> _post(
       String path, Map<String, dynamic> body) async {
@@ -79,12 +83,6 @@ class PhoneOtpAuthService {
           confirmationValue: data['loginProof'] as String);
       if (result.isSignedIn) {
         _awaitingCode = false;
-        final auth = CognitoAuthServiceEnhanced();
-        await auth.initialize();
-        final driver = await auth.getCurrentDriver();
-        if (driver['success'] != true) {
-          throw const PhoneAuthException('تعذر تحميل الحساب؛ أعد فتح التطبيق');
-        }
         return true;
       }
       _awaitingCode = result.nextStep.signInStep ==

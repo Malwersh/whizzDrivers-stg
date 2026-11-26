@@ -1,0 +1,25 @@
+{
+  "status": "PUBLISHED_STAGING_VERIFIED",
+  "function": "DriversApi-staging",
+  "before": "7YXvCI/rwEMGAGsZXwaBykHEYs+IpQKQj4WRaZeI2Ns=",
+  "candidate": "cqqGl1C377pSrQb3ENo+SDB7e3MJQRHU4Mi4+GxSau0=",
+  "changedFiles": [
+    "lambda_driver_api_v2.js",
+    "driver-performance.js"
+  ],
+  "allOtherEntriesIdentical": true,
+  "policyFile": "docs/driver-performance-read-policy.json",
+  "policyScope": "Read offer rows and query driverId-sentAt-index only",
+  "businessWrites": 0,
+  "dispatchPolicyChanged": false,
+  "approvalReview": "Explicit user approval received after automatic review rejection",
+  "userApproval": true,
+  "publishedHash": "cqqGl1C377pSrQb3ENo+SDB7e3MJQRHU4Mi4+GxSau0=",
+  "configurationPreserved": true,
+  "downloadedPackageVerified": true,
+  "scopedReadPolicyVerified": true,
+  "capturedRuntimeTestsPassed": 14,
+  "unauthenticatedHttpStatus": 401,
+  "installedRelease": "271",
+  "deviceLaunch": "PASS"
+}

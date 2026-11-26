@@ -33,6 +33,8 @@ class OrderPricing {
 
 /// Model للطلب النشط الذي قبله السائق
 class ActiveOrder {
+  final Map<String, dynamic>? financialAssignment;
+  bool get isReturning => ['returning', 'return_arrived'].contains(status);
   final String orderId;
   final String? orderNumber; // رقم الطلب القصير من API
   final String status; // accepted, heading_to_store, arrived_at_store, picked_up, heading_to_customer, arrived_at_customer, delivered
@@ -79,6 +81,7 @@ class ActiveOrder {
 
   ActiveOrder({
     required this.orderId,
+    this.financialAssignment,
     this.orderNumber,
     required this.status,
     required this.restaurantId,
@@ -136,6 +139,7 @@ class ActiveOrder {
   factory ActiveOrder.fromJson(Map<String, dynamic> json) {
     return ActiveOrder(
       orderId: json['orderId'] ?? '',
+      financialAssignment: json['financialAssignment'] is Map ? Map<String, dynamic>.unmodifiable(json['financialAssignment']) : null,
       orderNumber: json['orderNumber'],
       status: json['status'] ?? 'accepted',
       restaurantId: json['storeId'] ?? json['restaurantId'] ?? '',
@@ -188,6 +192,7 @@ class ActiveOrder {
   Map<String, dynamic> toJson() {
     return {
       'orderId': orderId,
+      if (financialAssignment != null) 'financialAssignment': financialAssignment,
       'orderNumber': orderNumber,
       'status': status,
       'restaurantId': restaurantId,
@@ -257,6 +262,7 @@ class ActiveOrder {
   }) {
     return ActiveOrder(
       orderId: orderId ?? this.orderId,
+      financialAssignment: financialAssignment,
       orderNumber: orderNumber ?? this.orderNumber,
       status: status ?? this.status,
       restaurantId: restaurantId ?? this.restaurantId,
@@ -291,7 +297,7 @@ class ActiveOrder {
   }
 
   /// هل الدفع نقدي؟
-  bool get isCashPayment => paymentMethod.toLowerCase() == 'cash';
+  bool get isCashPayment => ['cash', 'cod'].contains(paymentMethod.toLowerCase());
 
   /// رقم الطلب المختصر (أول 8 أحرف)
   String get shortOrderId => orderId.length > 8 ? orderId.substring(0, 8) : orderId;

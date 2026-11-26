@@ -1,0 +1,8 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
+function setup(metrics){const s=fs.readFileSync(__dirname+'/../lambda_driver_api_v2.js','utf8'),start=s.indexOf('async function getDriverMetrics(driverId,'),end=s.indexOf('\nasync function ',start+20);class GetCommand{constructor(input){this.input=input;}}const ctx={GetCommand,DRIVER_PERFORMANCE_METRICS_TABLE:'metrics',console:{log(){},warn(){},error(){}},dynamodb:{send:async()=>({Item:metrics})}};vm.runInNewContext(s.slice(start,end<0?undefined:end)+'\nthis.run=getDriverMetrics;',ctx);return async()=>JSON.parse((await ctx.run('driver1',{})).body);}
+test('financial completion with incomplete acceptance metrics returns unknown rate instead of zero or a stale percentage',async()=>{
+ const result=await setup({totalTrips:3,totalAccepted:5,completionRate:0.8,completionRateStatus:'ACCEPTANCE_INTEGRATION_PENDING'})();assert.equal(result.completionRate,null);assert.equal(result.completionRateStatus,'ACCEPTANCE_INTEGRATION_PENDING');assert.equal(result.totalTrips,3);assert.equal(result.totalAccepted,5);
+});
+test('legacy metric reads retain their existing rate when no financial integration status is present',async()=>{assert.equal((await setup({completionRate:0.75,totalAccepted:4,totalTrips:3})()).completionRate,0.75);});
+
+test('incomplete historic baseline remains unavailable and a proven integrated rate is readable',async()=>{assert.equal((await setup({completionRate:0.8,completionRateStatus:'LEGACY_METRICS_INCOMPLETE'})()).completionRate,null);assert.equal((await setup({completionRate:0.5,completionRateStatus:'AVAILABLE'})()).completionRate,0.5);});
