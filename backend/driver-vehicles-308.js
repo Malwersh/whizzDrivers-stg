@@ -86,6 +86,7 @@ async function operation(ctx,{driverId,actorId,staff=false,body}){
   if(action==='UPDATE'&&(!old||old.removedAt))fail('VEHICLE_NOT_FOUND',404);
   if(Object.values(r.items).some(x=>x.id!==data.id&&!x.removedAt&&x.plateNumber.replace(/\s/g,'')===data.plateNumber.replace(/\s/g,'')))fail('VEHICLE_PLATE_ALREADY_REGISTERED');
   r.items[data.id]={...data,review:null,createdAt:old?.createdAt??at,updatedAt:at};needsOffline=action==='UPDATE'&&r.activeId===data.id;
+  if(needsOffline)canonical={vehicleType:data.type,vehiclePlate:data.plateNumber,registrationPaperUrl:data.registrationUrl};
  }
  if(['SELECT','REMOVE','REVIEW'].includes(action)&&(!v||v.removedAt))fail('VEHICLE_NOT_FOUND',404);
  if(action==='REMOVE'){needsOffline=true;v.removedAt=at;v.review={...v.review,status:'REMOVED'};if(r.activeId===v.id){r.activeId=null;canonical={vehicleType:null,vehiclePlate:null,registrationPaperUrl:null};}}

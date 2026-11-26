@@ -7,6 +7,7 @@ import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 
 import '../config/app_config.dart';
+import '../config/environment.dart';
 import 'cognito_token_service.dart';
 
 class AuthService {
@@ -38,8 +39,10 @@ class AuthService {
     debugPrint('🔐 Initializing AuthService...');
     
     // Load stored token from SharedPreferences
-    final prefs = await SharedPreferences.getInstance();
-    _authToken = prefs.getString('auth_token');
+    if (!Environment.isProduction) {
+      final prefs = await SharedPreferences.getInstance();
+      _authToken = prefs.getString('auth_token');
+    }
     
     // Check Amplify session and update if available
     await checkAuthentication();
@@ -47,9 +50,21 @@ class AuthService {
     debugPrint('🔐 AuthService initialized. isAuthenticated: $isAuthenticated');
   }
 
+  static Future<bool> restoreAuthentication() async {
+    if (!Environment.isProduction) return checkAuthentication();
+    final tokens = await CognitoTokenService.readUserPoolTokens();
+    if (tokens == null) {
+      await _clearToken();
+      return false;
+    }
+    _authToken = tokens.accessToken.raw;
+    return true;
+  }
+
   /// Check if user is authenticated by verifying Amplify session (FIXED)
   static Future<bool> checkAuthentication() async {
     try {
+      if (Environment.isProduction) return await restoreAuthentication();
       // 1. Check Amplify session first (PRIORITY)
       final session = await Amplify.Auth.fetchAuthSession();
       if (session.isSignedIn) {
@@ -81,7 +96,7 @@ class AuthService {
     } catch (e) {
       debugPrint('❌ Error checking authentication: $e');
       // If error, fall back to stored token check
-      return _authToken != null;
+      return !Environment.isProduction && _authToken != null;
     }
   }
 

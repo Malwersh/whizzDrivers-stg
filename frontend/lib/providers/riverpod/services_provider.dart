@@ -22,7 +22,7 @@ import '../../services/logging/auth_logger.dart';
 /// Wrapper class for AuthService static methods (for session persistence)
 class AuthServiceWrapper {
   Future<void> initialize() => AuthService.initialize();
-  Future<bool> checkAuthentication() => AuthService.checkAuthentication();
+  Future<bool> checkAuthentication() => AuthService.restoreAuthentication();
   bool get isAuthenticated => AuthService.isAuthenticated;
   
   /// Logout - delegates to CognitoAuthService for proper Amplify sign out
@@ -35,7 +35,7 @@ class AuthServiceWrapper {
       try {
         final token = await CognitoTokenService.getAccessToken();
         if (token != null && token.isNotEmpty) {
-          final url = Uri.parse('${Environment.apiBaseUrl}/driver/stop-searching');
+          final url = Uri.parse('${Environment.driverSearchApiBaseUrl}/driver/stop-searching');
           await http.post(
             url,
             headers: {

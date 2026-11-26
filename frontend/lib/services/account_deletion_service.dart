@@ -2,10 +2,36 @@ import 'dart:convert';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import '../config/environment.dart';
 import 'cognito_token_service.dart';
 
 class AccountDeletionService {
-  static const _base = String.fromEnvironment('ACCOUNT_DELETION_API_URL', defaultValue: 'https://77j15qyukg.execute-api.us-east-1.amazonaws.com/staging');
+  static const _stagingBase =
+      'https://77j15qyukg.execute-api.us-east-1.amazonaws.com/staging';
+  static const _configuredBase = String.fromEnvironment(
+    'ACCOUNT_DELETION_API_URL',
+    defaultValue: _stagingBase,
+  );
+
+  static Uri _endpoint(String path) {
+    const production = Environment.isProduction ||
+        Environment.environment == 'production' ||
+        Environment.environment == 'prod';
+    if (!production) {
+      return Uri.parse('$_configuredBase/deletion/$path');
+    }
+    final base = Uri.tryParse(_configuredBase);
+    if (base == null ||
+        base.scheme != 'https' ||
+        base.host.isEmpty ||
+        base.userInfo.isNotEmpty ||
+        base.hasQuery ||
+        base.hasFragment ||
+        !const ['/production', '/production/'].contains(base.path)) {
+      throw StateError('خدمة حذف الحساب في الإنتاج غير متاحة حاليًا.');
+    }
+    return base.replace(path: '/production/deletion/$path');
+  }
   static const _storage = FlutterSecureStorage(iOptions: IOSOptions(accountName: 'driver_account_deletion'), aOptions: AndroidOptions(sharedPreferencesName: 'driver_account_deletion'));
   static Future<bool> hasSavedReceipt() async => await _storage.read(key: 'receipt') != null;
 
@@ -43,8 +69,8 @@ class AccountDeletionService {
   }
 
   Future<Map<String, dynamic>> _request(String path, {String? token, Map<String, dynamic>? body}) async {
+    final uri = _endpoint(path);
     final headers = {'Content-Type': 'application/json', if(token != null) 'Authorization': 'Bearer $token'};
-    final uri = Uri.parse('$_base/deletion/$path');
     final response = await (body == null ? http.get(uri, headers: headers) : http.post(uri, headers: headers, body: jsonEncode(body))).timeout(const Duration(seconds: 30));
     if(response.statusCode == 401) throw _AuthenticationExpired();
     final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;

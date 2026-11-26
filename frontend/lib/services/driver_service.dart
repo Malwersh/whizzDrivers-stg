@@ -45,14 +45,14 @@ class DriverService {
               await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
           if (session.isSignedIn) {
             final tokens = session.userPoolTokensResult.value;
-            accessToken = tokens.accessToken.raw;
+            accessToken = Environment.isProduction ? tokens.idToken.raw : tokens.accessToken.raw;
           }
         } catch (e) {
           debugPrint('DriverService (AWS): fetchAuthSession failed: $e');
         }
 
         // Fallback: if Amplify session isn't ready but we have a stored token, use it.
-        if (accessToken == null || accessToken.isEmpty) {
+        if (!Environment.isProduction && (accessToken == null || accessToken.isEmpty)) {
           try {
             final ok = await AuthService.checkAuthentication();
             if (ok) accessToken = AuthService.authToken;
@@ -161,7 +161,7 @@ class DriverService {
         final tokens = session.userPoolTokensResult.value;
         AWSDynamoDBService.configure(
           baseUrl: Environment.apiBaseUrl,
-          authToken: tokens.accessToken.raw,
+          authToken: Environment.isProduction ? tokens.idToken.raw : tokens.accessToken.raw,
         );
 
         final ok = await AWSDynamoDBService().updateDriverProfile({
@@ -198,7 +198,7 @@ class DriverService {
         final tokens = session.userPoolTokensResult.value;
         AWSDynamoDBService.configure(
           baseUrl: Environment.apiBaseUrl,
-          authToken: tokens.accessToken.raw,
+          authToken: Environment.isProduction ? tokens.idToken.raw : tokens.accessToken.raw,
         );
 
         // Backend currently supports updating vehicleType only

@@ -68,6 +68,7 @@ class CognitoAuthServiceEnhanced {
   /// Persist any cached extended registration fields to DynamoDB profile.
   /// Returns true if a pending cache existed and was successfully persisted.
   Future<bool> persistPendingRegistrationIfAny() async {
+    if (Environment.isProduction) return false;
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('pending_driver_registration');
@@ -1008,7 +1009,7 @@ class CognitoAuthServiceEnhanced {
       final accessToken = tokens.accessToken.raw;
       AWSDynamoDBService.configure(
         baseUrl: Environment.apiBaseUrl,
-        authToken: accessToken,
+        authToken: Environment.isProduction ? tokens.idToken.raw : accessToken,
       );
 
       // Retry fetching profile (handle eventual consistency right after confirmation)
@@ -1020,6 +1021,10 @@ class CognitoAuthServiceEnhanced {
         );
         if (dynamoProfile != null) break;
         await Future.delayed(const Duration(milliseconds: 200));
+      }
+
+      if (Environment.isProduction && dynamoProfile == null) {
+        return {'success': false, 'message': 'تعذر تحميل ملف السائق. أعد المحاولة.'};
       }
 
       final merged = {

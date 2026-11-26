@@ -10,7 +10,7 @@ import '../config/environment.dart';
 
 /// Service for fetching map data from backend API
 class MapDataService {
-  static const String _baseUrl = Environment.apiBaseUrl;
+  static const String _baseUrl = Environment.driverSearchApiBaseUrl;
 
   /// Fetch map data for driver's current location
   ///
@@ -36,9 +36,6 @@ class MapDataService {
           'lng': lng.toString(),
         },
       );
-
-      debugPrint('🗺️ Fetching map data: $uri');
-      debugPrint('🔑 Auth token length: ${authToken.length}');
 
       final response = await (client?.get ?? http.get)(
         uri,

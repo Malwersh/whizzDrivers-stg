@@ -56,6 +56,22 @@ void main() {
             client: MockClient((_) async => http.Response('{}', 503))),
         false);
   });
+  test('server stopped search clears saved scanning state once', () async {
+    SharedPreferences.setMockInitialValues({
+      'isSearchingForOffers': true,
+      'searchEndTime': 'later',
+    });
+    final countBefore = DriverSearchApiService.confirmedStopEvents.value;
+    final result = await DriverSearchApiService.refreshSearchPosition(
+        latitude: 32, longitude: 44, tokenProvider: () async => 'session',
+        client: MockClient((_) async => http.Response(
+            '{"success":false,"location_updated":true,"searching_stopped":true}', 403)));
+    expect(result, false);
+    expect(DriverSearchApiService.confirmedStopEvents.value, countBefore + 1);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.get('isSearchingForOffers'), isNull);
+    expect(prefs.get('searchEndTime'), isNull);
+  });
   test('start search uses the current session instead of stale preferences',
       () async {
     SharedPreferences.setMockInitialValues(

@@ -9,7 +9,9 @@ import '../../features/active_order/services/order_persistence_service.dart';
 import '../../services/push_notifications_service.dart';
 
 class SplashPage extends ConsumerStatefulWidget {
-  const SplashPage({super.key});
+  const SplashPage({super.key, this.phone});
+
+  final String? phone;
   @override
   ConsumerState<SplashPage> createState() => _SplashPageState();
 }
@@ -85,8 +87,6 @@ class _SplashPageState extends ConsumerState<SplashPage>
       try {
         final cognitoAuthService = ref.read(cognitoAuthServiceProvider);
         await cognitoAuthService.persistPendingRegistrationIfAny();
-        await cognitoAuthService.getCurrentDriver();
-        debugPrint('✅ Splash: Profile loaded successfully');
       } catch (e) {
         debugPrint('⚠️ Splash: Could not load profile: $e');
       }
@@ -111,24 +111,36 @@ class _SplashPageState extends ConsumerState<SplashPage>
           debugPrint('🔀 Splash: Profile incomplete → ${profileStatus.redirectPath}');
           await Future.delayed(const Duration(milliseconds: 300));
           if (!mounted) return;
-          context.go(profileStatus.redirectPath!);
+          final path = profileStatus.redirectPath!;
+          final phone = profileStatus.profileData?['phoneNumber'];
+          context.go(
+            path,
+            extra: path == '/driver-profile-setup'
+                ? {'phone': widget.phone ?? (phone is String ? phone : '')}
+                : null,
+          );
           return; // ✅ مهم: return مباشرة
         }
         
+        // Populate the driver cache for operational screens after profile routing.
+        try {
+          await ref.read(cognitoAuthServiceProvider).getCurrentDriver();
+        } catch (_) {}
+        if (!mounted) return;
+
         // ✅ Profile complete - Check for active order FIRST
         debugPrint('✅ Splash: Profile complete, checking for active order...');
         await _checkAndNavigateToActiveOrder();
         
       } catch (e) {
         debugPrint('❌ Splash: Profile check error: $e');
-        // If profile check fails, go to setup as safe fallback
         if (!mounted) return;
         context.go('/profile-check');
       }
     } catch (e) {
-      debugPrint('❌ Splash: Critical error: $e');
+      debugPrint('❌ Splash: Session restoration temporarily unavailable');
       if (!mounted) return;
-      context.go('/login');
+      context.go('/profile-check');
     }
   }
 

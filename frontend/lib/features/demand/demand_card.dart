@@ -71,6 +71,8 @@ class _DemandCardState extends State<DemandCard> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final days = (data?['days'] as List? ?? []).cast<Map>();
+    final hasForecast =
+        days.any((day) => (day['slots'] as List?)?.isNotEmpty == true);
     return Directionality(
         textDirection: TextDirection.rtl,
         child: Material(
@@ -80,7 +82,7 @@ class _DemandCardState extends State<DemandCard> with WidgetsBindingObserver {
                 side: const BorderSide(color: DemandColors.outline)),
             child: InkWell(
                 borderRadius: BorderRadius.circular(20),
-                onTap: data == null ? null : () => showDetails(context, data!),
+                onTap: hasForecast ? () => showDetails(context, data!) : null,
                 child: Padding(
                     padding: const EdgeInsets.all(18),
                     child: Column(
@@ -152,26 +154,31 @@ class _DemandCardState extends State<DemandCard> with WidgetsBindingObserver {
                               Text(stateMessage(data?['state']),
                                   style: const TextStyle(
                                       color: TripStyle.muted, height: 1.6)),
-                            const SizedBox(height: 10),
-                            Row(children: [
-                              const Expanded(
-                                  child: Text('تقدير للطلب، لا يضمن وصول عروض',
-                                      style: TextStyle(
-                                          color: TripStyle.muted,
-                                          fontSize: 11))),
-                              if (days.isNotEmpty)
-                                const Icon(Icons.chevron_left,
-                                    color: DemandColors.action)
-                            ])
+                            if (hasForecast) ...[
+                              const SizedBox(height: 10),
+                              const Row(children: [
+                                Expanded(
+                                    child: Text(
+                                        'تقدير للطلب، لا يضمن وصول عروض',
+                                        style: TextStyle(
+                                            color: TripStyle.muted,
+                                            fontSize: 11))),
+                                Icon(Icons.chevron_left,
+                                    color: DemandColors.action),
+                              ]),
+                            ],
                           ]
                         ])))));
   }
 }
 
 String stateMessage(dynamic state) => switch (state) {
-      'NO_REGION' => 'حدد منطقة العمل لعرض توقعاتها.',
+      'NO_REGION' => 'تحتاج إلى منطقة عمل مفعّلة لعرض توقعات الطلب.',
       'UPDATING' => 'توقعات المنطقة قيد التحديث. حاول مجددًا لاحقًا.',
-      _ => 'نجمع بيانات كافية لتحديد أوقات الطلب في هذه المنطقة.'
+      'INSUFFICIENT' =>
+        'لا توجد بيانات طلبات كافية لإعداد توقعات لهذه المنطقة بعد.',
+      'READY' => 'لا تتوفر توقعات لليوم. يمكنك عرض الأيام الأخرى.',
+      _ => 'لا توجد توقعات متاحة حاليًا.'
     };
 void showDetails(BuildContext context, Map<String, dynamic> data) =>
     showModalBottomSheet(

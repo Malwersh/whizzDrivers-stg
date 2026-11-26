@@ -21,7 +21,7 @@ class ProfileCheckScreen extends StatelessWidget {
                 style: TextStyle(fontSize: 21, color: Color(0xFF00296B))),
             const SizedBox(height: 12),
             const Text(
-                'تحقق من الاتصال ثم أعد المحاولة. لا تحتاج إلى إنشاء حساب جديد.',
+                'تعذر تحميل ملف السائق. أعد المحاولة لمتابعة التسجيل أو الدخول.',
                 textAlign: TextAlign.center),
             const SizedBox(height: 24),
             FilledButton(

@@ -31,7 +31,7 @@ class FinancialOfferReference {
     if (credential == null || credential.isEmpty) { throw StateError('Authentication required'); }
     final transport = client ?? http.Client();
     try {
-      final response = await transport.post(Uri.parse('${Environment.apiBaseUrl}/driver/financial-wave-offer'),
+      final response = await transport.post(Uri.parse('${Environment.driverOffersApiBaseUrl}/driver/financial-wave-offer'),
           headers: {'Authorization': 'Bearer $credential', 'Content-Type': 'application/json'},
           body: jsonEncode(reference)).timeout(const Duration(seconds: 10));
       if (await readToken() != credential || response.statusCode != 200) throw StateError('Offer unavailable');

@@ -333,7 +333,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
   MapDataResponse? _mapData;
   bool _isLoadingMapData = false;
-  bool _outsideCoverageNoticeShown = false;
   bool _coverageSheetOpen = false;
   bool _outsideCoverageConfirmed = false;
   bool _checkingCoverageForStart = false;
@@ -1127,21 +1126,27 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
     });
   }
 
-  Future<void> _showOutsideCoverage({bool force = false}) async {
-    if (!mounted || _coverageSheetOpen || (!force && _outsideCoverageNoticeShown)) return;
-    _outsideCoverageNoticeShown = true;
+  Future<void> _showOutsideCoverage() async {
+    final position = _currentPosition;
+    if (!mounted || _coverageSheetOpen || position == null) return;
     _coverageSheetOpen = true;
     try {
       await showModalBottomSheet<void>(
-        context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
-        builder: (sheetContext) => OutsideCoverageSheet(latitude: _dispatchLat, longitude: _dispatchLng,
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (sheetContext) => OutsideCoverageSheet(
+          latitude: position.latitude,
+          longitude: position.longitude,
           onRefresh: () {
             Navigator.of(sheetContext).pop();
-            _outsideCoverageNoticeShown = false;
             unawaited(_loadMapData());
-          }),
+          },
+        ),
       );
-    } finally { _coverageSheetOpen = false; }
+    } finally {
+      _coverageSheetOpen = false;
+    }
   }
 
   Future<bool> _showCoverageFailure(Object error) async {
@@ -1149,7 +1154,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       error is DriverSearchStartException && error.code == 'OUTSIDE_SERVICE_AREA';
     if (!outside || !mounted) return false;
     _markOutsideCoverage();
-    await _showOutsideCoverage(force: true);
+    await _showOutsideCoverage();
     return true;
   }
 
@@ -1169,7 +1174,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       setState(() {
         _mapData = data;
         _outsideCoverageConfirmed = false;
-        _outsideCoverageNoticeShown = false;
       });
       _updateMapMarkers();
       _startStoresStatusAutoRefresh();
@@ -1381,7 +1385,7 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       print('🔑 Auth Token length: ${authToken?.length ?? 0}');
 
       if (authToken != null) {
-        final stopUrl = '${Environment.apiBaseUrl}/driver/stop-searching';
+        final stopUrl = '${Environment.driverSearchApiBaseUrl}/driver/stop-searching';
         print('🌐 URL: $stopUrl');
 
         final response = await http.post(
@@ -2103,7 +2107,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
       if (!mounted) return;
 
       setState(() {
-        _outsideCoverageNoticeShown = false;
         _outsideCoverageConfirmed = false;
         _mapData = data;
         _updateMapMarkers();
@@ -2121,7 +2124,6 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
 
       if (e is MapDataFailure && e.kind == MapDataFailureKind.outsideCoverage) {
         _markOutsideCoverage();
-        await _showOutsideCoverage();
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -3501,12 +3503,37 @@ class _SparkHomeSimpleArabicState extends ConsumerState<SparkHomeSimpleArabic>
   Widget _buildCommonContent() {
     return Column(
       children: [
-        const LocationPermissionNotice(),
+        if (!_outsideCoverageConfirmed) const LocationPermissionNotice(),
 
-        // Popular offer times section
+        if (_mapData?.nearbyStores.isEmpty == true && !_outsideCoverageConfirmed)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 14, 20, 14),
+            child: Text(
+              'لا توجد متاجر متاحة قرب موقعك حاليًا.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.secondary),
+            ),
+          ),
+
         if (_outsideCoverageConfirmed)
-          const Padding(padding: EdgeInsets.all(20), child: Text('أنت خارج مناطق الخدمة حاليًا', style: TextStyle(color: AppColors.secondary)))
-        else const DemandCard(),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: TextButton.icon(
+              onPressed:
+                  _currentPosition == null ? null : _showOutsideCoverage,
+              icon: const Icon(Icons.location_off_outlined),
+              label: const Text('أنت خارج مناطق الخدمة حاليًا'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.secondary,
+              ),
+            ),
+          ),
+
+        const DemandCard(),
+        if (_outsideCoverageConfirmed) ...[
+          const SizedBox(height: 12),
+          const LocationPermissionNotice(),
+        ],
       ],
     );
   }

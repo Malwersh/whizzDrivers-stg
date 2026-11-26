@@ -284,7 +284,7 @@ class PushNotificationsService {
         await http
             .post(
                 Uri.parse(
-                    '${Environment.centralPushApiBaseUrl}/push/tokens/unregister'),
+                    '${Environment.pushDeviceRegistryBaseUrl}/push/tokens/unregister'),
                 headers: {
                   'Authorization': 'Bearer $idToken',
                   'Content-Type': 'application/json'
@@ -314,7 +314,7 @@ class PushNotificationsService {
     await NotificationSoundPolicy.refresh();
     _lastRegistrationIdToken = idToken;
     final uri =
-        Uri.parse('${Environment.centralPushApiBaseUrl}/push/tokens/register');
+        Uri.parse('${Environment.pushDeviceRegistryBaseUrl}/push/tokens/register');
 
     final deviceId = await _deviceId();
 

@@ -4,10 +4,7 @@ import 'package:flutter/foundation.dart';
 
 class AppConfig {
   // Environment configuration
-  static const String _environment = String.fromEnvironment(
-    'ENVIRONMENT',
-    defaultValue: 'staging',
-  );
+  static const String _environment = Environment.environment;
 
   // Preference keys
   static const String _keyUseMockData = 'use_mock_data';

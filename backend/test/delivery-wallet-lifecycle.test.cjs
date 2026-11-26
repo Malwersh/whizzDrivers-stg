@@ -8,7 +8,29 @@ function setup(status='picked_up',owner='d'){
 test('delivery remains durable and pending when the wallet request fails',async()=>{const x=setup();assert.equal((await x.run()).statusCode,200);assert.equal(x.order.status,'delivered');assert.equal(x.captures,1);assert.equal((await x.run()).statusCode,200);assert.equal(x.captures,1);});
 test('another driver cannot settle the assigned driver hold',async()=>{const x=setup('picked_up','other');assert.equal((await x.run()).statusCode,403);assert.equal(x.captures,0);});
 test('delivery from an earlier order phase cannot capture funds',async()=>{const x=setup('accepted');assert.equal((await x.run()).statusCode,409);assert.equal(x.captures,0);});
-function acceptSetup(owner){const src=fs.readFileSync('backend/lambda_driver_api_v2.js','utf8'),start=src.indexOf('async function acceptWaveOffer('),end=src.indexOf('\nasync function ',start+20);let writes=0;class GetCommand{constructor(input){this.input=input;}}const context={console:{log(){},error(){},warn(){}},ORDERS_TABLE:'orders',GetCommand,getDriverProfileItem:async()=>({}),isDriverApproved:()=>true,normalizeOrderPricingToIqd:()=>({goodsSubtotal:6000}),dynamodb:{send:async c=>{assert.equal(c.input.ConsistentRead,true);return {Item:{driverId:owner,status:'accepted',holdId:'h',holdStatus:'ACTIVE',holdAmount:6000}};}},createWalletHold:async()=>{writes++;throw Error('unexpected duplicate hold');}};vm.runInNewContext(src.slice(start,end)+'\nglobalThis.accept=acceptWaveOffer;',context);return {run:()=>context.accept('d',{offerId:'OFFER_o_d_W1',orderId:'o'},{}),get writes(){return writes;}};}
+function acceptSetup(owner){
+ const src=fs.readFileSync('backend/lambda_driver_api_v2.js','utf8');
+ const start=src.indexOf('async function acceptWaveOffer('),end=src.indexOf('\nasync function ',start+20);
+ let writes=0;
+ class GetCommand{constructor(input){this.input=input;}}
+ const context={
+  console:{log(){},error(){},warn(){}},ORDERS_TABLE:'orders',GetCommand,
+  getDriverProfileItem:async()=>({}),isDriverApproved:()=>true,
+  require(name){
+   assert.equal(name,'./driver-vehicles-308');
+   return {enforce:()=>false};
+  },
+  normalizeOrderPricingToIqd:()=>({goodsSubtotal:6000}),
+  dynamodb:{async send(c){
+   assert.equal(c.input.ConsistentRead,true);
+   if(c.input.Key.SK==='METADATA')return {};
+   return {Item:{driverId:owner,status:'accepted',holdId:'h',holdStatus:'ACTIVE',holdAmount:6000}};
+  }},
+  createWalletHold:async()=>{writes++;throw Error('unexpected duplicate hold');}
+ };
+ vm.runInNewContext(src.slice(start,end)+'\nglobalThis.accept=acceptWaveOffer;',context);
+ return {run:()=>context.accept('d',{offerId:'OFFER_o_d_W1',orderId:'o'},{}),get writes(){return writes;}};
+}
 test('repeated acceptance returns its existing assignment without another hold',async()=>{const x=acceptSetup('d');assert.equal((await x.run()).statusCode,200);assert.equal((await x.run()).statusCode,200);assert.equal(x.writes,0);});
 test('acceptance cannot reuse another driver hold',async()=>{const x=acceptSetup('other');assert.equal((await x.run()).statusCode,409);assert.equal(x.writes,0);});
 function cancellationSetup(status='accepted',owner='d'){const src=fs.readFileSync('backend/lambda_driver_api_v2.js','utf8'),start=src.indexOf('async function cancelOrderByDriver('),end=src.indexOf('\nasync function ',start+20);const order={driverId:owner,status,holdStatus:'ACTIVE'};let calls=0,cleanups=0;class GetCommand{constructor(input){this.input=input;}}class UpdateCommand{constructor(input){this.input=input;}}const context={console:{log(){},error(){},warn(){}},GetCommand,UpdateCommand,ORDERS_TABLE:'orders',DRIVER_LIVE_STATE_TABLE:'live',DRIVER_PERFORMANCE_METRICS_TABLE:'metrics',dynamodb:{send:async c=>c instanceof GetCommand?{Item:{...order}}:{}},cleanupFinishedOrder:async()=>{cleanups++;},callOrderService:async()=>{calls++;order.status='canceled_by_driver';throw Error('response lost');}};vm.runInNewContext(src.slice(start,end<0?undefined:end)+'\nglobalThis.cancel=cancelOrderByDriver;',context);return {run:()=>context.cancel('d','o',{reason:'test'},{}),get calls(){return calls;},get cleanups(){return cleanups;}};}

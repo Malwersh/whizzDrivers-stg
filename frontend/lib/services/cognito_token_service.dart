@@ -11,11 +11,29 @@ class CognitoTokenService {
   static DateTime? _tokenCacheTime;
   static const Duration _cacheValidDuration = Duration(minutes: 5);
 
+  /// Only an explicit SDK sign-out or expiration ends the local session.
+  /// A temporary SDK failure is left to the caller to retry.
+  static Future<CognitoUserPoolTokens?> readUserPoolTokens({
+    bool forceRefresh = false,
+  }) async {
+    try {
+      final session = await Amplify.Auth.fetchAuthSession(
+        options: FetchAuthSessionOptions(forceRefresh: forceRefresh),
+      ) as CognitoAuthSession;
+      return session.userPoolTokensResult.value;
+    } on SignedOutException {
+      return null;
+    } on SessionExpiredException {
+      return null;
+    }
+  }
+
   /// Get the current Cognito access token
   static Future<String?> getAccessToken() async {
     try {
       // Check cache first (valid for 5 minutes)
-      if (_cachedAccessToken != null &&
+      if (!Environment.isProduction &&
+          _cachedAccessToken != null &&
           _tokenCacheTime != null &&
           DateTime.now().difference(_tokenCacheTime!) < _cacheValidDuration) {
         debugPrint('🔑 Using cached Cognito access token');
@@ -77,13 +95,17 @@ class CognitoTokenService {
     }
   }
 
+  /// The production profile API uses its Cognito ID-token authorizer.
+  static Future<String?> getProfileToken() =>
+      Environment.isProduction ? getIdToken() : getAccessToken();
+
   /// Configure AWS DynamoDB service with current auth token
   static Future<bool> configureAWSServices() async {
     try {
-      final accessToken = await getAccessToken();
+      final token = await getProfileToken();
 
-      if (accessToken == null) {
-        debugPrint('❌ Cannot configure AWS services - no access token');
+      if (token == null) {
+        debugPrint('❌ Cannot configure AWS services - no profile token');
         debugPrint(
           '💡 User may not be signed in yet. Call this after authentication.',
         );
@@ -93,13 +115,10 @@ class CognitoTokenService {
       // Configure AWSDynamoDBService with the JWT token
       AWSDynamoDBService.configure(
         baseUrl: Environment.apiBaseUrl,
-        authToken: accessToken,
+        authToken: token,
       );
 
-      debugPrint('✅ AWS services configured with Cognito access token');
-      debugPrint(
-        '✅ Token: ${accessToken.substring(0, 20)}...${accessToken.substring(accessToken.length - 10)}',
-      );
+      debugPrint('✅ AWS services configured with Cognito profile token');
       return true;
     } catch (e) {
       debugPrint('❌ Failed to configure AWS services: $e');

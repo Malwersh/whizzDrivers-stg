@@ -54,3 +54,25 @@ test('financial unassignment has its own closed gate and forwards the frozen ass
  process.env.FINANCIAL_COD_ASSIGNMENTS_MODE='REQUIRED';assert.equal((await invokeFinancialUnassign(body,'driver-original',client)).replayed,true);assert.equal(calls,1);
  }finally{process.env=old;}
 });
+
+test('production unassignment uses only the production financial writer',async()=>{
+ const {invokeFinancialUnassign}=require('../financial-accept-client'),saved={...process.env};
+ const target='arn:aws:lambda:us-east-1:746727375268:function:wizz-production-order-financial';
+ const body={orderId:'order1',offerId:'offer1',attempt:1,cashCollected:false,reason:'VehicleIssue'};
+ const calls=[];
+ const client={async send(command){
+  calls.push(command.input);
+  return {Payload:Buffer.from(JSON.stringify({statusCode:200,result:{success:true}}))};
+ }};
+ try{
+  Object.assign(process.env,{ENVIRONMENT:'production',FINANCIAL_DISPATCH_MODE:'REQUIRED',
+   FINANCIAL_COD_ASSIGNMENTS_MODE:'REQUIRED',FINANCIAL_ACCEPT_FUNCTION_ARN:arn});
+  await assert.rejects(invokeFinancialUnassign(body,'driver-token',client),/FINANCIAL_DISPATCH_DISABLED/);
+  process.env.FINANCIAL_ACCEPT_FUNCTION_ARN=target;
+  await assert.rejects(invoke(body,'driver-token',false,client),/FINANCIAL_DISPATCH_DISABLED/);
+  assert.equal(calls.length,0);
+  await invokeFinancialUnassign(body,'driver-token',client);
+  assert.equal(calls[0].FunctionName,target);
+  assert.deepEqual(JSON.parse(Buffer.from(calls[0].Payload)),{action:'unassign_financial',body,accessToken:'driver-token'});
+ }finally{process.env=saved;}
+});

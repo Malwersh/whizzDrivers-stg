@@ -63,7 +63,7 @@ class _PendingReviewScreenState extends ConsumerState<PendingReviewScreen>
       if (status.error != null) {
         setState(() => _error = 'تعذر التحقق من الحالة. أعد المحاولة.');
       } else if (status.canAccessMainApp) {
-        context.go('/');
+        context.go('/splash');
       } else if (status.status.name == 'rejected' ||
           status.status.name == 'suspended') {
         context.go('/account-status');

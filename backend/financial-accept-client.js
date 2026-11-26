@@ -1,14 +1,18 @@
 'use strict';
 const {LambdaClient,InvokeCommand}=require('@aws-sdk/client-lambda');
-const TARGET='arn:aws:lambda:us-east-1:699561669180:function:staging-driver-financial-accept';
+const STAGING_TARGET='arn:aws:lambda:us-east-1:699561669180:function:staging-driver-financial-accept';
+const PRODUCTION_TARGET='arn:aws:lambda:us-east-1:746727375268:function:wizz-production-order-financial';
 // Drivers API only invokes the financial writer. It never acquires wallet mutation permissions.
 async function invokeFinancialOperation(body,accessToken,action,client=new LambdaClient({region:'us-east-1'})) {
  if(!['driver_cash_payout','driver_quality_case','driver_cash_case','return_case_driver','read_offer','accept','decline','complete_cod','request_return','arrive_return','report_return_obstacle','unassign_financial','start_delivery_attempt','read_delivery_attempt','record_contact_attempt'].includes(action))throw Error('INVALID_FINANCIAL_ACTION');
+ const production=['production','prod'].includes(process.env.ENVIRONMENT);
+ if(production&&action!=='unassign_financial')throw Error('FINANCIAL_DISPATCH_DISABLED');
+ const target=production?PRODUCTION_TARGET:STAGING_TARGET;
  if(action==='unassign_financial'&&process.env.FINANCIAL_COD_ASSIGNMENTS_MODE!=='REQUIRED')throw Error('COD_ASSIGNMENTS_DISABLED');
  if(['driver_cash_case','return_case_driver','request_return','arrive_return','report_return_obstacle','start_delivery_attempt','read_delivery_attempt','record_contact_attempt'].includes(action)&&process.env.FINANCIAL_COD_RETURNS_MODE!=='REQUIRED')throw Error('COD_RETURNS_DISABLED');
  if(action==='complete_cod'&&process.env.FINANCIAL_COD_COMPLETION_MODE!=='REQUIRED')throw Error('COD_COMPLETION_DISABLED');
- if((action!=='driver_quality_case'&&process.env.FINANCIAL_DISPATCH_MODE!=='REQUIRED')||process.env.FINANCIAL_ACCEPT_FUNCTION_ARN!==TARGET)throw Error('FINANCIAL_DISPATCH_DISABLED');
- const result=await client.send(new InvokeCommand({FunctionName:TARGET,InvocationType:'RequestResponse',
+ if((action!=='driver_quality_case'&&process.env.FINANCIAL_DISPATCH_MODE!=='REQUIRED')||process.env.FINANCIAL_ACCEPT_FUNCTION_ARN!==target)throw Error('FINANCIAL_DISPATCH_DISABLED');
+ const result=await client.send(new InvokeCommand({FunctionName:target,InvocationType:'RequestResponse',
   Payload:Buffer.from(JSON.stringify({action,body,accessToken}))}));
  if(result.FunctionError)throw Error('FINANCIAL_ACCEPTANCE_UNAVAILABLE');
  let response;try{response=JSON.parse(Buffer.from(result.Payload).toString());}catch{throw Error('FINANCIAL_ACCEPTANCE_UNAVAILABLE');}

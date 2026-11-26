@@ -258,12 +258,14 @@ class _FileUploadWidgetState extends State<FileUploadWidget> {
         // Label
         Row(
           children: [
-            Text(
-              widget.label,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
+            Flexible(
+              child: Text(
+                widget.label,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
               ),
             ),
             if (widget.isRequired)

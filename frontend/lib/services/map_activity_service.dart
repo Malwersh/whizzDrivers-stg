@@ -15,7 +15,7 @@ class MapActivityService {
     for (var i = 0; i < ids.length; i += 20) {
       final end = (i + 20 < ids.length) ? i + 20 : ids.length;
       final r = await http
-          .post(Uri.parse('${Environment.apiBaseUrl}/driver/map-activity'),
+          .post(Uri.parse('${Environment.driverSearchApiBaseUrl}/driver/map-activity'),
               headers: {
                 'Authorization': 'Bearer $token',
                 'Content-Type': 'application/json'

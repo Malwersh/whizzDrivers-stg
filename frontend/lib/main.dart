@@ -86,10 +86,10 @@ Future<void> _initializeApp() async {
   // Initialize app configuration with AWS Cognito integration
   await AppConfig.initialize();
   await AppConfig.setAWSIntegration(true); // Enable AWS Cognito
-  await AppConfig.setForceProductionMode(false); // Development mode
+  await AppConfig.setForceProductionMode(Environment.isProduction);
   AppConfig.printConfig();
 
-  // Fail-fast if staging config is missing or still points to /dev
+  // Reject invalid bindings before starting authentication or sockets.
   Environment.validateOrThrow();
 
   // Initialize Global App State Management for persistent WebSocket

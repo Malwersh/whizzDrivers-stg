@@ -15,7 +15,9 @@ class DemandService {
     if (auth['Authorization'] == null)
       throw StateError('Authentication required');
     final response = await client
-        .get(Uri.parse('${Environment.tripsApiBaseUrl}/driver/demand-forecast'),
+        .get(
+            Uri.parse(
+                '${Environment.driverSearchApiBaseUrl}/driver/demand-forecast'),
             headers: auth)
         .timeout(const Duration(seconds: 20));
     if ((await headers())['Authorization'] != auth['Authorization'] ||

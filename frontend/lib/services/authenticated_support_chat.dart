@@ -43,11 +43,7 @@ class _SocketTransport implements SupportTransport {
 /// Driver adapter for the colleague's deployed authenticated support protocol.
 /// A message is confirmed by a server receipt, never by writing to a socket.
 class AuthenticatedSupportChat extends ChangeNotifier {
-  static const endpoint = String.fromEnvironment('SUPPORT_CHAT_WS_URL',
-      defaultValue:
-          Environment.isProduction || Environment.environment != 'staging'
-              ? ''
-              : 'wss://vzvnqu5jhl.execute-api.us-east-1.amazonaws.com/staging');
+  static const endpoint = Environment.supportChatWebSocketUrl;
   final Future<SupportIdentity> Function() identity;
   final SupportTransport Function(Uri, String) transport;
   final Future<String?> Function(String) readSession;
@@ -85,11 +81,7 @@ class AuthenticatedSupportChat extends ChangeNotifier {
       },
       client: imageClient);
   final http.Client? imageClient;
-  static const attachmentsEndpoint = String.fromEnvironment(
-      'SUPPORT_ATTACHMENTS_API_URL',
-      defaultValue: Environment.environment == 'staging'
-          ? 'https://5ytyphpnkc.execute-api.us-east-1.amazonaws.com/staging/support/attachments'
-          : '');
+  static const attachmentsEndpoint = Environment.supportAttachmentsUrl;
   String? _imageDigest, _imageUploadId, _imageAttachment;
   bool uploading = false;
   Future<bool> sendImage(Uint8List bytes) async {

@@ -191,6 +191,7 @@ class _CustomerCashReviewScreenState extends State<CustomerCashReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final returnAuthorized = data?['returnAuthorized'] == true;
     final refunds = (data?['refunds'] as List? ?? [])
         .whereType<Map>()
         .map((r) => Map<String, dynamic>.from(r))
@@ -261,6 +262,8 @@ class _CustomerCashReviewScreenState extends State<CustomerCashReviewScreen> {
                   child: Text(message!),
                 ),
               if (data != null) ...[
+                if (returnAuthorized)
+                  const Text('تمت مطابقة رد كامل النقد. ارجع إلى الطلب لبدء إرجاع الأصناف.'),
                 if (latestReport != null)
                   Card(
                     key: const ValueKey('latest-payment-report'),
@@ -301,7 +304,7 @@ class _CustomerCashReviewScreenState extends State<CustomerCashReviewScreen> {
                       const SizedBox(height: 16),
                       TextField(
                         controller: paid,
-                        enabled: !busy,
+                        enabled: !busy && !returnAuthorized,
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(
                           labelText: 'إجمالي ما دفعه الزبون فعليًا بالدينار',
@@ -310,7 +313,7 @@ class _CustomerCashReviewScreenState extends State<CustomerCashReviewScreen> {
                       const SizedBox(height: 16),
                       TextField(
                         controller: reason,
-                        enabled: !busy,
+                        enabled: !busy && !returnAuthorized,
                         minLines: 2,
                         maxLines: 4,
                         maxLength: 1000,
@@ -320,7 +323,7 @@ class _CustomerCashReviewScreenState extends State<CustomerCashReviewScreen> {
                       ),
                       CheckboxListTile(
                         value: confirmedPayment,
-                        onChanged: busy
+                        onChanged: busy || returnAuthorized
                             ? null
                             : (v) =>
                                 setState(() => confirmedPayment = v == true),
@@ -331,7 +334,7 @@ class _CustomerCashReviewScreenState extends State<CustomerCashReviewScreen> {
                         ),
                       ),
                       FilledButton(
-                        onPressed: busy || !confirmedPayment
+                        onPressed: busy || returnAuthorized || !confirmedPayment
                             ? null
                             : () {
                                 final n = int.tryParse(paid.text.trim());

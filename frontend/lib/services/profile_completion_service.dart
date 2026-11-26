@@ -8,6 +8,7 @@ import '../models/profile_status.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
 import '../config/environment.dart';
+import 'cognito_token_service.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
@@ -15,14 +16,44 @@ import 'dart:convert';
 class ProfileCompletionService {
   final http.Client? client;
   final Future<String?> Function()? tokenResolver;
-  ProfileCompletionService({this.client, this.tokenResolver});
-  Future<String?> _accessToken() async {
-    if (tokenResolver != null) return tokenResolver!();
-    final session = await Amplify.Auth.fetchAuthSession() as CognitoAuthSession;
-    return session.isSignedIn
-        ? session.userPoolTokensResult.value.accessToken.raw
-        : null;
+  final Future<String?> Function()? refreshedTokenResolver;
+
+  ProfileCompletionService({
+    this.client,
+    this.tokenResolver,
+    this.refreshedTokenResolver,
+  });
+
+  Future<String?> _profileToken({bool forceRefresh = false}) async {
+    if (forceRefresh && refreshedTokenResolver != null) {
+      return refreshedTokenResolver!();
+    }
+    if (tokenResolver != null) return forceRefresh ? null : tokenResolver!();
+    final tokens = await CognitoTokenService.readUserPoolTokens(
+      forceRefresh: forceRefresh,
+    );
+    if (tokens == null) return null;
+    return Environment.isProduction
+        ? tokens.idToken.raw
+        : tokens.accessToken.raw;
   }
+
+  Future<http.Response> _fetchProfile(String token) =>
+      (client?.get ?? http.get)(
+        Uri.parse('${Environment.apiBaseUrl}/driver/me'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 15));
+
+  ProfileStatus _signedOut() => ProfileStatus(
+      exists: false,
+      status: ProfileStatusEnum.pendingProfile,
+      isComplete: false,
+      missingFields: const ['auth'],
+      needsRedirect: true,
+      redirectPath: '/login');
 
   ProfileStatus _unavailable(String reason) => ProfileStatus(
       exists: false,
@@ -39,25 +70,16 @@ class ProfileCompletionService {
     try {
       debugPrint('🔍 ProfileCompletionService: Checking profile completeness');
 
-      // Get auth session
-      final accessToken = await _accessToken();
-      if (accessToken == null)
-        return ProfileStatus(
-            exists: false,
-            status: ProfileStatusEnum.pendingProfile,
-            isComplete: false,
-            missingFields: const ['auth'],
-            needsRedirect: true,
-            redirectPath: '/login');
+      final token = await _profileToken();
+      if (token == null) return _signedOut();
 
-      // Make HTTP request to driver profile API
-      final response = await (client?.get ?? http.get)(
-        Uri.parse('${Environment.apiBaseUrl}/driver/me'),
-        headers: {
-          'Authorization': 'Bearer $accessToken',
-          'Content-Type': 'application/json',
-        },
-      ).timeout(const Duration(seconds: 15));
+      var response = await _fetchProfile(token);
+      if (response.statusCode == 401 &&
+          (tokenResolver == null || refreshedTokenResolver != null)) {
+        final refreshed = await _profileToken(forceRefresh: true);
+        if (refreshed == null) return _signedOut();
+        response = await _fetchProfile(refreshed);
+      }
 
       debugPrint(
           '🌐 ProfileCompletionService: API Response status: ${response.statusCode}');
@@ -97,32 +119,40 @@ class ProfileCompletionService {
             statusEnum == ProfileStatusEnum.pendingReview ||
             missingFields.isEmpty;
 
-        // Determine if redirect is needed
-        final needsRedirect = statusEnum == ProfileStatusEnum.pendingProfile ||
-            statusEnum == ProfileStatusEnum.pendingDocs;
+        final redirectPath = switch (statusEnum) {
+          ProfileStatusEnum.pendingProfile ||
+          ProfileStatusEnum.pendingDocs =>
+            '/driver-profile-setup',
+          ProfileStatusEnum.pendingReview => '/pending-review',
+          ProfileStatusEnum.suspended ||
+          ProfileStatusEnum.rejected =>
+            '/account-status?status=${statusString.toUpperCase()}',
+          ProfileStatusEnum.active =>
+            profile['isVerified'] == false ? '/pending-review' : null,
+        };
 
         debugPrint(
-            '✅ ProfileCompletionService: isComplete: $isComplete, needsRedirect: $needsRedirect');
+            '✅ ProfileCompletionService: isComplete: $isComplete, redirect: $redirectPath');
 
         return ProfileStatus(
           exists: true,
           status: statusEnum,
           isComplete: isComplete,
           missingFields: missingFields,
-          needsRedirect: needsRedirect,
-          redirectPath: needsRedirect ? '/driver-profile-setup' : null,
+          needsRedirect: redirectPath != null,
+          redirectPath: redirectPath,
           profileData: profile,
         );
       } else {
         debugPrint(
-            '❌ ProfileCompletionService: API error: ${response.statusCode} - ${response.body}');
+            '❌ ProfileCompletionService: API error: ${response.statusCode}');
 
         if (response.statusCode == 401 || response.statusCode == 403) {
           return _unavailable('PROFILE_ACCESS_UNAVAILABLE');
         }
 
-        // For 404, assume no profile exists
-        if (response.statusCode == 404) {
+        // Staging returns 404 when the verified identity has no profile yet.
+        if (response.statusCode == 404 && !Environment.isProduction) {
           return ProfileStatus(
             exists: false,
             status: ProfileStatusEnum.pendingProfile,
@@ -197,6 +227,7 @@ class ProfileCompletionService {
       case 'VERIFIED':
       case 'ACTIVE':
         return ProfileStatusEnum.active;
+      case 'BANNED':
       case 'SUSPENDED':
         return ProfileStatusEnum.suspended;
       case 'REJECTED':
@@ -220,7 +251,9 @@ class ProfileCompletionService {
       }
 
       final tokens = session.userPoolTokensResult.value;
-      final accessToken = tokens.accessToken.raw;
+      final accessToken = Environment.isProduction
+          ? tokens.idToken.raw
+          : tokens.accessToken.raw;
       final statusString = _profileStatusToString(status);
 
       // Make HTTP PUT request to update profile
@@ -275,8 +308,7 @@ class ProfileCompletionService {
     final status = await checkProfileCompleteness();
 
     // Only ACTIVE users can access main app
-    final canAccess =
-        status.isComplete && status.status == ProfileStatusEnum.active;
+    final canAccess = status.canAccessMainApp;
 
     debugPrint('🔐 ProfileCompletionService: Can access main app: $canAccess');
 
@@ -292,7 +324,9 @@ class ProfileCompletionService {
       if (!session.isSignedIn) return null;
 
       final tokens = session.userPoolTokensResult.value;
-      final accessToken = tokens.accessToken.raw;
+      final accessToken = Environment.isProduction
+          ? tokens.idToken.raw
+          : tokens.accessToken.raw;
 
       final response = await http.get(
         Uri.parse('${Environment.apiBaseUrl}/driver/me'),
@@ -323,7 +357,9 @@ class ProfileCompletionService {
       if (!session.isSignedIn) return null;
 
       final tokens = session.userPoolTokensResult.value;
-      final accessToken = tokens.accessToken.raw;
+      final accessToken = Environment.isProduction
+          ? tokens.idToken.raw
+          : tokens.accessToken.raw;
 
       final response = await http.get(
         Uri.parse('${Environment.apiBaseUrl}/driver/me'),
@@ -354,7 +390,9 @@ class ProfileCompletionService {
       if (!session.isSignedIn) return 'phone';
 
       final tokens = session.userPoolTokensResult.value;
-      final accessToken = tokens.accessToken.raw;
+      final accessToken = Environment.isProduction
+          ? tokens.idToken.raw
+          : tokens.accessToken.raw;
 
       final response = await http.get(
         Uri.parse('${Environment.apiBaseUrl}/driver/me'),

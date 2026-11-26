@@ -216,6 +216,7 @@ class DocumentUploadService {
     required String documentType, // 'driving_license' or 'registration_paper'
     required String phoneNumber,
     String? vehicleId,
+    bool managedVehicleDocument = false,
   }) async {
     try {
       // Get the auth token
@@ -226,23 +227,25 @@ class DocumentUploadService {
 
       final cognitoSession = session as CognitoAuthSession;
       final tokens = cognitoSession.userPoolTokensResult.value;
-      final accessToken = tokens.accessToken.raw;
+      final token = Environment.isProduction ? tokens.idToken.raw : tokens.accessToken.raw;
 
       debugPrint('📤 Uploading $documentType from data...');
       debugPrint('   File: $fileName');
       debugPrint('   Type: $contentType');
 
-      // Call the upload API
+      final path = Environment.isProduction && managedVehicleDocument
+          ? '/driver/vehicles/documents'
+          : '/driver/documents/upload';
       final response = await http
           .post(
-            Uri.parse('$_baseUrl/driver/documents/upload'),
+            Uri.parse('$_baseUrl$path'),
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': 'Bearer $accessToken',
+              'Authorization': 'Bearer $token',
             },
             body: jsonEncode({
               'documentType': documentType,
-              'phoneNumber': phoneNumber,
+              if (!Environment.isProduction) 'phoneNumber': phoneNumber,
               'fileName': fileName,
               'contentType': contentType,
               'fileData': base64Content,

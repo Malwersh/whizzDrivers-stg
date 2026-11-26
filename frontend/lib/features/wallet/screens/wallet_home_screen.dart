@@ -1,3 +1,4 @@
+import '../../../services/wallet_api_service.dart';
 import '../../../services/driver_cash_payout_service.dart';
 import 'driver_cash_payout_screen.dart';
 import '../../../services/wallet_transfer_service.dart';
@@ -64,11 +65,7 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen>
         ref.read(transactionHistoryProvider(null).future),
       ]);
     } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('تعذر تحديث المحفظة. حاول مرة أخرى'),
-        ));
-      }
+      // The balance and transaction panels show their own loading errors.
     }
   }
 
@@ -373,7 +370,9 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen>
             ),
             const SizedBox(height: 12),
             Text(
-              error.toString(),
+              error is WalletNotFoundException
+                  ? 'لم تُنشأ محفظتك بعد.'
+                  : 'تعذّر تحميل رصيد المحفظة. حاول مرة أخرى.',
               style:
                   const TextStyle(fontSize: 14, color: AppColors.textSecondary),
               textAlign: TextAlign.center,

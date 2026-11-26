@@ -5,7 +5,7 @@ class MapDataFailure implements Exception {
   final MapDataFailureKind kind;
 
   static MapDataFailure? fromResponse(int status, Map<String, dynamic> body) {
-    if (status == 401 || status == 403) {
+    if (status == 401) {
       return const MapDataFailure(MapDataFailureKind.authentication);
     }
     if (status == 404 &&
@@ -22,7 +22,7 @@ class MapDataFailure implements Exception {
   String toString() => switch (kind) {
         MapDataFailureKind.outsideCoverage => 'موقعك الحالي خارج مناطق الخدمة',
         MapDataFailureKind.authentication =>
-          'تعذر التحقق من جلسة الدخول. أعد تسجيل الدخول.',
+          'تعذّر التحقق من الجلسة لهذه الخدمة. أعد المحاولة.',
         MapDataFailureKind.connection =>
           'تعذر الاتصال بالخدمة. تحقق من الإنترنت وأعد المحاولة.',
         MapDataFailureKind.server =>

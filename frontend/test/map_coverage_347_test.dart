@@ -9,6 +9,29 @@ import 'package:wizz_driver/services/map_data_failure.dart';
 import 'package:wizz_driver/features/home/widgets/outside_coverage_sheet.dart';
 
 void main() {
+  test('a successful map response can have no nearby stores', () async {
+    final map = await MapDataService.fetchMapData(
+      lat: 31.99,
+      lng: 44.35,
+      tokenProvider: () async => 'current',
+      client: MockClient((request) async {
+        expect(request.url.path, endsWith('/driver/map-data'));
+        return http.Response(
+          jsonEncode({
+            'success': true,
+            'current_work_region': {'id': 'area', 'level': 3},
+            'nearby_stores': [],
+            'summary': {'total_stores': 0},
+          }),
+          200,
+        );
+      }),
+    );
+    expect(map.currentWorkRegion.id, 'area');
+    expect(map.nearbyStores, isEmpty);
+    expect(map.summary.totalStores, 0);
+  });
+
   test('only authoritative region miss is outside coverage', () {
     expect(
         MapDataFailure.fromResponse(
@@ -21,8 +44,10 @@ void main() {
     }
     expect(MapDataFailure.fromResponse(401, {})?.kind,
         MapDataFailureKind.authentication);
-    expect(MapDataFailure.fromResponse(403, {})?.kind,
-        MapDataFailureKind.authentication);
+    expect(
+        MapDataFailure.fromResponse(
+            403, {'message': 'Missing Authentication Token'})?.kind,
+        MapDataFailureKind.server);
     expect(MapDataFailure.fromResponse(200, {'success': true}), isNull);
   });
   testWidgets(

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config/environment.dart';
 import 'application_legal_bundle.dart';
 
 class ApplicationLegalService {
@@ -11,9 +12,13 @@ class ApplicationLegalService {
   DateTime? _loadedAt;
   ApplicationLegalService({
     http.Client? client,
-    this.baseUrl = const String.fromEnvironment('LEGAL_API_BASE_URL',
-        defaultValue:
-            'https://f44z33oz55.execute-api.us-east-1.amazonaws.com/staging'),
+    this.baseUrl = Environment.isProduction ||
+            Environment.environment == 'production' ||
+            Environment.environment == 'prod'
+        ? 'https://41zvbbtw6e.execute-api.us-east-1.amazonaws.com/production'
+        : const String.fromEnvironment('LEGAL_API_BASE_URL',
+            defaultValue:
+                'https://f44z33oz55.execute-api.us-east-1.amazonaws.com/staging'),
     this.audience = 'DRIVER',
   }) : _client = client ?? http.Client();
   Future<ApplicationLegalBundle> load({bool refresh = false}) async {

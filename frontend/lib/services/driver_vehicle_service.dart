@@ -29,7 +29,7 @@ class DriverVehicleService {
       };
   static Future<Map<String, dynamic>> request(
       [Map<String, dynamic>? body]) async {
-    final token = await CognitoTokenService.getAccessToken();
+    final token = await CognitoTokenService.getProfileToken();
     if (token == null) throw StateError('يرجى تسجيل الدخول مجددًا.');
     final uri = Uri.parse('${Environment.apiBaseUrl}/driver/vehicles');
     final headers = {
@@ -42,7 +42,8 @@ class DriverVehicleService {
         .timeout(const Duration(seconds: 25));
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode != 200)
-      throw StateError(message(data['error']?.toString() ?? ''));
+      throw StateError(
+          message((data['code'] ?? data['error'])?.toString() ?? ''));
     return data;
   }
 }

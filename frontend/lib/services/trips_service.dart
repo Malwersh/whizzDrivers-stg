@@ -7,6 +7,7 @@ import 'cognito_token_service.dart';
 
 class TripsService {
   static const String baseUrl = Environment.tripsApiBaseUrl;
+  static const _historyUnavailable = 'سجل الرحلات غير متاح حاليًا.';
 
   static Future<Map<String, String>> buildHeadersForProtectedRequest() async {
     final prefs = await SharedPreferences.getInstance();
@@ -26,6 +27,9 @@ class TripsService {
       DateTime? from,
       DateTime? to,
       http.Client? client}) async {
+    if (baseUrl.isEmpty) {
+      return {'success': false, 'error': _historyUnavailable, 'trips': <Trip>[]};
+    }
     try {
       final headers = await buildHeadersForProtectedRequest();
       if (headers['Authorization'] == null) throw Exception('AUTH_REQUIRED');
@@ -63,6 +67,7 @@ class TripsService {
   }
 
   static Future<Trip> fetchTrip(String orderId, {http.Client? client}) async {
+    if (baseUrl.isEmpty) throw StateError(_historyUnavailable);
     final headers = await buildHeadersForProtectedRequest();
     if (headers['Authorization'] == null) throw Exception('AUTH_REQUIRED');
     final uri =
@@ -84,6 +89,7 @@ class TripsService {
   static Future<Map<String, dynamic>> fetchDriverStats({
     required String driverId,
   }) async {
+    if (baseUrl.isEmpty) return {'success': false, 'error': _historyUnavailable};
     try {
       final uri = Uri.parse('$baseUrl/driver/trips')
           .replace(queryParameters: {'action': 'stats'});

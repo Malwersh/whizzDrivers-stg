@@ -386,7 +386,8 @@ class _VehicleEditorState extends State<_VehicleEditor> {
           base64Content: _file!['content'],
           documentType: 'registration_paper',
           phoneNumber: '',
-          vehicleId: _id);
+          vehicleId: _id,
+          managedVehicleDocument: true);
       if (r['success'] != true || r['documentUrl'] is! String)
         throw StateError(r['message'] ?? 'تعذر رفع السنوية');
       if (mounted)
@@ -506,7 +507,8 @@ class _PersonalDocumentEditorState extends State<_PersonalDocumentEditor> {
           base64Content: _file!['content'],
           documentType:
               widget.kind == 'nationalId' ? 'national_id' : 'driving_license',
-          phoneNumber: '');
+          phoneNumber: '',
+          managedVehicleDocument: true);
       if (r['success'] != true) throw StateError('upload');
       if (mounted) Navigator.pop(context, true);
     } catch (_) {

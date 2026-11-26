@@ -9,6 +9,7 @@ import '../../../config/environment.dart';
 class ActiveOrderService {
   final PickupIssueService _pickupIssues = PickupIssueService();
   static String get baseUrl => Environment.apiBaseUrl;
+  static const _orderReadBaseUrl = Environment.driverOffersApiBaseUrl;
 
   Future<Map<String, String>> get _headers async {
     final authToken = await DriverAuthHelper.getCurrentAccessToken();
@@ -31,7 +32,7 @@ class ActiveOrderService {
       final headers = await _headers;
       final response = await http
           .get(
-        Uri.parse('$baseUrl/driver/active-order'),
+        Uri.parse('$_orderReadBaseUrl/driver/active-order'),
         headers: headers,
       )
           .timeout(
@@ -60,7 +61,7 @@ class ActiveOrderService {
       print('🔍 ActiveOrderService: Fetching active order...');
       final headers = await _headers;
 
-      final url = '$baseUrl/driver/active-order';
+      final url = '$_orderReadBaseUrl/driver/active-order';
       print('📡 URL: $url');
 
       // ✅ Add timeout to prevent app crash
@@ -78,7 +79,6 @@ class ActiveOrderService {
       );
 
       print('📥 getActiveOrder response status: ${response.statusCode}');
-      print('📥 getActiveOrder response body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -113,7 +113,7 @@ class ActiveOrderService {
       print('🔍 ActiveOrderService: Fetching order by ID: $orderId');
       final headers = await _headers;
 
-      final url = '$baseUrl/driver/orders/$orderId';
+      final url = '$_orderReadBaseUrl/driver/orders/$orderId';
       print('📡 URL: $url');
 
       final response = await http.get(
@@ -122,7 +122,6 @@ class ActiveOrderService {
       );
 
       print('📥 Response status: ${response.statusCode}');
-      print('📥 Response body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -182,7 +181,7 @@ class ActiveOrderService {
       print('🚗 startHeadingToStore: Starting - OrderID: $orderId');
       final headers = await _headers;
 
-      final url = '$baseUrl/driver/orders/$orderId/start-heading';
+      final url = '$_orderReadBaseUrl/driver/orders/$orderId/start-heading';
       print('🚗 startHeadingToStore: URL: $url');
 
       final response = await http.post(
@@ -217,7 +216,7 @@ class ActiveOrderService {
       final headers = await _headers;
       print('🏪 arriveAtStore: Headers ready');
 
-      final url = '$baseUrl/driver/orders/$orderId/arrive-store';
+      final url = '$_orderReadBaseUrl/driver/orders/$orderId/arrive-store';
       print('🏪 arriveAtStore: URL: $url');
 
       final response = await http.post(
@@ -248,7 +247,7 @@ class ActiveOrderService {
     try {
       final headers = await _headers;
       final response = await http.post(
-        Uri.parse('$baseUrl/driver/orders/$orderId/pickup'),
+        Uri.parse('$_orderReadBaseUrl/driver/orders/$orderId/pickup'),
         headers: headers,
       );
 
@@ -270,7 +269,7 @@ class ActiveOrderService {
     print('🚗 startHeadingToCustomer: Starting - OrderID: $orderId');
     try {
       final headers = await _headers;
-      final url = '$baseUrl/driver/orders/$orderId/start-heading-to-customer';
+      final url = '$_orderReadBaseUrl/driver/orders/$orderId/start-heading-to-customer';
       print('🚗 startHeadingToCustomer: URL: $url');
 
       final response = await http.post(
@@ -300,7 +299,7 @@ class ActiveOrderService {
     try {
       final headers = await _headers;
       final response = await http.post(
-        Uri.parse('$baseUrl/driver/orders/$orderId/arrive-customer'),
+        Uri.parse('$_orderReadBaseUrl/driver/orders/$orderId/arrive-customer'),
         headers: headers,
       );
 
@@ -342,7 +341,7 @@ class ActiveOrderService {
 
       final headers = await _headers;
       final response = await http.post(
-        Uri.parse('$baseUrl/driver/orders/$orderId/deliver'),
+        Uri.parse('$_orderReadBaseUrl/driver/orders/$orderId/deliver'),
         headers: headers,
         body: json.encode(body),
       );

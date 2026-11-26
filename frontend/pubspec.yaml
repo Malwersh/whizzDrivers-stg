@@ -140,6 +140,11 @@ flutter:
     - assets/sounds/
     - assets/Wiz_Logo/
 
+  fonts:
+    - family: NotoSansArabic
+      fonts:
+        - asset: assets/fonts/NotoSansArabic.ttf
+
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 

@@ -106,7 +106,8 @@ void main() {
         .pumpWidget(MaterialApp(home: Scaffold(body: DemandCard(service: s))));
     await t.pumpAndSettle();
     expect(find.byType(DemandBars), findsNothing);
-    expect(find.textContaining('نجمع بيانات'), findsOneWidget);
+    expect(find.textContaining('لا توجد بيانات طلبات كافية'), findsOneWidget);
+    expect(find.text('إعادة المحاولة'), findsNothing);
     await t.pumpWidget(const SizedBox());
     s.dispose();
   });

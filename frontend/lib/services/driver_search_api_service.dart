@@ -22,6 +22,20 @@ class DriverSearchApiService {
 
   // API Gateway base URL for driver profile API
   static String get _baseUrl => Environment.apiBaseUrl;
+  static const _offersBaseUrl = Environment.driverOffersApiBaseUrl;
+  static const _searchBaseUrl = Environment.driverSearchApiBaseUrl;
+
+  static Future<void> _recordConfirmedStop() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('isSearchingForOffers');
+      await prefs.remove('searchEndTime');
+    } catch (_) {
+      // The mounted home screen can still reflect the server's result.
+    }
+    confirmedStopEvents.value++;
+  }
+
 
   /// Distinguish an unavailable profile/session from a real approval refusal.
   static Future<void> checkSearchEligibility({
@@ -36,8 +50,11 @@ class DriverSearchApiService {
           'تعذر تجديد جلسة الدخول. أعد تسجيل الدخول.',
           code: 'AUTH_REQUIRED');
     }
+    const eligibilityPath = Environment.usesProductionEndpoints
+        ? 'search-eligibility'
+        : 'me';
     final response = await (client?.get ?? http.get)(
-      Uri.parse('$_baseUrl/driver/me'),
+      Uri.parse('$_searchBaseUrl/driver/$eligibilityPath'),
       headers: {'Authorization': 'Bearer $token'},
     ).timeout(const Duration(seconds: 15));
     if (response.statusCode == 401) {
@@ -99,11 +116,9 @@ class DriverSearchApiService {
         if (deviceInfo != null) 'deviceInfo': deviceInfo,
       };
 
-      print('📡 Sending start-searching request: $body');
-
       // Make API call
       final response = await (client?.post ?? http.post)(
-        Uri.parse('$_baseUrl/driver/start-searching'),
+        Uri.parse('$_searchBaseUrl/driver/start-searching'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $authToken',
@@ -112,7 +127,6 @@ class DriverSearchApiService {
       ).timeout(const Duration(seconds: 20));
 
       print('📥 Response status: ${response.statusCode}');
-      print('📥 Response body: ${response.body}');
 
       final data = jsonDecode(response.body);
 
@@ -162,17 +176,24 @@ class DriverSearchApiService {
               .timeout(const Duration(seconds: 8));
       if (token == null) return false;
       final response = await (client?.post ?? http.post)(
-        Uri.parse('$_baseUrl/driver/update-location'),
+        Uri.parse('$_searchBaseUrl/driver/update-location'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token'
         },
         body: jsonEncode({'lat': latitude, 'lng': longitude, ...?tracking}),
       ).timeout(const Duration(seconds: 10));
-      final succeeded = response.statusCode == 200 &&
-          jsonDecode(response.body)['success'] == true;
-      if (!succeeded)
-        print('Search position refresh failed: HTTP ${response.statusCode}');
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 403 && data is Map &&
+          data['location_updated'] == true && data['searching_stopped'] == true) {
+        await _recordConfirmedStop();
+        return false;
+      }
+      final succeeded =
+          response.statusCode == 200 && data is Map && data['success'] == true;
+      if (!succeeded) {
+        debugPrint('Search position refresh failed: HTTP ${response.statusCode}');
+      }
       return succeeded;
     } catch (_) {
       print('Search position refresh unavailable; will retry.');
@@ -201,7 +222,7 @@ class DriverSearchApiService {
 
       // Make API call
       final response = await (client?.post ?? http.post)(
-        Uri.parse('$_baseUrl/driver/stop-searching'),
+        Uri.parse('$_searchBaseUrl/driver/stop-searching'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $authToken',
@@ -210,19 +231,11 @@ class DriverSearchApiService {
       ).timeout(const Duration(seconds: 20));
 
       print('📥 Response status: ${response.statusCode}');
-      print('📥 Response body: ${response.body}');
 
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200 && data['success'] == true) {
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.remove('isSearchingForOffers');
-          await prefs.remove('searchEndTime');
-        } catch (_) {
-          /* Confirmed server result still updates mounted screens. */
-        }
-        confirmedStopEvents.value++;
+        await _recordConfirmedStop();
         return {
           'success': true,
           'data': data,
@@ -280,15 +293,9 @@ class DriverSearchApiService {
         if (financialWaveNumber != null) 'waveNumber': financialWaveNumber,
       };
 
-      print('🌊 Sending accept-wave-offer request:');
-      print('   - offerId: $offerId');
-      print('   - driverId: $driverId');
-      print('   - orderId: $orderId');
-      print('   - body: $body');
-
       // Make API call to API Gateway (CORRECT ENDPOINT)
       final response = await http.post(
-        Uri.parse('$_baseUrl/driver/accept-wave-offer'),
+        Uri.parse('$_offersBaseUrl/driver/accept-wave-offer'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $authToken',
@@ -297,7 +304,6 @@ class DriverSearchApiService {
       );
 
       print('📥 Response status: ${response.statusCode}');
-      print('📥 Response body: ${response.body}');
 
       final data = jsonDecode(response.body);
 
@@ -368,11 +374,9 @@ class DriverSearchApiService {
         'reason': reason ?? 'driver_declined',
       };
 
-      print('❌ Sending reject-wave-offer request: $body');
-
       // Make API call to API Gateway (SAME AS ACCEPT - DriverAPI_v2)
       final response = await http.post(
-        Uri.parse('$_baseUrl/driver/reject-wave-offer'),
+        Uri.parse('$_offersBaseUrl/driver/reject-wave-offer'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $authToken',
@@ -381,7 +385,6 @@ class DriverSearchApiService {
       );
 
       print('📥 Response status: ${response.statusCode}');
-      print('📥 Response body: ${response.body}');
 
       final data = jsonDecode(response.body);
 
@@ -463,7 +466,7 @@ class DriverSearchApiService {
       final token = await DriverAuthHelper.getCurrentAccessToken();
       if (token == null) return false;
       final response = await http
-          .post(Uri.parse('$_baseUrl/driver/offers/displayed'),
+          .post(Uri.parse('${Environment.driverOffersApiBaseUrl}/driver/offers/displayed'),
               headers: {
                 'Authorization': 'Bearer $token',
                 'Content-Type': 'application/json'
@@ -482,7 +485,7 @@ class DriverSearchApiService {
       final token = await DriverAuthHelper.getCurrentAccessToken();
       if (token == null) return null;
       final response = await http
-          .get(Uri.parse('$_baseUrl/driver/performance?rules=4'), headers: {
+          .get(Uri.parse('$_searchBaseUrl/driver/performance?rules=4'), headers: {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json'
       }).timeout(const Duration(seconds: 25));
